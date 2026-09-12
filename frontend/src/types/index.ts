@@ -184,6 +184,38 @@ export interface TransactionImportPreview {
   duplicate_rows: number
 }
 
+// --- Budgets ---
+
+export interface Budget {
+  id: string
+  category_id: string
+  period: BudgetPeriod
+  amount_limit: string
+  start_date: string
+  deleted_at: string | null
+}
+
+export interface BudgetCreatePayload {
+  category_id: string
+  period: BudgetPeriod
+  amount_limit: string
+  start_date: string
+}
+
+export interface BudgetUpdatePayload {
+  amount_limit?: string
+}
+
+export interface BudgetStatus {
+  category_id: string
+  category_name: string
+  period: BudgetPeriod
+  amount_limit: string
+  amount_spent: string
+  percentage_used: number
+  is_over_budget: boolean
+}
+
 // --- Errors (the envelope from main.py's exception handlers) ---
 
 export interface ApiErrorDetail {

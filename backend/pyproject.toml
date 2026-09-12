@@ -38,6 +38,12 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's own DI pattern is `= Depends(...)` / `= Query(...)` in a
+# signature default — that's how the framework is meant to be used, not the
+# mutable-default footgun B008 exists to catch.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
+
 [tool.mypy]
 python_version = "3.12"
 ignore_missing_imports = true

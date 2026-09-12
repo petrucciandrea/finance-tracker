@@ -243,7 +243,7 @@ class TransactionImportConfirm(BaseModel):
 # --- Summary ---
 
 class TransactionSummaryParams(BaseModel):
-    group_by: list[SummaryGroupBy] = Field(default_factory=lambda: [SummaryGroupBy.month])
+    group_by: list[SummaryGroupBy] | None = None
     date_from: date_ | None = None
     date_to: date_ | None = None
     currency: str | None = None
@@ -273,6 +273,12 @@ class BudgetCreate(BaseModel):
 
 
 class BudgetUpdate(BaseModel):
+    # Only amount_limit is patchable, deliberately. `budgets_status()` derives
+    # period boundaries from `start_date`/`period` and spend from a live join
+    # on `category_id` — retroactively changing any of those would silently
+    # recompute historical `amount_spent` under different rules than when it
+    # was recorded. To change period/category, soft-delete and create a new
+    # budget instead; the old one's historical status stays intact.
     amount_limit: Decimal | None = Field(default=None, max_digits=18, decimal_places=2)
 
 

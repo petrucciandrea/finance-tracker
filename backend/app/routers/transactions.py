@@ -36,6 +36,36 @@ from app.services.exchange_rates import ExchangeRateUnavailable, get_rate
 router = APIRouter(prefix="/api/v1/transactions", tags=["transactions"])
 
 
+MISC_CATEGORY_NAME = "Varie"
+
+
+def _get_or_create_misc_category(db: Session, user: User, category_type: str) -> Category:
+    """
+    Transactions of type expense/income must always have a category — if the
+    client sends none, fall back to a "Varie" category of the matching type,
+    creating it on first use. `type: transfer` is exempt: a transfer between
+    the user's own accounts isn't a spend/income event, so it isn't forced
+    into "Varie" here.
+    """
+    existing = (
+        db.query(Category)
+        .filter(
+            Category.user_id == user.id,
+            Category.name == MISC_CATEGORY_NAME,
+            Category.type == category_type,
+            Category.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if existing is not None:
+        return existing
+
+    category = Category(user_id=user.id, name=MISC_CATEGORY_NAME, type=category_type, parent_id=None)
+    db.add(category)
+    db.flush()  # populates category.id without committing yet — caller commits alongside the transaction
+    return category
+
+
 def _get_owned_account_or_404(db: Session, account_id: UUID, user: User) -> Account:
     account = (
         db.query(Account)
@@ -119,11 +149,12 @@ def create_transaction(
 ) -> Transaction:
     account = _get_owned_account_or_404(db, payload.account_id, current_user)
 
-    if payload.category_id:
+    category_id = payload.category_id
+    if category_id:
         category_ok = (
             db.query(Category)
             .filter(
-                Category.id == payload.category_id,
+                Category.id == category_id,
                 Category.user_id == current_user.id,
                 Category.deleted_at.is_(None),
             )
@@ -131,6 +162,11 @@ def create_transaction(
         )
         if category_ok is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+    elif payload.type in ("expense", "income"):
+        # No category given for a spend/income transaction — fall back to
+        # "Varie" instead of allowing an uncategorized expense/income to
+        # silently exist (transfers are exempt, see _get_or_create_misc_category).
+        category_id = _get_or_create_misc_category(db, current_user, payload.type).id
 
     try:
         rate = get_rate(db, payload.currency, current_user.base_currency, payload.date)
@@ -141,7 +177,7 @@ def create_transaction(
 
     transaction = Transaction(
         account_id=account.id,
-        category_id=payload.category_id,
+        category_id=category_id,
         amount=payload.amount,
         currency=payload.currency,
         amount_base_currency=payload.amount * rate,
@@ -168,8 +204,13 @@ def summary(
     transaction volume grows. `group_by` controls which columns are selected
     and grouped on — month, category, or both (cross-tab).
     """
-    group_by_month = SummaryGroupBy.month in params.group_by
-    group_by_category = SummaryGroupBy.category in params.group_by
+    # Default here, not on the schema field — the schema's own
+    # default_factory conflicts with how FastAPI resolves query-parameter
+    # models for list fields (raises a validation error instead of using
+    # the factory), so None-as-default plus a fallback here is the workaround.
+    group_by = params.group_by or [SummaryGroupBy.month]
+    group_by_month = SummaryGroupBy.month in group_by
+    group_by_category = SummaryGroupBy.category in group_by
 
     month_col = func.to_char(Transaction.date, "YYYY-MM").label("month")
     columns = [
@@ -206,11 +247,11 @@ def summary(
 
     items = [
         TransactionSummaryItem(
-            month=getattr(row, "month", None),
-            category_id=getattr(row, "category_id", None),
-            category_name=getattr(row, "category_name", None),
-            total_amount_base_currency=row.total,
-            transaction_count=row.count,
+            month=row._mapping.get("month"),
+            category_id=row._mapping.get("category_id"),
+            category_name=row._mapping.get("category_name"),
+            total_amount_base_currency=row._mapping["total"],
+            transaction_count=row._mapping["count"],
         )
         for row in results
     ]
@@ -235,6 +276,15 @@ def update_transaction(
 ) -> Transaction:
     transaction = _get_owned_transaction(db, transaction_id, current_user)
     update_data = payload.model_dump(exclude_unset=True)
+
+    # Explicitly clearing the category on an expense/income transaction
+    # falls back to "Varie", same rule as creation — never leave one
+    # uncategorized.
+    if "category_id" in update_data and update_data["category_id"] is None and transaction.type in (
+        "expense",
+        "income",
+    ):
+        update_data["category_id"] = _get_or_create_misc_category(db, current_user, transaction.type).id
 
     # If amount or date changes, the frozen conversion must be recomputed —
     # otherwise amount_base_currency would silently drift out of sync.
@@ -333,17 +383,24 @@ def import_confirm(
         except ExchangeRateUnavailable:
             continue  # a partial import beats failing the whole batch on one bad row
 
+        transaction_type = "expense" if row.amount < 0 else "income"
+        # Imported rows are always expense/income (never transfer), so the
+        # same "no category -> Varie" rule as manual creation applies here.
+        category_id = row.suggested_category_id or _get_or_create_misc_category(
+            db, current_user, transaction_type
+        ).id
+
         created.append(
             Transaction(
                 account_id=row.account_id,
-                category_id=row.suggested_category_id,
+                category_id=category_id,
                 amount=row.amount,
                 currency=row.currency,
                 amount_base_currency=row.amount * rate,
                 exchange_rate=rate,
                 date=row.date,
                 description=row.description,
-                type="expense" if row.amount < 0 else "income",
+                type=transaction_type,
                 source="import",
             )
         )

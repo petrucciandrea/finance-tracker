@@ -14,6 +14,7 @@ export type TransactionType = 'expense' | 'income' | 'transfer'
 export type TransactionSource = 'manual' | 'import'
 export type BudgetPeriod = 'monthly' | 'yearly'
 export type SummaryGroupBy = 'category' | 'month'
+export type AssetType = 'stock' | 'etf' | 'crypto'
 
 // --- Auth ---
 
@@ -214,6 +215,67 @@ export interface BudgetStatus {
   amount_spent: string
   percentage_used: number
   is_over_budget: boolean
+}
+
+// --- Portfolio ---
+
+export interface Asset {
+  id: string
+  symbol: string
+  name: string
+  asset_type: AssetType
+  currency: string
+}
+
+export interface AssetSearchResult {
+  symbol: string
+  name: string
+  asset_type: AssetType
+}
+
+export interface HoldingCreatePayload {
+  account_id: string
+  symbol: string
+  asset_type: AssetType
+  quantity: string
+  avg_buy_price: string
+}
+
+export interface HoldingUpdatePayload {
+  quantity?: string
+  avg_buy_price?: string
+}
+
+export interface HoldingWithValue {
+  id: string
+  account_id: string
+  asset: Asset
+  quantity: string
+  avg_buy_price: string
+  created_at: string
+  current_price: string
+  price_date: string
+  market_value: string
+  market_value_base_currency: string
+  unrealized_pnl: string
+  unrealized_pnl_percentage: number
+}
+
+export interface AccountBalance {
+  account_id: string
+  account_name: string
+  currency: string
+  balance: string
+  balance_base_currency: string
+}
+
+export interface NetWorthSummary {
+  base_currency: string
+  total_net_worth: string
+  total_cash_balance: string
+  total_holdings_value: string
+  accounts: AccountBalance[]
+  holdings: HoldingWithValue[]
 }
 
 // --- Errors (the envelope from main.py's exception handlers) ---

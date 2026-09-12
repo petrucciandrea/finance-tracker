@@ -40,6 +40,9 @@ export function AppLayout() {
             <NavLink to="/budgets" className={navLinkClass}>
               Budget
             </NavLink>
+            <NavLink to="/portfolio" className={navLinkClass}>
+              Portfolio
+            </NavLink>
             <NavLink to="/import" className={navLinkClass}>
               Importa CSV
             </NavLink>

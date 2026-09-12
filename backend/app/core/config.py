@@ -42,8 +42,10 @@ class Settings(BaseSettings):
 
     # --- External APIs ---
     exchange_rate_api_base_url: str = "https://api.frankfurter.app"
-    alpha_vantage_api_key: str | None = None  # needed later, phase 3
-    coingecko_api_key: str | None = None  # optional, phase 3
+    alpha_vantage_api_key: str | None = None  # phase 3: stock/ETF prices
+    alpha_vantage_api_base_url: str = "https://www.alphavantage.co/query"
+    coingecko_api_key: str | None = None  # phase 3: crypto prices, optional (free tier needs none)
+    coingecko_api_base_url: str = "https://api.coingecko.com/api/v3"
 
     # --- Default currency (used before a user sets their own) ---
     default_base_currency: str = "EUR"

@@ -49,6 +49,12 @@ class BudgetPeriod(str, Enum):
     yearly = "yearly"
 
 
+class AssetType(str, Enum):
+    stock = "stock"
+    etf = "etf"
+    crypto = "crypto"
+
+
 class SummaryGroupBy(str, Enum):
     category = "category"
     month = "month"
@@ -311,3 +317,69 @@ class ExchangeRate(ORMBase):
     rate: Decimal
     date: date_
     source: str
+
+
+# ---------------------------------------------------------------------------
+# Portfolio (assets, holdings, net worth)
+# ---------------------------------------------------------------------------
+
+class Asset(ORMBase):
+    id: UUID
+    symbol: str
+    name: str
+    asset_type: AssetType
+    currency: str
+
+
+class AssetSearchResult(BaseModel):
+    symbol: str
+    name: str
+    asset_type: AssetType
+
+
+class HoldingCreate(BaseModel):
+    account_id: UUID
+    symbol: str = Field(min_length=1, max_length=20)
+    asset_type: AssetType
+    quantity: Decimal = Field(max_digits=24, decimal_places=8)
+    avg_buy_price: Decimal = Field(max_digits=18, decimal_places=8)
+
+
+class HoldingUpdate(BaseModel):
+    quantity: Decimal | None = Field(default=None, max_digits=24, decimal_places=8)
+    avg_buy_price: Decimal | None = Field(default=None, max_digits=18, decimal_places=8)
+
+
+class Holding(ORMBase):
+    id: UUID
+    account_id: UUID
+    asset: Asset
+    quantity: Decimal
+    avg_buy_price: Decimal
+    created_at: datetime
+
+
+class HoldingWithValue(Holding):
+    current_price: Decimal
+    price_date: date_
+    market_value: Decimal  # quantity * current_price, in asset.currency
+    market_value_base_currency: Decimal  # converted via get_rate()
+    unrealized_pnl: Decimal  # market_value - (quantity * avg_buy_price), in asset.currency
+    unrealized_pnl_percentage: float
+
+
+class AccountBalance(BaseModel):
+    account_id: UUID
+    account_name: str
+    currency: str
+    balance: Decimal
+    balance_base_currency: Decimal
+
+
+class NetWorthSummary(BaseModel):
+    base_currency: str
+    total_net_worth: Decimal
+    total_cash_balance: Decimal
+    total_holdings_value: Decimal
+    accounts: list[AccountBalance]
+    holdings: list[HoldingWithValue]

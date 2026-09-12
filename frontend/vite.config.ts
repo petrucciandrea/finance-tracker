@@ -1,7 +1,10 @@
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+
+const dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -11,7 +14,7 @@ export default defineConfig({
       // Mirrors the "@/*" path in tsconfig.app.json — both need to agree,
       // TypeScript checks types with its version, Vite resolves imports
       // at build/dev time with this one.
-      '@': path.resolve(__dirname, './src'),
+      '@': path.resolve(dirname, './src'),
     },
   },
   server: {

@@ -126,6 +126,7 @@ class AccountCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     type: AccountType
     currency: str = Field(min_length=3, max_length=3)
+    starting_balance: Decimal | None = Field(default=None, max_digits=18, decimal_places=8)
 
 
 class AccountUpdate(BaseModel):

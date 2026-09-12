@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as accountsApi from '@/api/accounts'
 import { NET_WORTH_KEY } from '@/hooks/usePortfolio'
+import { TRANSACTIONS_KEY } from '@/hooks/useTransactions'
 import type { AccountCreatePayload } from '@/types'
 
 const ACCOUNTS_KEY = ['accounts'] as const
@@ -22,6 +23,8 @@ export function useCreateAccount() {
       queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY })
       // Net worth's per-account breakdown depends on the account list too.
       queryClient.invalidateQueries({ queryKey: NET_WORTH_KEY })
+      // A starting_balance creates an opening-balance transaction server-side.
+      queryClient.invalidateQueries({ queryKey: TRANSACTIONS_KEY })
     },
   })
 }

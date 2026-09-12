@@ -57,6 +57,7 @@ export interface AccountCreatePayload {
   name: string
   type: AccountType
   currency: string
+  starting_balance?: string
 }
 
 export interface AccountUpdatePayload {

@@ -4,7 +4,9 @@ import { BUDGETS_STATUS_KEY } from '@/hooks/useBudgets'
 import { NET_WORTH_KEY } from '@/hooks/usePortfolio'
 import type { TransactionCreatePayload, TransactionListParams, TransactionSummaryParams } from '@/types'
 
-const TRANSACTIONS_KEY = ['transactions'] as const
+// Exported so useAccounts.ts can invalidate it too — creating an account
+// with a starting_balance creates an opening-balance transaction server-side.
+export const TRANSACTIONS_KEY = ['transactions'] as const
 
 // Budget spend and net worth's cash balance are both computed from
 // transactions but cached under their own top-level keys ('budgets' /

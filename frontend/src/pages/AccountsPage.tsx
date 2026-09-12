@@ -2,8 +2,9 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
+import { isAxiosError } from 'axios'
 import { useAccounts, useCreateAccount, useDeleteAccount } from '@/hooks/useAccounts'
-import type { AccountType } from '@/types'
+import type { ApiErrorResponse, AccountType } from '@/types'
 
 const ACCOUNT_TYPES: { value: AccountType; label: string }[] = [
   { value: 'checking', label: 'Conto corrente' },
@@ -22,6 +23,10 @@ const accountSchema = z.object({
   name: z.string().min(1, 'Il nome è obbligatorio').max(100),
   type: z.enum(['checking', 'savings', 'credit_card', 'investment', 'crypto_wallet']),
   currency: z.enum(CURRENCIES),
+  starting_balance: z
+    .string()
+    .optional()
+    .refine((v) => !v || !Number.isNaN(Number(v)), 'Inserisci un numero valido'),
 })
 
 type AccountFormValues = z.infer<typeof accountSchema>
@@ -31,6 +36,7 @@ export function AccountsPage() {
   const createAccount = useCreateAccount()
   const deleteAccount = useDeleteAccount()
   const [isFormOpen, setIsFormOpen] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
 
   const {
     register,
@@ -43,9 +49,21 @@ export function AccountsPage() {
   })
 
   async function onSubmit(values: AccountFormValues) {
-    await createAccount.mutateAsync(values)
-    reset()
-    setIsFormOpen(false)
+    setFormError(null)
+    try {
+      await createAccount.mutateAsync({
+        ...values,
+        starting_balance: values.starting_balance || undefined,
+      })
+      reset()
+      setIsFormOpen(false)
+    } catch (error) {
+      if (isAxiosError<ApiErrorResponse>(error) && error.response) {
+        setFormError(error.response.data?.error?.message ?? 'Impossibile creare il conto. Riprova.')
+      } else {
+        setFormError('Impossibile creare il conto. Riprova.')
+      }
+    }
   }
 
   async function handleDelete(id: string, name: string) {
@@ -117,7 +135,23 @@ export function AccountsPage() {
             </select>
           </div>
 
+          <div>
+            <label htmlFor="starting_balance" className="block text-sm font-medium text-slate-700">
+              Saldo iniziale (opzionale)
+            </label>
+            <input
+              id="starting_balance"
+              placeholder="0.00"
+              {...register('starting_balance')}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+            />
+            {errors.starting_balance && (
+              <p className="mt-1 text-sm text-red-600">{errors.starting_balance.message}</p>
+            )}
+          </div>
+
           <div className="sm:col-span-3">
+            {formError && <p className="mb-2 text-sm text-red-600">{formError}</p>}
             <button
               type="submit"
               disabled={isSubmitting}

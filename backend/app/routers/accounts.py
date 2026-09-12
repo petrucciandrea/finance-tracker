@@ -1,18 +1,22 @@
 """
 Accounts endpoints: CRUD with soft delete.
 
-Simplest domain router — no currency conversion logic — so it's the template
-for `categories` and then the more involved `transactions` router.
+Mostly the template for `categories` and then the more involved
+`transactions` router — the one exception is `create_account`'s optional
+`starting_balance`, which needs the same currency-conversion path as a
+transaction (see below).
 """
 
+from datetime import date as date_
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.deps import get_current_user, get_db
-from app.models import Account, Currency, User
+from app.models import Account, Currency, Transaction, User
 from app.schemas import Account as AccountSchema, AccountCreate, AccountUpdate
+from app.services.exchange_rates import ExchangeRateUnavailable, get_rate
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["accounts"])
 
@@ -70,6 +74,36 @@ def create_account(
         currency=payload.currency,
     )
     db.add(account)
+    db.flush()  # populates account.id so the opening-balance transaction below can reference it
+
+    if payload.starting_balance:
+        # Modeled as a `transfer` transaction — like an inter-account
+        # transfer, an opening balance isn't a categorizable spend/income,
+        # so it's exempt from the "no category -> Varie" rule and never
+        # counts toward a budget's spend.
+        try:
+            rate = get_rate(db, account.currency, current_user.base_currency, date_.today())
+        except ExchangeRateUnavailable as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+
+        db.add(
+            Transaction(
+                account_id=account.id,
+                category_id=None,
+                amount=payload.starting_balance,
+                currency=account.currency,
+                amount_base_currency=payload.starting_balance * rate,
+                exchange_rate=rate,
+                date=date_.today(),
+                description="Saldo iniziale",
+                type="transfer",
+                source="manual",
+            )
+        )
+
     db.commit()
     db.refresh(account)
     return account

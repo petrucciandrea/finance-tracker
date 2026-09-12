@@ -2,8 +2,11 @@
 Shared pytest fixtures.
 
 Strategy:
-- One Postgres test DB (settings.test_database_url), tables created once per
-  test session via Base.metadata.create_all.
+- One Postgres test DB (settings.test_database_url), schema managed by Alembic
+  (see `make migrate-test` / `make test`) — NOT by SQLAlchemy's create_all,
+  since reference data like the seeded `currencies` rows only exists via the
+  `0002_seed_currencies` migration. Tests assume the schema is already at
+  head; they never create or drop it.
 - Each test runs inside a DB transaction that's rolled back afterwards, so
   tests don't leak data into each other and don't need manual cleanup.
 - `client` overrides the app's `get_db` dependency to use that same
@@ -21,7 +24,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.config import settings
 from app.deps import get_db
 from app.main import app
-from app.models import Base
 
 
 @pytest.fixture(scope="session")
@@ -29,9 +31,7 @@ def engine():
     if settings.test_database_url is None:
         pytest.skip("TEST_DATABASE_URL is not set")
     eng = create_engine(str(settings.test_database_url))
-    Base.metadata.create_all(bind=eng)
     yield eng
-    Base.metadata.drop_all(bind=eng)
     eng.dispose()
 
 

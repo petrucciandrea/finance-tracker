@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
+import { isAxiosError } from 'axios'
 import { useCategories } from '@/hooks/useCategories'
 import {
   useBudgets,
@@ -9,7 +10,7 @@ import {
   useCreateBudget,
   useDeleteBudget,
 } from '@/hooks/useBudgets'
-import type { BudgetPeriod } from '@/types'
+import type { ApiErrorResponse, BudgetPeriod } from '@/types'
 
 const PERIOD_LABELS: Record<BudgetPeriod, string> = {
   monthly: 'Mensile',
@@ -37,6 +38,7 @@ export function BudgetsPage() {
   const { data: budgets, isLoading, isError } = useBudgets()
   const { data: statusList } = useBudgetsStatus()
   const [isFormOpen, setIsFormOpen] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
 
   const createBudget = useCreateBudget()
   const deleteBudget = useDeleteBudget()
@@ -56,9 +58,18 @@ export function BudgetsPage() {
   const expenseCategories = (categories ?? []).filter((c) => c.type === 'expense')
 
   async function onSubmit(values: BudgetFormValues) {
-    await createBudget.mutateAsync(values)
-    reset()
-    setIsFormOpen(false)
+    setFormError(null)
+    try {
+      await createBudget.mutateAsync(values)
+      reset()
+      setIsFormOpen(false)
+    } catch (error) {
+      if (isAxiosError<ApiErrorResponse>(error) && error.response) {
+        setFormError(error.response.data?.error?.message ?? 'Impossibile creare il budget. Riprova.')
+      } else {
+        setFormError('Impossibile creare il budget. Riprova.')
+      }
+    }
   }
 
   async function handleDelete(id: string, categoryName: string) {
@@ -151,6 +162,7 @@ export function BudgetsPage() {
           </div>
 
           <div className="sm:col-span-4">
+            {formError && <p className="mb-2 text-sm text-red-600">{formError}</p>}
             <button
               type="submit"
               disabled={isSubmitting}

@@ -3,7 +3,10 @@ import * as budgetsApi from '@/api/budgets'
 import type { BudgetCreatePayload, BudgetUpdatePayload } from '@/types'
 
 const BUDGETS_KEY = ['budgets'] as const
-const BUDGETS_STATUS_KEY = ['budgets', 'status'] as const
+// Exported so useTransactions.ts can invalidate it too — budget spend is
+// derived from transactions, so a transaction mutation must bust this cache
+// even though it lives outside the 'transactions' query key namespace.
+export const BUDGETS_STATUS_KEY = ['budgets', 'status'] as const
 
 export function useBudgets() {
   return useQuery({

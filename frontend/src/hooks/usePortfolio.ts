@@ -3,7 +3,10 @@ import * as portfolioApi from '@/api/portfolio'
 import type { AssetType, HoldingCreatePayload, HoldingUpdatePayload } from '@/types'
 
 const HOLDINGS_KEY = ['holdings'] as const
-const NET_WORTH_KEY = ['net-worth'] as const
+// Exported so useTransactions.ts can invalidate it too — net worth's cash
+// balance is derived from transactions, so a transaction mutation must bust
+// this cache even though it lives outside the 'transactions' query key.
+export const NET_WORTH_KEY = ['net-worth'] as const
 
 // Prices refresh on-demand (cache-first on the backend, one external fetch
 // per asset per day) — polling here just keeps the UI reasonably fresh

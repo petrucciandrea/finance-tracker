@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
+import { isAxiosError } from 'axios'
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
 import { useAccounts } from '@/hooks/useAccounts'
 import {
@@ -11,7 +12,7 @@ import {
   useNetWorth,
   useSearchAssets,
 } from '@/hooks/usePortfolio'
-import type { AssetType } from '@/types'
+import type { ApiErrorResponse, AssetType } from '@/types'
 
 const ASSET_TYPE_LABELS: Record<AssetType, string> = {
   stock: 'Azione',
@@ -46,6 +47,7 @@ export function PortfolioPage() {
   const { data: holdings, isLoading, isError } = useHoldings()
   const { data: netWorth } = useNetWorth()
   const [isFormOpen, setIsFormOpen] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
 
   const createHolding = useCreateHolding()
   const deleteHolding = useDeleteHolding()
@@ -73,9 +75,21 @@ export function PortfolioPage() {
   )
 
   async function onSubmit(values: HoldingFormValues) {
-    await createHolding.mutateAsync(values)
-    reset({ asset_type: values.asset_type })
-    setIsFormOpen(false)
+    setFormError(null)
+    try {
+      await createHolding.mutateAsync(values)
+      reset({ asset_type: values.asset_type })
+      setIsFormOpen(false)
+    } catch (error) {
+      if (isAxiosError<ApiErrorResponse>(error) && error.response) {
+        setFormError(
+          error.response.data?.error?.message ??
+            'Impossibile aggiungere la posizione. Riprova.',
+        )
+      } else {
+        setFormError('Impossibile aggiungere la posizione. Riprova.')
+      }
+    }
   }
 
   async function handleDelete(id: string, symbol: string) {
@@ -137,7 +151,17 @@ export function PortfolioPage() {
                   nameKey="name"
                   innerRadius={50}
                   outerRadius={80}
-                  paddingAngle={2}
+                  // A single slice covering 100% renders as a broken sliver
+                  // with a non-zero paddingAngle (Recharts subtracts the gap
+                  // from the one slice it has nothing to pad against) — only
+                  // pad when there's more than one slice to actually gap.
+                  paddingAngle={allocationData.length > 1 ? 2 : 0}
+                  // The mount-in sweep animation can get interrupted by a
+                  // refetch re-rendering the chart moments later (holdings
+                  // and net worth both refetch right after a mutation),
+                  // leaving the arc frozen mid-sweep or blank — this is a
+                  // decorative summary chart, not worth the animation risk.
+                  isAnimationActive={false}
                 >
                   {allocationData.map((slice, index) => (
                     <Cell key={slice.name} fill={ALLOCATION_COLORS[index % ALLOCATION_COLORS.length]} />
@@ -258,6 +282,7 @@ export function PortfolioPage() {
           </div>
 
           <div className="sm:col-span-5">
+            {formError && <p className="mb-2 text-sm text-red-600">{formError}</p>}
             <button
               type="submit"
               disabled={isSubmitting}

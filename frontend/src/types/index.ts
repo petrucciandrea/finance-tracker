@@ -9,7 +9,7 @@
 // --- Enums (mirror the Python Enum values exactly, as strings) ---
 
 export type AccountType = 'checking' | 'savings' | 'credit_card' | 'investment' | 'crypto_wallet'
-export type CategoryType = 'expense' | 'income'
+export type CategoryType = 'expense' | 'income' | 'transfer'
 export type TransactionType = 'expense' | 'income' | 'transfer'
 export type TransactionSource = 'manual' | 'import'
 export type BudgetPeriod = 'monthly' | 'yearly'
@@ -24,6 +24,9 @@ export interface User {
   id: string
   email: string
   base_currency: string
+  first_name: string | null
+  last_name: string | null
+  date_of_birth: string | null
   created_at: string
 }
 
@@ -36,6 +39,19 @@ export interface RegisterPayload {
 export interface LoginPayload {
   email: string
   password: string
+}
+
+export interface UserUpdatePayload {
+  email?: string
+  base_currency?: string
+  first_name?: string | null
+  last_name?: string | null
+  date_of_birth?: string | null
+}
+
+export interface PasswordChangePayload {
+  current_password: string
+  new_password: string
 }
 
 export interface TokenPair {
@@ -270,6 +286,32 @@ export interface AssetTransactionUpdatePayload {
   fee?: string
   date?: string
   notes?: string | null
+}
+
+// --- Asset transaction CSV import ---
+
+export interface AssetTransactionImportRow {
+  row_number: number
+  account_id: string
+  symbol: string
+  asset_type: AssetType
+  type: AssetTransactionType
+  quantity: string
+  price: string
+  fee: string
+  date: string
+  notes: string | null
+  is_duplicate: boolean
+  is_parsable: boolean
+  error: string | null
+}
+
+export interface AssetTransactionImportPreview {
+  import_id: string
+  rows: AssetTransactionImportRow[]
+  total_rows: number
+  parsable_rows: number
+  duplicate_rows: number
 }
 
 // Not a DB row — computed from AssetTransaction history, `id` is a

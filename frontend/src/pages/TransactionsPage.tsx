@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
+import { TransactionImport } from '@/components/transactions/TransactionImport'
+import { TrashIcon } from '@/components/ui/Icon'
 import { useAccounts } from '@/hooks/useAccounts'
 import { useCategories } from '@/hooks/useCategories'
 import {
@@ -9,13 +11,39 @@ import {
   useDeleteTransaction,
   useTransactionsList,
 } from '@/hooks/useTransactions'
-import type { TransactionType } from '@/types'
+import type { Category, TransactionType } from '@/types'
+
+type PanelMode = 'none' | 'form' | 'import'
 
 const TRANSACTION_TYPES: { value: TransactionType; label: string }[] = [
   { value: 'expense', label: 'Spesa' },
   { value: 'income', label: 'Entrata' },
   { value: 'transfer', label: 'Trasferimento' },
 ]
+
+type CategoryOption =
+  | { kind: 'leaf'; category: Category }
+  | { kind: 'group'; parent: Category; children: Category[] }
+
+/**
+ * A category with active subcategories can't be assigned to a transaction
+ * directly (the backend rejects it — a subcategory must be picked instead),
+ * so parents with children render as a non-selectable optgroup label and
+ * only their children/childless roots are actual options. Also scoped to
+ * the transaction's own type — a category's type must match the
+ * transaction's (expense/income/transfer), same rule the backend enforces.
+ */
+function buildCategoryOptions(categories: Category[] | undefined, type: TransactionType): CategoryOption[] {
+  if (!categories) return []
+  const relevant = categories.filter((c) => c.type === type)
+  const roots = relevant.filter((c) => c.parent_id === null)
+  return roots.map((root) => {
+    const children = relevant.filter((c) => c.parent_id === root.id)
+    return children.length > 0
+      ? { kind: 'group' as const, parent: root, children }
+      : { kind: 'leaf' as const, category: root }
+  })
+}
 
 const transactionSchema = z.object({
   account_id: z.string().min(1, 'Seleziona un conto'),
@@ -40,7 +68,11 @@ export function TransactionsPage() {
   const { data: accounts } = useAccounts()
   const { data: categories } = useCategories()
   const [categoryFilter, setCategoryFilter] = useState<string>('')
-  const [isFormOpen, setIsFormOpen] = useState(false)
+  const [panel, setPanel] = useState<PanelMode>('none')
+
+  function togglePanel(mode: PanelMode) {
+    setPanel((current) => (current === mode ? 'none' : mode))
+  }
 
   const { data: transactionsData, isLoading, isError } = useTransactionsList({
     category_id: categoryFilter || undefined,
@@ -55,6 +87,7 @@ export function TransactionsPage() {
     register,
     handleSubmit,
     reset,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<TransactionFormValues>({
     resolver: zodResolver(transactionSchema),
@@ -64,6 +97,9 @@ export function TransactionsPage() {
       date: new Date().toISOString().slice(0, 10),
     },
   })
+
+  const selectedType = watch('type')
+  const categoryOptions = buildCategoryOptions(categories, selectedType)
 
   async function onSubmit(values: TransactionFormValues) {
     // Sign convention matches the backend's design: expenses are negative,
@@ -90,7 +126,7 @@ export function TransactionsPage() {
       amount: '',
       description: '',
     })
-    setIsFormOpen(false)
+    setPanel('none')
   }
 
   async function handleDelete(id: string) {
@@ -102,15 +138,25 @@ export function TransactionsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-slate-800">Transazioni</h1>
-        <button
-          onClick={() => setIsFormOpen((open) => !open)}
-          className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-        >
-          {isFormOpen ? 'Annulla' : 'Nuova transazione'}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => togglePanel('import')}
+            className="rounded-md px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
+          >
+            {panel === 'import' ? 'Annulla' : 'Importa CSV'}
+          </button>
+          <button
+            onClick={() => togglePanel('form')}
+            className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+          >
+            {panel === 'form' ? 'Annulla' : 'Nuova transazione'}
+          </button>
+        </div>
       </div>
 
-      {isFormOpen && (
+      {panel === 'import' && <TransactionImport onDone={() => setPanel('none')} />}
+
+      {panel === 'form' && (
         <form
           onSubmit={handleSubmit(onSubmit)}
           className="grid grid-cols-1 gap-4 rounded-lg bg-white p-6 shadow-sm sm:grid-cols-3"
@@ -145,11 +191,21 @@ export function TransactionsPage() {
               className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
             >
               <option value="">Nessuna categoria</option>
-              {categories?.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
+              {categoryOptions.map((opt) =>
+                opt.kind === 'leaf' ? (
+                  <option key={opt.category.id} value={opt.category.id}>
+                    {opt.category.name}
+                  </option>
+                ) : (
+                  <optgroup key={opt.parent.id} label={opt.parent.name}>
+                    {opt.children.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ),
+              )}
             </select>
           </div>
 
@@ -287,9 +343,11 @@ export function TransactionsPage() {
                     </p>
                     <button
                       onClick={() => handleDelete(t.id)}
-                      className="text-sm font-medium text-red-600 hover:underline"
+                      aria-label="Elimina"
+                      title="Elimina"
+                      className="rounded p-1.5 text-red-600 hover:bg-red-50"
                     >
-                      Elimina
+                      <TrashIcon />
                     </button>
                   </div>
                 </li>

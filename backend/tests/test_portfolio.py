@@ -288,8 +288,19 @@ def test_delete_transaction_soft_deletes_and_removes_holding(
 
 
 def test_net_worth_includes_cash_and_holdings(
-    client: TestClient, registered_user: dict, checking_account: dict, investment_account: dict
+    client: TestClient,
+    registered_user: dict,
+    checking_account: dict,
+    investment_account: dict,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # This test now also posts a manual USD deposit through /transactions
+    # (not just /portfolio/transactions), which has its own get_rate import —
+    # the autouse _mock_get_rate fixture only patches the portfolio router's.
+    monkeypatch.setattr(
+        "app.routers.transactions.get_rate",
+        lambda db, from_currency, to_currency, on_date: Decimal("1"),
+    )
     headers = registered_user["auth_headers"]
     client.post(
         "/api/v1/transactions",
@@ -302,15 +313,168 @@ def test_net_worth_includes_cash_and_holdings(
         },
         headers=headers,
     )
+    # Fund the investment account before buying — a buy deducts its cost
+    # from the account's cash (see test_buy_deducts_cost_from_account_cash),
+    # so without this deposit the purchase would just drive that account's
+    # cash negative rather than actually converting cash into a holding.
+    client.post(
+        "/api/v1/transactions",
+        json={
+            "account_id": investment_account["id"],
+            "amount": "1400.00",
+            "currency": "USD",
+            "date": "2026-09-01",
+            "type": "transfer",
+        },
+        headers=headers,
+    )
     _create_asset_transaction(client, headers, investment_account["id"])
 
     response = client.get("/api/v1/portfolio/net-worth", headers=headers)
     assert response.status_code == 200
     body = response.json()
 
+    # Investment account cash: +1400 deposit, -1400 spent on the buy -> 0.
+    # Checking cash (1000) is the only cash left, holdings are worth 1500
+    # (mocked at $150/share) — if the buy's cost weren't deducted from cash,
+    # this would double-count the 1400 spent as both still-there cash AND
+    # holdings value.
     assert Decimal(body["total_cash_balance"]) == Decimal("1000.00")
     assert Decimal(body["total_holdings_value"]) == Decimal("1500.00")
     assert Decimal(body["total_net_worth"]) == Decimal("2500.00")
+
+
+def test_buy_deducts_cost_from_account_cash(
+    client: TestClient, registered_user: dict, investment_account: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    client.post(
+        "/api/v1/transactions",
+        json={
+            "account_id": investment_account["id"],
+            "amount": "2000.00",
+            "currency": "USD",
+            "date": "2026-09-01",
+            "type": "transfer",
+        },
+        headers=headers,
+    )
+    _create_asset_transaction(client, headers, investment_account["id"])  # 10 x $140 = $1400
+
+    response = client.get("/api/v1/portfolio/net-worth", headers=headers)
+    accounts = response.json()["accounts"]
+    investment_balance = next(a for a in accounts if a["account_id"] == investment_account["id"])
+    assert Decimal(investment_balance["balance"]) == Decimal("600.00")
+
+
+def test_buy_records_a_transfer_transaction_not_an_expense(
+    client: TestClient, registered_user: dict, investment_account: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    _create_asset_transaction(client, registered_user["auth_headers"], investment_account["id"])
+
+    response = client.get(
+        "/api/v1/transactions", params={"account_id": investment_account["id"]}, headers=headers
+    )
+    transactions = response.json()["data"]
+    assert len(transactions) == 1
+    assert transactions[0]["type"] == "transfer"
+    assert transactions[0]["category_id"] is None
+    assert Decimal(transactions[0]["amount"]) == Decimal("-1400.00")
+
+
+def test_sell_credits_account_cash(
+    client: TestClient, registered_user: dict, investment_account: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    _create_asset_transaction(
+        client, headers, investment_account["id"], quantity="10", price="140.00"
+    )
+    _create_asset_transaction(
+        client, headers, investment_account["id"], type_="sell", quantity="4", price="150.00"
+    )
+
+    response = client.get("/api/v1/portfolio/net-worth", headers=headers)
+    accounts = response.json()["accounts"]
+    investment_balance = next(a for a in accounts if a["account_id"] == investment_account["id"])
+    # -1400 (buy) + 600 (sell 4 @ 150) = -800
+    assert Decimal(investment_balance["balance"]) == Decimal("-800.00")
+
+
+def test_delete_asset_transaction_reverses_its_cash_transaction(
+    client: TestClient, registered_user: dict, investment_account: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    created = _create_asset_transaction(client, headers, investment_account["id"])
+
+    delete_response = client.delete(
+        f"/api/v1/portfolio/transactions/{created['id']}", headers=headers
+    )
+    assert delete_response.status_code == 204
+
+    response = client.get("/api/v1/portfolio/net-worth", headers=headers)
+    accounts = response.json()["accounts"]
+    investment_balance = next(a for a in accounts if a["account_id"] == investment_account["id"])
+    assert Decimal(investment_balance["balance"]) == Decimal("0")
+
+
+def test_update_asset_transaction_quantity_updates_linked_cash_transaction(
+    client: TestClient, registered_user: dict, investment_account: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    created = _create_asset_transaction(
+        client, headers, investment_account["id"], quantity="10", price="140.00"
+    )
+
+    update_response = client.patch(
+        f"/api/v1/portfolio/transactions/{created['id']}", json={"quantity": "5"}, headers=headers
+    )
+    assert update_response.status_code == 200
+
+    response = client.get("/api/v1/portfolio/net-worth", headers=headers)
+    accounts = response.json()["accounts"]
+    investment_balance = next(a for a in accounts if a["account_id"] == investment_account["id"])
+    assert Decimal(investment_balance["balance"]) == Decimal("-700.00")
+
+
+def test_can_categorize_the_linked_cash_transaction_but_not_edit_its_amount_or_delete_it(
+    client: TestClient, registered_user: dict, investment_account: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    _create_asset_transaction(client, headers, investment_account["id"])
+    transfer_category = client.post(
+        "/api/v1/categories",
+        json={"name": "Investimenti", "type": "transfer"},
+        headers=headers,
+    ).json()
+
+    list_response = client.get(
+        "/api/v1/transactions", params={"account_id": investment_account["id"]}, headers=headers
+    )
+    cash_transaction_id = list_response.json()["data"][0]["id"]
+
+    # category_id/description don't feed into the cash math, so they're free
+    # to edit — e.g. tagging every buy/sell with an "Investimenti" category.
+    recategorize_response = client.patch(
+        f"/api/v1/transactions/{cash_transaction_id}",
+        json={"category_id": transfer_category["id"], "description": "edited"},
+        headers=headers,
+    )
+    assert recategorize_response.status_code == 200
+    assert recategorize_response.json()["category_id"] == transfer_category["id"]
+
+    # amount/date, however, must stay in lockstep with the asset transaction.
+    amount_edit_response = client.patch(
+        f"/api/v1/transactions/{cash_transaction_id}",
+        json={"amount": "-1.00"},
+        headers=headers,
+    )
+    assert amount_edit_response.status_code == 409
+
+    delete_response = client.delete(
+        f"/api/v1/transactions/{cash_transaction_id}", headers=headers
+    )
+    assert delete_response.status_code == 409
 
 
 def test_net_worth_converts_foreign_currency_holdings(
@@ -356,3 +520,152 @@ def test_portfolio_history_returns_points(
     assert body["base_currency"] == "EUR"
     assert len(body["points"]) > 0
     assert body["points"][-1]["date"] == date.today().isoformat()
+
+
+# ---------------------------------------------------------------------------
+# CSV import
+# ---------------------------------------------------------------------------
+
+def _upload_asset_csv(client: TestClient, headers: dict, account_id: str, csv_text: str) -> dict:
+    response = client.post(
+        "/api/v1/portfolio/transactions/import",
+        params={"account_id": account_id},
+        files={"file": ("transactions.csv", csv_text.encode("utf-8"), "text/csv")},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_asset_import_preview_flags_invalid_and_valid_rows(
+    client: TestClient, registered_user: dict, investment_account: dict
+) -> None:
+    csv_text = (
+        "symbol,asset_type,type,quantity,price,fee,date,notes\n"
+        "AAPL,stock,buy,10,140.00,0,2026-09-01,first buy\n"
+        "AAPL,stock,sell,not-a-number,150.00,0,2026-09-05,bad quantity\n"
+    )
+    preview = _upload_asset_csv(
+        client, registered_user["auth_headers"], investment_account["id"], csv_text
+    )
+
+    assert preview["total_rows"] == 2
+    assert preview["parsable_rows"] == 1
+    assert preview["rows"][0]["is_parsable"] is True
+    assert preview["rows"][1]["is_parsable"] is False
+    assert preview["rows"][1]["error"] is not None
+
+
+def test_asset_import_preview_flags_duplicates(
+    client: TestClient, registered_user: dict, investment_account: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    _create_asset_transaction(
+        client, headers, investment_account["id"], quantity="10", price="140.00", date="2026-09-01"
+    )
+
+    csv_text = (
+        "symbol,asset_type,type,quantity,price,fee,date,notes\n"
+        "AAPL,stock,buy,10,140.00,0,2026-09-01,\n"
+    )
+    preview = _upload_asset_csv(client, headers, investment_account["id"], csv_text)
+
+    assert preview["duplicate_rows"] == 1
+    assert preview["rows"][0]["is_duplicate"] is True
+
+
+def test_asset_import_rejects_checking_account(
+    client: TestClient, registered_user: dict, checking_account: dict
+) -> None:
+    csv_text = (
+        "symbol,asset_type,type,quantity,price,fee,date,notes\n"
+        "AAPL,stock,buy,10,140.00,0,2026-09-01,\n"
+    )
+    response = client.post(
+        "/api/v1/portfolio/transactions/import",
+        params={"account_id": checking_account["id"]},
+        files={"file": ("t.csv", csv_text.encode("utf-8"), "text/csv")},
+        headers=registered_user["auth_headers"],
+    )
+    assert response.status_code == 422
+
+
+def test_asset_import_confirm_creates_transactions_and_computes_holdings(
+    client: TestClient, registered_user: dict, investment_account: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    csv_text = (
+        "symbol,asset_type,type,quantity,price,fee,date,notes\n"
+        "AAPL,stock,buy,10,100.00,0,2026-09-01,opening buy\n"
+        "AAPL,stock,buy,10,200.00,0,2026-09-02,second buy\n"
+    )
+    preview = _upload_asset_csv(client, headers, investment_account["id"], csv_text)
+    row_numbers = [r["row_number"] for r in preview["rows"]]
+
+    confirm_response = client.post(
+        "/api/v1/portfolio/transactions/import/confirm",
+        json={"import_id": preview["import_id"], "row_numbers": row_numbers},
+        headers=headers,
+    )
+    assert confirm_response.status_code == 200
+    created = confirm_response.json()
+    assert len(created) == 2
+
+    holdings_response = client.get("/api/v1/portfolio/holdings", headers=headers)
+    holding = holdings_response.json()[0]
+    # weighted average of 10@100 + 10@200 = 150
+    assert Decimal(holding["avg_buy_price"]) == Decimal("150.00")
+    assert Decimal(holding["quantity"]) == Decimal("20")
+
+
+def test_asset_import_confirm_processes_buy_before_sell_on_tied_date(
+    client: TestClient, registered_user: dict, investment_account: dict
+) -> None:
+    """
+    A same-day sell of a symbol first bought in this same CSV must not be
+    treated as an overdraw just because of row order in the file.
+    """
+    headers = registered_user["auth_headers"]
+    csv_text = (
+        "symbol,asset_type,type,quantity,price,fee,date,notes\n"
+        "AAPL,stock,sell,4,150.00,0,2026-09-01,sell listed first in the file\n"
+        "AAPL,stock,buy,10,100.00,0,2026-09-01,buy listed second\n"
+    )
+    preview = _upload_asset_csv(client, headers, investment_account["id"], csv_text)
+    row_numbers = [r["row_number"] for r in preview["rows"]]
+
+    confirm_response = client.post(
+        "/api/v1/portfolio/transactions/import/confirm",
+        json={"import_id": preview["import_id"], "row_numbers": row_numbers},
+        headers=headers,
+    )
+    assert confirm_response.status_code == 200
+    assert len(confirm_response.json()) == 2
+
+    holdings_response = client.get("/api/v1/portfolio/holdings", headers=headers)
+    holding = holdings_response.json()[0]
+    assert Decimal(holding["quantity"]) == Decimal("6")
+    assert Decimal(holding["realized_pnl"]) == Decimal("200.00")
+
+
+def test_asset_import_confirm_skips_row_that_would_overdraw(
+    client: TestClient, registered_user: dict, investment_account: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    csv_text = (
+        "symbol,asset_type,type,quantity,price,fee,date,notes\n"
+        "AAPL,stock,sell,999,150.00,0,2026-09-01,no prior position\n"
+    )
+    preview = _upload_asset_csv(client, headers, investment_account["id"], csv_text)
+    row_numbers = [r["row_number"] for r in preview["rows"]]
+
+    confirm_response = client.post(
+        "/api/v1/portfolio/transactions/import/confirm",
+        json={"import_id": preview["import_id"], "row_numbers": row_numbers},
+        headers=headers,
+    )
+    assert confirm_response.status_code == 200
+    assert confirm_response.json() == []
+
+    holdings_response = client.get("/api/v1/portfolio/holdings", headers=headers)
+    assert holdings_response.json() == []

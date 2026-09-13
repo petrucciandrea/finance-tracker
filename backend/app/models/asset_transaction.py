@@ -22,7 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models import Base, SoftDeleteMixin, TimestampMixin, uuid_pk
 
 if TYPE_CHECKING:
-    from app.models import Account, Asset
+    from app.models import Account, Asset, Transaction
 
 
 class AssetTransaction(Base, TimestampMixin, SoftDeleteMixin):
@@ -34,6 +34,15 @@ class AssetTransaction(Base, TimestampMixin, SoftDeleteMixin):
     )
     asset_id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("assets.id"), nullable=False, index=True
+    )
+    # The cash-side counterpart of this buy/sell: a `transfer` Transaction on
+    # the same account for the same amount, so the money leaving/entering
+    # the account's cash balance is neither invisible (double-counting net
+    # worth once the holding's value is added on top) nor miscategorized as
+    # an expense/income (which would distort monthly spend reports). Kept in
+    # sync by routers/portfolio.py, never set directly by a client.
+    transaction_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("transactions.id"), nullable=True
     )
     type: Mapped[str] = mapped_column(String(4), nullable=False)  # buy/sell
     quantity: Mapped[float] = mapped_column(Numeric(24, 8), nullable=False)
@@ -48,6 +57,7 @@ class AssetTransaction(Base, TimestampMixin, SoftDeleteMixin):
 
     account: Mapped["Account"] = relationship(back_populates="asset_transactions")
     asset: Mapped["Asset"] = relationship(back_populates="asset_transactions")
+    transaction: Mapped["Transaction | None"] = relationship()
 
     __table_args__ = (
         CheckConstraint("type in ('buy','sell')", name="ck_asset_transactions_type"),

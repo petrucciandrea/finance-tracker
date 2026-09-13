@@ -23,7 +23,17 @@ from app.core.security import (
 from app.deps import get_current_user, get_db
 from app.models import User
 from app.models.refresh_token import RefreshToken
-from app.schemas import RefreshRequest, TokenPair, User as UserSchema, UserCreate, UserLogin
+from app.schemas import (
+    PasswordChangeRequest,
+    RefreshRequest,
+    TokenPair,
+    UserCreate,
+    UserLogin,
+    UserUpdate,
+)
+from app.schemas import (
+    User as UserSchema,
+)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -122,3 +132,50 @@ def logout(payload: RefreshRequest, db: Session = Depends(get_db)) -> None:
 @router.get("/me", response_model=UserSchema)
 def me(current_user: User = Depends(get_current_user)) -> User:
     return current_user
+
+
+@router.patch("/me", response_model=UserSchema)
+def update_me(
+    payload: UserUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> User:
+    if payload.email is not None and payload.email != current_user.email:
+        existing = db.query(User).filter(User.email == payload.email).first()
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="Email already registered"
+            )
+        current_user.email = payload.email
+
+    if payload.base_currency is not None:
+        current_user.base_currency = payload.base_currency
+
+    # Anagrafica fields are nullable and independently clearable — a client
+    # sends `null` explicitly to clear one without touching the others, so
+    # these use exclude_unset rather than the `is not None` check above
+    # (which would make "clear this field" indistinguishable from "leave it
+    # alone").
+    anagrafica_fields = payload.model_dump(
+        exclude_unset=True, include={"first_name", "last_name", "date_of_birth"}
+    )
+    for field, value in anagrafica_fields.items():
+        setattr(current_user, field, value)
+
+    db.commit()
+    db.refresh(current_user)
+    return current_user
+
+
+@router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT)
+def change_password(
+    payload: PasswordChangeRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    if not verify_password(payload.current_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect current password"
+        )
+    current_user.password_hash = hash_password(payload.new_password)
+    db.commit()

@@ -2,6 +2,7 @@ import { apiClient } from './client'
 import type {
   AssetTransaction,
   AssetTransactionCreatePayload,
+  AssetTransactionImportPreview,
   AssetTransactionUpdatePayload,
 } from '@/types'
 
@@ -34,4 +35,32 @@ export async function updateAssetTransaction(
 
 export async function deleteAssetTransaction(id: string): Promise<void> {
   await apiClient.delete(`/portfolio/transactions/${id}`)
+}
+
+// --- CSV import (two-step: preview, then confirm) ---
+
+export async function importAssetTransactionsPreview(
+  accountId: string,
+  file: File,
+): Promise<AssetTransactionImportPreview> {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const { data } = await apiClient.post<AssetTransactionImportPreview>(
+    '/portfolio/transactions/import',
+    formData,
+    { params: { account_id: accountId }, headers: { 'Content-Type': 'multipart/form-data' } },
+  )
+  return data
+}
+
+export async function confirmAssetTransactionsImport(
+  importId: string,
+  rowNumbers: number[],
+): Promise<AssetTransaction[]> {
+  const { data } = await apiClient.post<AssetTransaction[]>('/portfolio/transactions/import/confirm', {
+    import_id: importId,
+    row_numbers: rowNumbers,
+  })
+  return data
 }

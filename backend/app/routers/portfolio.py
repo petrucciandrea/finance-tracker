@@ -1,11 +1,14 @@
 """
-Portfolio endpoints: holdings CRUD, asset search, and net worth.
+Portfolio endpoints: holdings CRUD, asset search, net worth, and CSV import
+(preview then confirm — same two-step shape as `transactions.py`'s, just
+against `AssetTransaction` instead of `Transaction`).
 
 One combined router rather than separate `assets.py` / `holdings.py` files:
 `Asset` has no standalone CRUD from a user's perspective — it's resolved
 implicitly the same way `Currency` is, never independently created/edited by
-a user — and prices/holdings/net-worth are inseparable from each other the
-same way CSV import lives inside `transactions.py` instead of its own file.
+a user — and prices/holdings/net-worth/import are all inseparable from each
+other for the same reason CSV import lives inside `transactions.py` instead
+of its own file.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -13,7 +16,7 @@ from datetime import date as date_
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session, joinedload
 
@@ -23,6 +26,9 @@ from app.schemas import (
     AccountBalance,
     AssetSearchResult,
     AssetTransactionCreate,
+    AssetTransactionImportConfirm,
+    AssetTransactionImportPreview,
+    AssetTransactionImportRow,
     AssetTransactionType,
     AssetTransactionUpdate,
     AssetType,
@@ -36,10 +42,61 @@ from app.schemas import (
     AssetTransaction as AssetTransactionSchema,
 )
 from app.services import asset_prices as asset_prices_service
+from app.services import csv_import as csv_import_service
 from app.services.asset_prices import AssetPriceUnavailable
 from app.services.exchange_rates import ExchangeRateUnavailable, get_rate, get_rate_history
 
 router = APIRouter(prefix="/api/v1/portfolio", tags=["portfolio"])
+
+
+def _cash_movement_description(asset_symbol: str, asset_transaction_type: str) -> str:
+    verb = "Acquisto" if asset_transaction_type == "buy" else "Vendita"
+    return f"{verb} {asset_symbol}"
+
+
+def _signed_cash_amount(asset_transaction_type: str, total: Decimal) -> Decimal:
+    # A buy pulls cash out of the account (negative); a sell returns cash to
+    # it (positive) — mirrors the sign convention transactions.py already
+    # uses for expense (negative) vs income (positive).
+    return -total if asset_transaction_type == "buy" else total
+
+
+def _create_linked_cash_transaction(
+    db: Session,
+    *,
+    account: Account,
+    asset: Asset,
+    asset_transaction_type: str,
+    total: Decimal,
+    rate: Decimal,
+    on_date: date_,
+    source: str,
+) -> Transaction:
+    """
+    Every buy/sell moves cash in or out of the account it's logged on — this
+    records that movement as an ordinary `transfer` Transaction (never
+    expense/income, so it's exempt from the "Varie" fallback and doesn't
+    distort expense/income totals) so the account's computed balance and net
+    worth's cash total reflect it. Without this, a holding's market value
+    would be added to net worth on top of cash that still looks unspent —
+    double-counting the money that actually bought it.
+    """
+    signed_amount = _signed_cash_amount(asset_transaction_type, total)
+    cash_transaction = Transaction(
+        account_id=account.id,
+        category_id=None,
+        amount=signed_amount,
+        currency=asset.currency,
+        amount_base_currency=signed_amount * rate,
+        exchange_rate=rate,
+        date=on_date,
+        description=_cash_movement_description(asset.symbol, asset_transaction_type),
+        type="transfer",
+        source=source,
+    )
+    db.add(cash_transaction)
+    db.flush()  # populates cash_transaction.id for the AssetTransaction FK
+    return cash_transaction
 
 
 def _get_owned_account_or_404(db: Session, account_id: UUID, user: User) -> Account:
@@ -330,9 +387,21 @@ def create_asset_transaction(
     gross = payload.quantity * payload.price
     total = gross + payload.fee if payload.type == AssetTransactionType.buy else gross - payload.fee
 
+    cash_transaction = _create_linked_cash_transaction(
+        db,
+        account=account,
+        asset=asset,
+        asset_transaction_type=payload.type.value,
+        total=total,
+        rate=rate,
+        on_date=payload.date,
+        source="manual",
+    )
+
     transaction = AssetTransaction(
         account_id=account.id,
         asset_id=asset.id,
+        transaction_id=cash_transaction.id,
         type=payload.type.value,
         quantity=payload.quantity,
         price=payload.price,
@@ -389,6 +458,15 @@ def update_asset_transaction(
         transaction.exchange_rate = rate
         transaction.amount_base_currency = total * rate
 
+        if transaction.transaction_id is not None:
+            cash_transaction = db.get(Transaction, transaction.transaction_id)
+            if cash_transaction is not None:
+                signed_amount = _signed_cash_amount(transaction.type, total)
+                cash_transaction.amount = signed_amount
+                cash_transaction.amount_base_currency = signed_amount * rate
+                cash_transaction.exchange_rate = rate
+                cash_transaction.date = transaction.date
+
     db.commit()
     db.refresh(transaction)
     return transaction
@@ -402,7 +480,149 @@ def delete_asset_transaction(
 ) -> None:
     transaction = _get_owned_asset_transaction(db, transaction_id, current_user)
     transaction.deleted_at = datetime.now(UTC)
+    if transaction.transaction_id is not None:
+        cash_transaction = db.get(Transaction, transaction.transaction_id)
+        if cash_transaction is not None:
+            cash_transaction.deleted_at = datetime.now(UTC)
     db.commit()
+
+
+# ---------------------------------------------------------------------------
+# CSV import — two-step: upload/preview, then confirm (mirrors
+# transactions.py's import flow, against AssetTransaction instead)
+# ---------------------------------------------------------------------------
+
+@router.post("/transactions/import", response_model=AssetTransactionImportPreview)
+async def asset_transaction_import_preview(
+    account_id: UUID,
+    file: UploadFile,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AssetTransactionImportPreview:
+    account = _get_owned_account_or_404(db, account_id, current_user)
+    if account.type not in ("investment", "crypto_wallet"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Asset transactions can only be imported into investment or crypto "
+            "wallet accounts",
+        )
+
+    content = await file.read()
+    preview = csv_import_service.parse_asset_csv(db, account_id, content)
+
+    rows = [
+        AssetTransactionImportRow(
+            row_number=r.row_number,
+            account_id=r.account_id,
+            symbol=r.symbol,
+            asset_type=AssetType(r.asset_type),
+            type=AssetTransactionType(r.type),
+            quantity=r.quantity,
+            price=r.price,
+            fee=r.fee,
+            date=r.date,
+            notes=r.notes,
+            is_duplicate=r.is_duplicate,
+            is_parsable=r.is_parsable,
+            error=r.error,
+        )
+        for r in preview.rows
+    ]
+    return AssetTransactionImportPreview(
+        import_id=preview.import_id,
+        rows=rows,
+        total_rows=len(rows),
+        parsable_rows=sum(1 for r in rows if r.is_parsable),
+        duplicate_rows=sum(1 for r in rows if r.is_duplicate),
+    )
+
+
+@router.post("/transactions/import/confirm", response_model=list[AssetTransactionSchema])
+def asset_transaction_import_confirm(
+    payload: AssetTransactionImportConfirm,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[AssetTransaction]:
+    preview = csv_import_service.get_asset_preview(payload.import_id)
+    if preview is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Import preview not found or expired — please re-upload the file",
+        )
+    account = _get_owned_account_or_404(db, preview.account_id, current_user)
+    if account.type not in ("investment", "crypto_wallet"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Asset transactions can only be imported into investment or crypto "
+            "wallet accounts",
+        )
+
+    selected = {r.row_number: r for r in preview.rows if r.row_number in payload.row_numbers}
+    # Process buys before sells on a tied date, same reasoning as
+    # `_compute_holding_positions` — otherwise a same-day sell can look like
+    # it's overdrawing a position a later-processed same-day buy would cover.
+    ordered = sorted(selected.values(), key=lambda r: (r.date, r.type != "buy"))
+
+    created: list[AssetTransaction] = []
+    for row in ordered:
+        if not row.is_parsable:
+            continue  # silently skip — the frontend shouldn't have sent these anyway
+
+        try:
+            asset = asset_prices_service.find_or_create_asset(db, row.symbol, row.asset_type)
+        except AssetPriceUnavailable:
+            continue  # a partial import beats failing the whole batch on one bad row
+
+        if row.type == "sell":
+            held = _current_quantity(db, account.id, asset.id)
+            if row.quantity > held:
+                continue
+
+        try:
+            rate = get_rate(db, asset.currency, current_user.base_currency, row.date)
+        except ExchangeRateUnavailable:
+            continue
+
+        gross = row.quantity * row.price
+        total = gross + row.fee if row.type == "buy" else gross - row.fee
+
+        cash_transaction = _create_linked_cash_transaction(
+            db,
+            account=account,
+            asset=asset,
+            asset_transaction_type=row.type,
+            total=total,
+            rate=rate,
+            on_date=row.date,
+            source="import",
+        )
+
+        transaction = AssetTransaction(
+            account_id=row.account_id,
+            asset_id=asset.id,
+            transaction_id=cash_transaction.id,
+            type=row.type,
+            quantity=row.quantity,
+            price=row.price,
+            fee=row.fee,
+            amount_base_currency=total * rate,
+            exchange_rate=rate,
+            date=row.date,
+            notes=row.notes,
+        )
+        # Added inside the loop (not batched at the end) so a later row's
+        # `_current_quantity` sees earlier rows from this same import via
+        # autoflush — otherwise a multi-row buy-then-sell of a brand-new
+        # symbol would look like an overdraw against an empty position.
+        db.add(transaction)
+        created.append(transaction)
+
+    db.commit()
+    for t in created:
+        db.refresh(t)
+
+    csv_import_service.discard_asset_preview(payload.import_id)
+    return created
 
 
 @router.get("/net-worth", response_model=NetWorthSummary)

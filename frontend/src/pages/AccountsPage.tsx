@@ -3,6 +3,7 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { isAxiosError } from 'axios'
+import { TrashIcon } from '@/components/ui/Icon'
 import { useAccounts, useCreateAccount, useDeleteAccount } from '@/hooks/useAccounts'
 import type { ApiErrorResponse, AccountType } from '@/types'
 
@@ -183,9 +184,11 @@ export function AccountsPage() {
                 </div>
                 <button
                   onClick={() => handleDelete(account.id, account.name)}
-                  className="text-sm font-medium text-red-600 hover:underline"
+                  aria-label="Elimina"
+                  title="Elimina"
+                  className="rounded p-1.5 text-red-600 hover:bg-red-50"
                 >
-                  Elimina
+                  <TrashIcon />
                 </button>
               </li>
             ))}

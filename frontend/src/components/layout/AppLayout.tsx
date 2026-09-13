@@ -43,13 +43,12 @@ export function AppLayout() {
             <NavLink to="/portfolio" className={navLinkClass}>
               Portfolio
             </NavLink>
-            <NavLink to="/import" className={navLinkClass}>
-              Importa CSV
-            </NavLink>
           </nav>
 
           <div className="flex items-center gap-3">
-            <span className="text-sm text-slate-500">{user?.email}</span>
+            <NavLink to="/profile" className="text-sm text-slate-500 hover:text-slate-800 hover:underline">
+              {user?.email}
+            </NavLink>
             <button
               onClick={handleLogout}
               className="rounded-md px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"

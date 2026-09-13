@@ -1,4 +1,5 @@
 import { Fragment, useState } from 'react'
+import { TrashIcon } from '@/components/ui/Icon'
 import { useAssetTransactionsList, useDeleteAssetTransaction } from '@/hooks/useAssetTransactions'
 import type { AssetType, HoldingWithValue } from '@/types'
 
@@ -62,9 +63,11 @@ function HoldingHistoryRow({ holding }: { holding: HoldingWithValue }) {
                   <td className="py-1.5 pr-3">
                     <button
                       onClick={() => handleDelete(tx.id)}
-                      className="font-medium text-red-600 hover:underline"
+                      aria-label="Elimina"
+                      title="Elimina"
+                      className="rounded p-1 text-red-600 hover:bg-red-50"
                     >
-                      Elimina
+                      <TrashIcon />
                     </button>
                   </td>
                 </tr>

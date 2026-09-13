@@ -58,6 +58,9 @@ class User(Base, TimestampMixin):
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     base_currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     accounts: Mapped[list["Account"]] = relationship(back_populates="user")
     categories: Mapped[list["Category"]] = relationship(back_populates="user")
@@ -128,7 +131,7 @@ class Category(Base, SoftDeleteMixin):
     budgets: Mapped[list["Budget"]] = relationship(back_populates="category")
 
     __table_args__ = (
-        CheckConstraint("type in ('expense','income')", name="ck_categories_type"),
+        CheckConstraint("type in ('expense','income','transfer')", name="ck_categories_type"),
     )
 
 

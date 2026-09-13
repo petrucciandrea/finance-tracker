@@ -10,7 +10,7 @@ import { CategoriesPage } from '@/pages/CategoriesPage'
 import { BudgetsPage } from '@/pages/BudgetsPage'
 import { PortfolioPage } from '@/pages/PortfolioPage'
 import { TransactionsPage } from '@/pages/TransactionsPage'
-import { ImportPage } from '@/pages/ImportPage'
+import { ProfilePage } from '@/pages/ProfilePage'
 
 function App() {
   return (
@@ -27,7 +27,7 @@ function App() {
             <Route path="/categories" element={<CategoriesPage />} />
             <Route path="/budgets" element={<BudgetsPage />} />
             <Route path="/portfolio" element={<PortfolioPage />} />
-            <Route path="/import" element={<ImportPage />} />
+            <Route path="/profile" element={<ProfilePage />} />
           </Route>
         </Route>
 

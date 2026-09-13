@@ -3,6 +3,7 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { isAxiosError } from 'axios'
+import { TrashIcon } from '@/components/ui/Icon'
 import { useCategories } from '@/hooks/useCategories'
 import {
   useBudgets,
@@ -198,9 +199,11 @@ export function BudgetsPage() {
                     </div>
                     <button
                       onClick={() => handleDelete(budget.id, categoryName)}
-                      className="text-sm font-medium text-red-600 hover:underline"
+                      aria-label="Elimina"
+                      title="Elimina"
+                      className="rounded p-1.5 text-red-600 hover:bg-red-50"
                     >
-                      Elimina
+                      <TrashIcon />
                     </button>
                   </div>
 

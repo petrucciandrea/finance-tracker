@@ -1,70 +1,128 @@
 import { useState } from 'react'
-import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
-import { useCategories, useCreateCategory, useDeleteCategory } from '@/hooks/useCategories'
-import type { Category } from '@/types'
+import type { DragEvent, FormEvent } from 'react'
+import { GripVerticalIcon, PencilIcon, PlusIcon, TrashIcon } from '@/components/ui/Icon'
+import {
+  useCategories,
+  useCreateCategory,
+  useDeleteCategory,
+  useUpdateCategory,
+} from '@/hooks/useCategories'
+import type { Category, CategoryType } from '@/types'
 
-const categorySchema = z.object({
-  name: z.string().min(1, 'Il nome è obbligatorio').max(100),
-  type: z.enum(['expense', 'income']),
-  parent_id: z.string().optional(),
-})
-
-type CategoryFormValues = z.infer<typeof categorySchema>
-
-/**
- * Builds a flat, indented render order from the parent/child list the API
- * returns — root categories first, each immediately followed by its
- * children. Good enough for a two-level hierarchy; wouldn't scale to
- * arbitrary depth without recursion, but the backend only supports one
- * level of nesting today anyway.
- */
-function sortedForDisplay(categories: Category[]): Array<{ category: Category; depth: number }> {
-  const roots = categories.filter((c) => c.parent_id === null)
-  const result: Array<{ category: Category; depth: number }> = []
-  for (const root of roots) {
-    result.push({ category: root, depth: 0 })
-    const children = categories.filter((c) => c.parent_id === root.id)
-    for (const child of children) {
-      result.push({ category: child, depth: 1 })
-    }
-  }
-  return result
+const TYPE_LABELS: Record<CategoryType, string> = {
+  expense: 'Spese',
+  income: 'Entrate',
+  transfer: 'Trasferimenti',
 }
 
-export function CategoriesPage() {
-  const { data: categories, isLoading, isError } = useCategories()
+// A subcategory drag carries its id under a type-specific MIME key, so a
+// root category only accepts drops of subcategories of its own type — the
+// backend would reject a cross-type move anyway (same rule as creation),
+// this just gives the right "not allowed" cursor instead of a failed request.
+function dragMimeType(type: CategoryType): string {
+  return `application/x-category-${type}`
+}
+
+function buildTree(categories: Category[], type: CategoryType) {
+  const roots = categories.filter((c) => c.type === type && c.parent_id === null)
+  return roots.map((root) => ({
+    root,
+    children: categories.filter((c) => c.parent_id === root.id),
+  }))
+}
+
+function CategoryTypeSection({ type, categories }: { type: CategoryType; categories: Category[] }) {
   const createCategory = useCreateCategory()
+  const updateCategory = useUpdateCategory()
   const deleteCategory = useDeleteCategory()
-  const [isFormOpen, setIsFormOpen] = useState(false)
 
-  const {
-    register,
-    handleSubmit,
-    reset,
-    watch,
-    formState: { errors, isSubmitting },
-  } = useForm<CategoryFormValues>({
-    resolver: zodResolver(categorySchema),
-    defaultValues: { type: 'expense', parent_id: '' },
-  })
+  const [newRootName, setNewRootName] = useState('')
+  const [addingChildTo, setAddingChildTo] = useState<string | null>(null)
+  const [newChildName, setNewChildName] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingName, setEditingName] = useState('')
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null)
 
-  const selectedType = watch('type')
-  // A category's parent must share its type — the backend enforces this
-  // with a 422, but filtering the dropdown here avoids the round-trip.
-  const eligibleParents = (categories ?? []).filter(
-    (c) => c.parent_id === null && c.type === selectedType,
-  )
+  const roots = categories.filter((c) => c.type === type && c.parent_id === null)
+  const tree = buildTree(categories, type)
 
-  async function onSubmit(values: CategoryFormValues) {
-    await createCategory.mutateAsync({
-      name: values.name,
-      type: values.type,
-      parent_id: values.parent_id || null,
-    })
-    reset()
-    setIsFormOpen(false)
+  async function handleCreateRoot(e: FormEvent) {
+    e.preventDefault()
+    if (!newRootName.trim()) return
+    await createCategory.mutateAsync({ name: newRootName.trim(), type, parent_id: null })
+    setNewRootName('')
+  }
+
+  async function handleCreateChild(parentId: string) {
+    if (!newChildName.trim()) return
+    await createCategory.mutateAsync({ name: newChildName.trim(), type, parent_id: parentId })
+    setNewChildName('')
+    setAddingChildTo(null)
+  }
+
+  function startEditing(category: Category) {
+    setEditingId(category.id)
+    setEditingName(category.name)
+  }
+
+  async function saveEditing(id: string) {
+    if (!editingName.trim()) return
+    await updateCategory.mutateAsync({ id, payload: { name: editingName.trim() } })
+    setEditingId(null)
+  }
+
+  async function handleMove(childId: string, newParentId: string) {
+    if (!newParentId) return
+    await updateCategory.mutateAsync({ id: childId, payload: { parent_id: newParentId } })
+  }
+
+  function handleDragStart(child: Category) {
+    return (e: DragEvent<HTMLLIElement>) => {
+      e.dataTransfer.setData(dragMimeType(child.type), child.id)
+      e.dataTransfer.effectAllowed = 'move'
+      setDraggingId(child.id)
+    }
+  }
+
+  function handleDragEnd() {
+    setDraggingId(null)
+    setDropTargetId(null)
+  }
+
+  function handleRootDragOver(e: DragEvent<HTMLLIElement>) {
+    if (e.dataTransfer.types.includes(dragMimeType(type))) {
+      e.preventDefault()
+    }
+  }
+
+  function handleRootDragEnter(rootId: string) {
+    return (e: DragEvent<HTMLLIElement>) => {
+      if (e.dataTransfer.types.includes(dragMimeType(type))) {
+        setDropTargetId(rootId)
+      }
+    }
+  }
+
+  function handleRootDragLeave(rootId: string) {
+    return (e: DragEvent<HTMLLIElement>) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+        setDropTargetId((current) => (current === rootId ? null : current))
+      }
+    }
+  }
+
+  function handleRootDrop(rootId: string) {
+    return (e: DragEvent<HTMLLIElement>) => {
+      e.preventDefault()
+      const childId = e.dataTransfer.getData(dragMimeType(type))
+      setDraggingId(null)
+      setDropTargetId(null)
+      if (!childId) return
+      const dragged = categories.find((c) => c.id === childId)
+      if (!dragged || dragged.parent_id === rootId) return
+      handleMove(childId, rootId)
+    }
   }
 
   async function handleDelete(id: string, name: string) {
@@ -79,115 +137,204 @@ export function CategoriesPage() {
     }
   }
 
-  const displayList = categories ? sortedForDisplay(categories) : []
+  return (
+    <div className="rounded-lg bg-white shadow-sm">
+      <div className="border-b border-slate-100 px-6 py-4">
+        <h2 className="text-lg font-semibold text-slate-800">{TYPE_LABELS[type]}</h2>
+      </div>
+
+      <form onSubmit={handleCreateRoot} className="flex gap-2 border-b border-slate-100 px-6 py-4">
+        <input
+          value={newRootName}
+          onChange={(e) => setNewRootName(e.target.value)}
+          placeholder="Nuova categoria"
+          className="flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+        />
+        <button
+          type="submit"
+          disabled={createCategory.isPending}
+          aria-label="Aggiungi"
+          title="Aggiungi"
+          className="rounded-md bg-slate-800 p-2 text-white hover:bg-slate-700 disabled:opacity-50"
+        >
+          <PlusIcon />
+        </button>
+      </form>
+
+      {roots.length === 0 && <p className="px-6 py-4 text-sm text-slate-500">Nessuna categoria ancora.</p>}
+
+      <ul className="divide-y divide-slate-100">
+        {tree.map(({ root, children }) => {
+          return (
+            <li
+              key={root.id}
+              onDragOver={handleRootDragOver}
+              onDragEnter={handleRootDragEnter(root.id)}
+              onDragLeave={handleRootDragLeave(root.id)}
+              onDrop={handleRootDrop(root.id)}
+              className={`px-6 py-4 transition-colors ${
+                dropTargetId === root.id ? 'bg-slate-50 ring-2 ring-inset ring-slate-300' : ''
+              }`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                {editingId === root.id ? (
+                  <div className="flex flex-1 items-center gap-2">
+                    <input
+                      value={editingName}
+                      onChange={(e) => setEditingName(e.target.value)}
+                      className="flex-1 rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+                      autoFocus
+                    />
+                    <button
+                      onClick={() => saveEditing(root.id)}
+                      className="text-sm font-medium text-slate-800 hover:underline"
+                    >
+                      Salva
+                    </button>
+                    <button onClick={() => setEditingId(null)} className="text-sm text-slate-500 hover:underline">
+                      Annulla
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-sm font-medium text-slate-800">{root.name}</p>
+                )}
+
+                {editingId !== root.id && (
+                  <div className="flex shrink-0 items-center gap-3">
+                    <button
+                      onClick={() => startEditing(root)}
+                      aria-label="Modifica"
+                      title="Modifica"
+                      className="rounded p-1.5 text-slate-600 hover:bg-slate-100"
+                    >
+                      <PencilIcon />
+                    </button>
+                    <button
+                      onClick={() => setAddingChildTo(addingChildTo === root.id ? null : root.id)}
+                      aria-label="Aggiungi sottocategoria"
+                      title="Aggiungi sottocategoria"
+                      className="rounded p-1.5 text-slate-600 hover:bg-slate-100"
+                    >
+                      <PlusIcon />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(root.id, root.name)}
+                      aria-label="Elimina"
+                      title="Elimina"
+                      className="rounded p-1.5 text-red-600 hover:bg-red-50"
+                    >
+                      <TrashIcon />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {addingChildTo === root.id && (
+                <div className="mt-3 flex gap-2 pl-4">
+                  <input
+                    value={newChildName}
+                    onChange={(e) => setNewChildName(e.target.value)}
+                    placeholder="Nome sottocategoria"
+                    className="flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+                    autoFocus
+                  />
+                  <button
+                    onClick={() => handleCreateChild(root.id)}
+                    aria-label="Aggiungi"
+                    title="Aggiungi"
+                    className="rounded-md bg-slate-800 p-2 text-white hover:bg-slate-700"
+                  >
+                    <PlusIcon />
+                  </button>
+                </div>
+              )}
+
+              {children.length > 0 && (
+                <ul className="mt-3 space-y-2 pl-4">
+                  {children.map((child) => (
+                    <li
+                      key={child.id}
+                      draggable={editingId !== child.id}
+                      onDragStart={handleDragStart(child)}
+                      onDragEnd={handleDragEnd}
+                      className={`flex cursor-grab items-center justify-between gap-3 border-l-2 border-slate-100 pl-3 active:cursor-grabbing ${
+                        draggingId === child.id ? 'opacity-40' : ''
+                      }`}
+                    >
+                      {editingId === child.id ? (
+                        <div className="flex flex-1 items-center gap-2">
+                          <input
+                            value={editingName}
+                            onChange={(e) => setEditingName(e.target.value)}
+                            className="flex-1 rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+                            autoFocus
+                          />
+                          <button
+                            onClick={() => saveEditing(child.id)}
+                            className="text-sm font-medium text-slate-800 hover:underline"
+                          >
+                            Salva
+                          </button>
+                          <button onClick={() => setEditingId(null)} className="text-sm text-slate-500 hover:underline">
+                            Annulla
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="flex items-center gap-1.5 text-sm text-slate-700">
+                          <GripVerticalIcon className="h-3.5 w-3.5 shrink-0 text-slate-300" />
+                          {child.name}
+                        </span>
+                      )}
+
+                      {editingId !== child.id && (
+                        <div className="flex shrink-0 items-center gap-3">
+                          <button
+                            onClick={() => startEditing(child)}
+                            aria-label="Modifica"
+                            title="Modifica"
+                            className="rounded p-1.5 text-slate-600 hover:bg-slate-100"
+                          >
+                            <PencilIcon />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(child.id, child.name)}
+                            aria-label="Elimina"
+                            title="Elimina"
+                            className="rounded p-1.5 text-red-600 hover:bg-red-50"
+                          >
+                            <TrashIcon />
+                          </button>
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+export function CategoriesPage() {
+  const { data: categories, isLoading, isError } = useCategories()
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-slate-800">Categorie</h1>
-        <button
-          onClick={() => setIsFormOpen((open) => !open)}
-          className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-        >
-          {isFormOpen ? 'Annulla' : 'Nuova categoria'}
-        </button>
-      </div>
+      <h1 className="text-2xl font-semibold text-slate-800">Categorie</h1>
 
-      {isFormOpen && (
-        <form
-          onSubmit={handleSubmit(onSubmit)}
-          className="grid grid-cols-1 gap-4 rounded-lg bg-white p-6 shadow-sm sm:grid-cols-3"
-          noValidate
-        >
-          <div>
-            <label htmlFor="name" className="block text-sm font-medium text-slate-700">
-              Nome
-            </label>
-            <input
-              id="name"
-              {...register('name')}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-            />
-            {errors.name && <p className="mt-1 text-sm text-red-600">{errors.name.message}</p>}
-          </div>
+      {isLoading && <p className="text-slate-500">Caricamento...</p>}
+      {isError && <p className="text-red-600">Errore nel caricamento delle categorie.</p>}
 
-          <div>
-            <label htmlFor="type" className="block text-sm font-medium text-slate-700">
-              Tipo
-            </label>
-            <select
-              id="type"
-              {...register('type')}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-            >
-              <option value="expense">Spesa</option>
-              <option value="income">Entrata</option>
-            </select>
-          </div>
-
-          <div>
-            <label htmlFor="parent_id" className="block text-sm font-medium text-slate-700">
-              Categoria padre (opzionale)
-            </label>
-            <select
-              id="parent_id"
-              {...register('parent_id')}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-            >
-              <option value="">Nessuna (categoria principale)</option>
-              {eligibleParents.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="sm:col-span-3">
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
-            >
-              {isSubmitting ? 'Creazione...' : 'Crea categoria'}
-            </button>
-          </div>
-        </form>
+      {categories && (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <CategoryTypeSection type="expense" categories={categories} />
+          <CategoryTypeSection type="income" categories={categories} />
+          <CategoryTypeSection type="transfer" categories={categories} />
+        </div>
       )}
-
-      <div className="rounded-lg bg-white shadow-sm">
-        {isLoading && <p className="p-6 text-slate-500">Caricamento...</p>}
-        {isError && <p className="p-6 text-red-600">Errore nel caricamento delle categorie.</p>}
-
-        {categories && categories.length === 0 && (
-          <p className="p-6 text-sm text-slate-500">Nessuna categoria ancora. Creane una per iniziare.</p>
-        )}
-
-        {displayList.length > 0 && (
-          <ul className="divide-y divide-slate-100">
-            {displayList.map(({ category, depth }) => (
-              <li
-                key={category.id}
-                className="flex items-center justify-between px-6 py-4"
-                style={{ paddingLeft: `${1.5 + depth * 1.5}rem` }}
-              >
-                <div>
-                  <p className="text-sm font-medium text-slate-800">{category.name}</p>
-                  <p className="text-xs text-slate-400">
-                    {category.type === 'expense' ? 'Spesa' : 'Entrata'}
-                  </p>
-                </div>
-                <button
-                  onClick={() => handleDelete(category.id, category.name)}
-                  className="text-sm font-medium text-red-600 hover:underline"
-                >
-                  Elimina
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
     </div>
   )
 }

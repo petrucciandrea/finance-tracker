@@ -5,10 +5,10 @@
  * a new one before rendering protected routes).
  */
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import * as authApi from '@/api/auth'
 import { getStoredRefreshToken, setAccessToken, setStoredRefreshToken } from '@/api/client'
-import type { LoginPayload, RegisterPayload, User } from '@/types'
+import type { LoginPayload, PasswordChangePayload, RegisterPayload, User, UserUpdatePayload } from '@/types'
 
 interface AuthContextValue {
   user: User | null
@@ -16,6 +16,8 @@ interface AuthContextValue {
   login: (payload: LoginPayload) => Promise<void>
   register: (payload: RegisterPayload) => Promise<void>
   logout: () => Promise<void>
+  updateProfile: (payload: UserUpdatePayload) => Promise<void>
+  changePassword: (payload: PasswordChangePayload) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
@@ -23,8 +25,18 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const didBootstrap = useRef(false)
 
   useEffect(() => {
+    // StrictMode double-invokes effects in dev, which would otherwise fire
+    // this twice with the same stored refresh token. Since refresh tokens
+    // are single-use (revoked on rotation), the second call always 401s and
+    // wipes a session that just successfully refreshed. A ref survives the
+    // simulated remount (only effects re-run, not component state), so this
+    // guard makes the bootstrap body run at most once per real mount.
+    if (didBootstrap.current) return
+    didBootstrap.current = true
+
     async function bootstrap() {
       const storedRefreshToken = getStoredRefreshToken()
       if (!storedRefreshToken) {
@@ -80,8 +92,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null)
   }
 
+  async function updateProfile(payload: UserUpdatePayload) {
+    const updatedUser = await authApi.updateProfile(payload)
+    setUser(updatedUser)
+  }
+
+  async function changePassword(payload: PasswordChangePayload) {
+    await authApi.changePassword(payload)
+  }
+
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, register, logout }}>
+    <AuthContext.Provider
+      value={{ user, isLoading, login, register, logout, updateProfile, changePassword }}
+    >
       {children}
     </AuthContext.Provider>
   )

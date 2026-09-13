@@ -31,6 +31,7 @@ class AccountType(str, Enum):
 class CategoryType(str, Enum):
     expense = "expense"
     income = "income"
+    transfer = "transfer"
 
 
 class TransactionType(str, Enum):
@@ -111,10 +112,31 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class UserUpdate(BaseModel):
+    email: EmailStr | None = None
+    base_currency: str | None = Field(
+        default=None, min_length=3, max_length=3, description="ISO 4217 code, e.g. EUR"
+    )
+    # Anagrafica — all optional and independently clearable (send `null` to
+    # clear one without touching the others), unlike email/base_currency
+    # which a PATCH is never meant to unset.
+    first_name: str | None = Field(default=None, max_length=100)
+    last_name: str | None = Field(default=None, max_length=100)
+    date_of_birth: date_ | None = None
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
+
+
 class User(ORMBase):
     id: UUID
     email: EmailStr
     base_currency: str
+    first_name: str | None = None
+    last_name: str | None = None
+    date_of_birth: date_ | None = None
     created_at: datetime
 
 
@@ -379,6 +401,35 @@ class AssetTransaction(ORMBase):
     notes: str | None = None
     created_at: datetime
     deleted_at: datetime | None = None
+
+
+class AssetTransactionImportRow(BaseModel):
+    row_number: int
+    account_id: UUID
+    symbol: str
+    asset_type: AssetType
+    type: AssetTransactionType
+    quantity: Decimal
+    price: Decimal
+    fee: Decimal
+    date: date_
+    notes: str | None = None
+    is_duplicate: bool = False
+    is_parsable: bool = True
+    error: str | None = None
+
+
+class AssetTransactionImportPreview(BaseModel):
+    import_id: UUID
+    rows: list[AssetTransactionImportRow]
+    total_rows: int
+    parsable_rows: int
+    duplicate_rows: int
+
+
+class AssetTransactionImportConfirm(BaseModel):
+    import_id: UUID
+    row_numbers: list[int] = Field(description="Rows to actually commit, e.g. excluding duplicates")
 
 
 class HoldingWithValue(BaseModel):

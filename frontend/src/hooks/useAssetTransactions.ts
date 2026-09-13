@@ -43,3 +43,19 @@ export function useDeleteAssetTransaction() {
     onSuccess: () => invalidateAssetTransactionsAndDerived(queryClient),
   })
 }
+
+export function useAssetTransactionImportPreview() {
+  return useMutation({
+    mutationFn: ({ accountId, file }: { accountId: string; file: File }) =>
+      assetTransactionsApi.importAssetTransactionsPreview(accountId, file),
+  })
+}
+
+export function useConfirmAssetTransactionImport() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ importId, rowNumbers }: { importId: string; rowNumbers: number[] }) =>
+      assetTransactionsApi.confirmAssetTransactionsImport(importId, rowNumbers),
+    onSuccess: () => invalidateAssetTransactionsAndDerived(queryClient),
+  })
+}

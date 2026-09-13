@@ -78,9 +78,14 @@ apiClient.interceptors.response.use(
   async (error: AxiosError) => {
     const originalRequest = error.config as RetriableConfig | undefined
 
+    // Also excludes /auth/me/password: a 401 there means "wrong current
+    // password", a business error the caller must show as-is — retrying
+    // it after a token refresh would just re-send the same wrong password
+    // and burn a refresh-token rotation for nothing.
     const isAuthEndpoint = originalRequest?.url?.includes('/auth/login') ||
       originalRequest?.url?.includes('/auth/register') ||
-      originalRequest?.url?.includes('/auth/refresh')
+      originalRequest?.url?.includes('/auth/refresh') ||
+      originalRequest?.url?.includes('/auth/me/password')
 
     if (error.response?.status !== 401 || !originalRequest || originalRequest._retry || isAuthEndpoint) {
       return Promise.reject(error)

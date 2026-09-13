@@ -35,6 +35,9 @@ def _validate_parent(db: Session, parent_id: UUID | None, user: User, category_t
     """
     A parent must: exist, belong to the same user, not be soft-deleted, and
     share the same type (an expense category can't nest under an income one).
+    Nesting is capped at two levels — a subcategory can't itself become a
+    parent — since the "assign to a category that has subcategories" rule
+    on transactions only makes sense for a flat parent/child hierarchy.
     """
     if parent_id is None:
         return
@@ -45,6 +48,20 @@ def _validate_parent(db: Session, parent_id: UUID | None, user: User, category_t
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="A category's parent must have the same type (expense/income)",
         )
+    if parent.parent_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A subcategory cannot itself be used as a parent category",
+        )
+
+
+def _has_active_children(db: Session, category_id: UUID) -> bool:
+    return (
+        db.query(Category)
+        .filter(Category.parent_id == category_id, Category.deleted_at.is_(None))
+        .first()
+        is not None
+    )
 
 
 @router.get("", response_model=list[CategorySchema])
@@ -126,13 +143,7 @@ def delete_category(
 ) -> None:
     category = _get_owned_category(db, category_id, current_user)
 
-    has_active_children = (
-        db.query(Category)
-        .filter(Category.parent_id == category.id, Category.deleted_at.is_(None))
-        .first()
-        is not None
-    )
-    if has_active_children:
+    if _has_active_children(db, category.id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cannot delete a category that still has active subcategories",

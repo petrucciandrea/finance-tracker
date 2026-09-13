@@ -14,7 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.deps import get_current_user, get_db
-from app.models import Account, Category, Transaction, User
+from app.models import Account, AssetTransaction, Category, Transaction, User
 from app.schemas import (
     PaginationMeta,
     SummaryGroupBy,
@@ -66,6 +66,55 @@ def _get_or_create_misc_category(db: Session, user: User, category_type: str) ->
     return category
 
 
+def _get_owned_leaf_category(
+    db: Session, category_id: UUID, user: User, expected_type: str
+) -> Category:
+    """
+    A transaction can only be filed under a category that: belongs to the
+    user, has no active subcategories of its own (pick one of them instead,
+    so spend doesn't land on an ambiguous parent bucket), and shares the
+    transaction's own type — an expense category on a transfer (or vice
+    versa) would be meaningless, now that categories exist for all three
+    transaction types (expense/income/transfer).
+    """
+    category = (
+        db.query(Category)
+        .filter(
+            Category.id == category_id,
+            Category.user_id == user.id,
+            Category.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if category is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+
+    if category.type != expected_type:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Category type '{category.type}' does not match "
+                f"transaction type '{expected_type}'"
+            ),
+        )
+
+    has_active_children = (
+        db.query(Category)
+        .filter(Category.parent_id == category.id, Category.deleted_at.is_(None))
+        .first()
+        is not None
+    )
+    if has_active_children:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "This category has subcategories — "
+                "assign the transaction to a subcategory instead"
+            ),
+        )
+    return category
+
+
 def _get_owned_account_or_404(db: Session, account_id: UUID, user: User) -> Account:
     account = (
         db.query(Account)
@@ -91,6 +140,38 @@ def _get_owned_transaction(db: Session, transaction_id: UUID, user: User) -> Tra
     if transaction is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
     return transaction
+
+
+def _reject_if_linked_to_asset_transaction(
+    db: Session, transaction_id: UUID, changed_fields: set[str] | None = None
+) -> None:
+    """
+    A portfolio buy/sell owns its cash-side `transfer` Transaction's
+    `amount`/`date` (see routers/portfolio.py) — editing those here directly
+    would let the cash movement drift out of sync with the asset transaction
+    that caused it, silently corrupting net worth. `category_id`/
+    `description` are free to edit here (e.g. tagging every buy/sell with an
+    "Investimenti" category), since they don't feed into that math.
+    `changed_fields=None` means "deleting" — always rejected, since only
+    deleting the asset transaction can retire its cash movement correctly.
+    """
+    if changed_fields is not None and not changed_fields & {"amount", "date"}:
+        return
+
+    linked = (
+        db.query(AssetTransaction)
+        .filter(
+            AssetTransaction.transaction_id == transaction_id,
+            AssetTransaction.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if linked is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This transaction's amount/date are managed by a portfolio "
+            "operation — edit or delete it from Portfolio instead",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -151,17 +232,9 @@ def create_transaction(
 
     category_id = payload.category_id
     if category_id:
-        category_ok = (
-            db.query(Category)
-            .filter(
-                Category.id == category_id,
-                Category.user_id == current_user.id,
-                Category.deleted_at.is_(None),
-            )
-            .first()
-        )
-        if category_ok is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+        category_id = _get_owned_leaf_category(
+            db, category_id, current_user, payload.type.value
+        ).id
     elif payload.type in ("expense", "income"):
         # No category given for a spend/income transaction — fall back to
         # "Varie" instead of allowing an uncategorized expense/income to
@@ -230,7 +303,16 @@ def summary(
         db.query(*columns)
         .join(Account, Account.id == Transaction.account_id)
         .outerjoin(Category, Category.id == Transaction.category_id)
-        .filter(Account.user_id == current_user.id, Transaction.deleted_at.is_(None))
+        .filter(
+            Account.user_id == current_user.id,
+            Transaction.deleted_at.is_(None),
+            # A transfer (opening balance, portfolio buy/sell cash movement,
+            # ...) isn't income or spend — it's money moving between the
+            # user's own buckets, so it must never inflate/deflate this
+            # income/expense summary. Same rule budgets.py's status query
+            # already applies with its own `type == "expense"` filter.
+            Transaction.type != "transfer",
+        )
     )
 
     if params.date_from:
@@ -276,15 +358,20 @@ def update_transaction(
 ) -> Transaction:
     transaction = _get_owned_transaction(db, transaction_id, current_user)
     update_data = payload.model_dump(exclude_unset=True)
+    _reject_if_linked_to_asset_transaction(db, transaction.id, changed_fields=set(update_data))
 
-    # Explicitly clearing the category on an expense/income transaction
-    # falls back to "Varie", same rule as creation — never leave one
-    # uncategorized.
-    if "category_id" in update_data and update_data["category_id"] is None and transaction.type in (
-        "expense",
-        "income",
-    ):
-        update_data["category_id"] = _get_or_create_misc_category(db, current_user, transaction.type).id
+    if "category_id" in update_data:
+        if update_data["category_id"] is None:
+            # Explicitly clearing the category on an expense/income transaction
+            # falls back to "Varie", same rule as creation — never leave one
+            # uncategorized.
+            if transaction.type in ("expense", "income"):
+                misc_category = _get_or_create_misc_category(db, current_user, transaction.type)
+                update_data["category_id"] = misc_category.id
+        else:
+            update_data["category_id"] = _get_owned_leaf_category(
+                db, update_data["category_id"], current_user, transaction.type
+            ).id
 
     # If amount or date changes, the frozen conversion must be recomputed —
     # otherwise amount_base_currency would silently drift out of sync.
@@ -314,6 +401,7 @@ def delete_transaction(
     current_user: User = Depends(get_current_user),
 ) -> None:
     transaction = _get_owned_transaction(db, transaction_id, current_user)
+    _reject_if_linked_to_asset_transaction(db, transaction.id)
     transaction.deleted_at = datetime.now(timezone.utc)
     db.commit()
 

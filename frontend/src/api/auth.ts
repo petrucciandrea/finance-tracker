@@ -1,5 +1,12 @@
 import { apiClient } from './client'
-import type { LoginPayload, RegisterPayload, TokenPair, User } from '@/types'
+import type {
+  LoginPayload,
+  PasswordChangePayload,
+  RegisterPayload,
+  TokenPair,
+  User,
+  UserUpdatePayload,
+} from '@/types'
 
 export async function register(payload: RegisterPayload): Promise<User> {
   const { data } = await apiClient.post<User>('/auth/register', payload)
@@ -23,4 +30,13 @@ export async function logout(refreshToken: string): Promise<void> {
 export async function getCurrentUser(): Promise<User> {
   const { data } = await apiClient.get<User>('/auth/me')
   return data
+}
+
+export async function updateProfile(payload: UserUpdatePayload): Promise<User> {
+  const { data } = await apiClient.patch<User>('/auth/me', payload)
+  return data
+}
+
+export async function changePassword(payload: PasswordChangePayload): Promise<void> {
+  await apiClient.post('/auth/me/password', payload)
 }

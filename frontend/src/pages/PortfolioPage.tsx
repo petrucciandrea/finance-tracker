@@ -1,10 +1,13 @@
 import { useState } from 'react'
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
 import { AssetTransactionForm } from '@/components/portfolio/AssetTransactionForm'
+import { AssetTransactionImport } from '@/components/portfolio/AssetTransactionImport'
 import { HoldingsTable } from '@/components/portfolio/HoldingsTable'
 import { PnlByAssetChart } from '@/components/portfolio/PnlByAssetChart'
 import { PortfolioValueChart } from '@/components/portfolio/PortfolioValueChart'
 import { useHoldings, useNetWorth } from '@/hooks/usePortfolio'
+
+type PanelMode = 'none' | 'form' | 'import'
 
 const ALLOCATION_COLORS = [
   '#1e293b', // slate-800 (cash)
@@ -23,7 +26,11 @@ function formatCurrency(amount: string, currency: string): string {
 export function PortfolioPage() {
   const { data: holdings, isLoading, isError } = useHoldings()
   const { data: netWorth } = useNetWorth()
-  const [isFormOpen, setIsFormOpen] = useState(false)
+  const [panel, setPanel] = useState<PanelMode>('none')
+
+  function togglePanel(mode: PanelMode) {
+    setPanel((current) => (current === mode ? 'none' : mode))
+  }
 
   const allocationData = netWorth
     ? [
@@ -39,12 +46,20 @@ export function PortfolioPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-slate-800">Portfolio</h1>
-        <button
-          onClick={() => setIsFormOpen((open) => !open)}
-          className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-        >
-          {isFormOpen ? 'Annulla' : 'Nuova transazione'}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => togglePanel('import')}
+            className="rounded-md px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
+          >
+            {panel === 'import' ? 'Annulla' : 'Importa CSV'}
+          </button>
+          <button
+            onClick={() => togglePanel('form')}
+            className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+          >
+            {panel === 'form' ? 'Annulla' : 'Nuova transazione'}
+          </button>
+        </div>
       </div>
 
       {netWorth && (
@@ -70,7 +85,8 @@ export function PortfolioPage() {
         </div>
       )}
 
-      {isFormOpen && <AssetTransactionForm onDone={() => setIsFormOpen(false)} />}
+      {panel === 'form' && <AssetTransactionForm onDone={() => setPanel('none')} />}
+      {panel === 'import' && <AssetTransactionImport onDone={() => setPanel('none')} />}
 
       {netWorth && <PortfolioValueChart baseCurrency={netWorth.base_currency} />}
 

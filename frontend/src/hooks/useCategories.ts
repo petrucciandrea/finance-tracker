@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as categoriesApi from '@/api/categories'
-import type { CategoryCreatePayload } from '@/types'
+import type { CategoryCreatePayload, CategoryUpdatePayload } from '@/types'
 
 const CATEGORIES_KEY = ['categories'] as const
 
@@ -15,6 +15,15 @@ export function useCreateCategory() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (payload: CategoryCreatePayload) => categoriesApi.createCategory(payload),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: CATEGORIES_KEY }),
+  })
+}
+
+export function useUpdateCategory() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: CategoryUpdatePayload }) =>
+      categoriesApi.updateCategory(id, payload),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: CATEGORIES_KEY }),
   })
 }

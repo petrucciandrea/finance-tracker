@@ -7,9 +7,11 @@ historical transactions keep a durable, queryable record of the rate used.
 """
 
 from datetime import date as date_
+from datetime import timedelta
 from decimal import Decimal
 
 import httpx
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -54,6 +56,74 @@ def get_rate(db: Session, from_currency: str, to_currency: str, on_date: date_) 
     db.commit()
 
     return rate
+
+
+def get_rate_history(
+    db: Session, from_currency: str, to_currency: str, start_date: date_, end_date: date_
+) -> dict[date_, Decimal]:
+    """
+    Same one-call-backfills-the-range idea as `asset_prices.get_price_history`:
+    Frankfurter's range endpoint returns every daily rate between two dates in
+    a single response, so the portfolio value-over-time chart doesn't need one
+    HTTP call per day to convert historical cash/holding balances.
+    """
+    if from_currency == to_currency:
+        return {}  # caller short-circuits same-currency conversion to 1 itself
+
+    cached_rows = (
+        db.query(ExchangeRate)
+        .filter(
+            ExchangeRate.from_currency == from_currency,
+            ExchangeRate.to_currency == to_currency,
+            ExchangeRate.date >= start_date,
+            ExchangeRate.date <= end_date,
+        )
+        .all()
+    )
+    cached = {row.date: Decimal(str(row.rate)) for row in cached_rows}
+
+    if cached and min(cached) <= start_date + timedelta(days=5):
+        return cached
+
+    url = f"{settings.exchange_rate_api_base_url}/{start_date.isoformat()}..{end_date.isoformat()}"
+    params = {"from": from_currency, "to": to_currency}
+    try:
+        response = httpx.get(url, params=params, timeout=10.0, follow_redirects=True)
+        response.raise_for_status()
+        rates = response.json()["rates"]
+    except (httpx.HTTPError, KeyError) as exc:
+        raise ExchangeRateUnavailable(
+            f"Could not fetch rate history {from_currency}->{to_currency}"
+        ) from exc
+
+    fetched = {
+        date_.fromisoformat(day): Decimal(str(values[to_currency]))
+        for day, values in rates.items()
+        if to_currency in values
+    }
+
+    if fetched:
+        stmt = (
+            pg_insert(ExchangeRate)
+            .values(
+                [
+                    {
+                        "from_currency": from_currency,
+                        "to_currency": to_currency,
+                        "rate": rate,
+                        "date": d,
+                        "source": "frankfurter",
+                    }
+                    for d, rate in fetched.items()
+                ]
+            )
+            .on_conflict_do_nothing(index_elements=["from_currency", "to_currency", "date"])
+        )
+        db.execute(stmt)
+        db.commit()
+
+    cached.update(fetched)
+    return {d: r for d, r in cached.items() if start_date <= d <= end_date}
 
 
 def _fetch_from_frankfurter(from_currency: str, to_currency: str, on_date: date_) -> Decimal:

@@ -16,6 +16,9 @@ function invalidateTransactionsAndDerived(queryClient: ReturnType<typeof useQuer
   queryClient.invalidateQueries({ queryKey: TRANSACTIONS_KEY })
   queryClient.invalidateQueries({ queryKey: BUDGETS_STATUS_KEY })
   queryClient.invalidateQueries({ queryKey: NET_WORTH_KEY })
+  // The portfolio value-over-time chart's cash-balance series is also
+  // derived from cash transactions.
+  queryClient.invalidateQueries({ queryKey: ['portfolio-history'] })
 }
 
 export function useTransactionSummary(params: TransactionSummaryParams) {

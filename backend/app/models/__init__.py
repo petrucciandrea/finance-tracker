@@ -94,7 +94,7 @@ class Account(Base, TimestampMixin, SoftDeleteMixin):
 
     user: Mapped["User"] = relationship(back_populates="accounts")
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="account")
-    holdings: Mapped[list["Holding"]] = relationship(back_populates="account")
+    asset_transactions: Mapped[list["AssetTransaction"]] = relationship(back_populates="account")
 
     __table_args__ = (
         CheckConstraint(
@@ -197,7 +197,7 @@ class Budget(Base, SoftDeleteMixin):
 
 
 # ---------------------------------------------------------------------------
-# Assets / Holdings / Prices (phase 3 — portfolio tracker)
+# Assets / Asset transactions / Prices (phase 3 — portfolio tracker)
 # ---------------------------------------------------------------------------
 
 class Asset(Base):
@@ -209,33 +209,12 @@ class Asset(Base):
     asset_type: Mapped[str] = mapped_column(String(10), nullable=False)  # stock/etf/crypto
     currency: Mapped[str] = mapped_column(String(3), ForeignKey("currencies.code"), nullable=False)
 
-    holdings: Mapped[list["Holding"]] = relationship(back_populates="asset")
+    asset_transactions: Mapped[list["AssetTransaction"]] = relationship(back_populates="asset")
     prices: Mapped[list["AssetPrice"]] = relationship(back_populates="asset")
 
     __table_args__ = (
         UniqueConstraint("symbol", "asset_type", name="uq_assets_symbol_type"),
         CheckConstraint("asset_type in ('stock','etf','crypto')", name="ck_assets_type"),
-    )
-
-
-class Holding(Base, TimestampMixin):
-    __tablename__ = "holdings"
-
-    id: Mapped[uuid.UUID] = uuid_pk()
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False, index=True
-    )
-    asset_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("assets.id"), nullable=False, index=True
-    )
-    quantity: Mapped[float] = mapped_column(Numeric(24, 8), nullable=False)
-    avg_buy_price: Mapped[float] = mapped_column(Numeric(18, 8), nullable=False)
-
-    account: Mapped["Account"] = relationship(back_populates="holdings")
-    asset: Mapped["Asset"] = relationship(back_populates="holdings")
-
-    __table_args__ = (
-        UniqueConstraint("account_id", "asset_id", name="uq_holdings_account_asset"),
     )
 
 
@@ -275,4 +254,5 @@ class ExchangeRate(Base):
         UniqueConstraint("from_currency", "to_currency", "date", name="uq_exchange_rates_pair_date"),
     )
 
+from app.models.asset_transaction import AssetTransaction  # noqa: F401,E402
 from app.models.refresh_token import RefreshToken  # noqa: F401

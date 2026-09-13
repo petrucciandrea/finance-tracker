@@ -8,13 +8,13 @@ Convention:
 - Enums are shared between request/response schemas and SQLAlchemy models.
 """
 
-from datetime import date as date_, datetime
+from datetime import date as date_
+from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
-
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -338,29 +338,59 @@ class AssetSearchResult(BaseModel):
     asset_type: AssetType
 
 
-class HoldingCreate(BaseModel):
+class AssetTransactionType(str, Enum):
+    buy = "buy"
+    sell = "sell"
+
+
+class AssetTransactionCreate(BaseModel):
     account_id: UUID
     symbol: str = Field(min_length=1, max_length=20)
     asset_type: AssetType
-    quantity: Decimal = Field(max_digits=24, decimal_places=8)
-    avg_buy_price: Decimal = Field(max_digits=18, decimal_places=8)
+    type: AssetTransactionType
+    quantity: Decimal = Field(gt=0, max_digits=24, decimal_places=8)
+    price: Decimal = Field(gt=0, max_digits=18, decimal_places=8)
+    fee: Decimal = Field(default=Decimal("0"), ge=0, max_digits=18, decimal_places=8)
+    date: date_
+    notes: str | None = Field(default=None, max_length=500)
 
 
-class HoldingUpdate(BaseModel):
-    quantity: Decimal | None = Field(default=None, max_digits=24, decimal_places=8)
-    avg_buy_price: Decimal | None = Field(default=None, max_digits=18, decimal_places=8)
+class AssetTransactionUpdate(BaseModel):
+    # `type` and the resolved asset are immutable after creation — same
+    # convention as `currency` never being patchable on TransactionUpdate.
+    quantity: Decimal | None = Field(default=None, gt=0, max_digits=24, decimal_places=8)
+    price: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=8)
+    fee: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=8)
+    date: date_ | None = None
+    notes: str | None = Field(default=None, max_length=500)
 
 
-class Holding(ORMBase):
+class AssetTransaction(ORMBase):
     id: UUID
     account_id: UUID
     asset: Asset
+    type: AssetTransactionType
     quantity: Decimal
-    avg_buy_price: Decimal
+    price: Decimal
+    fee: Decimal
+    amount_base_currency: Decimal
+    exchange_rate: Decimal
+    date: date_
+    notes: str | None = None
     created_at: datetime
+    deleted_at: datetime | None = None
 
 
-class HoldingWithValue(Holding):
+class HoldingWithValue(BaseModel):
+    # Not backed by its own DB row anymore — computed from AssetTransaction
+    # history, so `id` is synthesized for a stable React key / URL rather
+    # than being a real primary key.
+    id: str
+    account_id: UUID
+    asset: Asset
+    quantity: Decimal
+    avg_buy_price: Decimal  # weighted-average cost of currently-held units
+    realized_pnl: Decimal  # cumulative realized P&L from sells, in asset currency
     current_price: Decimal
     price_date: date_
     market_value: Decimal  # quantity * current_price, in asset.currency
@@ -384,3 +414,23 @@ class NetWorthSummary(BaseModel):
     total_holdings_value: Decimal
     accounts: list[AccountBalance]
     holdings: list[HoldingWithValue]
+
+
+class PortfolioHistoryPeriod(str, Enum):
+    one_month = "1m"
+    three_months = "3m"
+    six_months = "6m"
+    one_year = "1y"
+    all = "all"
+
+
+class PortfolioHistoryPoint(BaseModel):
+    date: date_
+    total_holdings_value_base_currency: Decimal
+    total_cash_balance_base_currency: Decimal
+    total_net_worth: Decimal
+
+
+class PortfolioHistoryResponse(BaseModel):
+    base_currency: str
+    points: list[PortfolioHistoryPoint]

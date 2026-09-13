@@ -1,17 +1,18 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import * as portfolioApi from '@/api/portfolio'
-import type { AssetType, HoldingCreatePayload, HoldingUpdatePayload } from '@/types'
+import type { AssetType, PortfolioHistoryPeriod } from '@/types'
 
-const HOLDINGS_KEY = ['holdings'] as const
-// Exported so useTransactions.ts can invalidate it too — net worth's cash
-// balance is derived from transactions, so a transaction mutation must bust
-// this cache even though it lives outside the 'transactions' query key.
+// Exported so useAssetTransactions.ts / useTransactions.ts can invalidate
+// these too — holdings and net worth are both derived from transactions
+// that live outside their own query keys.
+export const HOLDINGS_KEY = ['holdings'] as const
 export const NET_WORTH_KEY = ['net-worth'] as const
 
 // Prices refresh on-demand (cache-first on the backend, one external fetch
 // per asset per day) — polling here just keeps the UI reasonably fresh
-// while the page is open. The DB cache, not this interval, is what protects
-// Alpha Vantage's 25-requests/day free tier.
+// while the page is open. The DB cache, not this interval, is what keeps
+// this app from hammering Yahoo Finance's unofficial, unrate-limited-by-us
+// endpoint on every render.
 const POLL_INTERVAL_MS = 45_000
 
 export function useHoldings() {
@@ -38,32 +39,15 @@ export function useSearchAssets(q: string, assetType: AssetType) {
   })
 }
 
-function invalidatePortfolio(queryClient: ReturnType<typeof useQueryClient>) {
+export function usePortfolioHistory(period: PortfolioHistoryPeriod) {
+  return useQuery({
+    queryKey: ['portfolio-history', period],
+    queryFn: () => portfolioApi.getPortfolioHistory(period),
+  })
+}
+
+export function invalidatePortfolio(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({ queryKey: HOLDINGS_KEY })
   queryClient.invalidateQueries({ queryKey: NET_WORTH_KEY })
-}
-
-export function useCreateHolding() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (payload: HoldingCreatePayload) => portfolioApi.createHolding(payload),
-    onSuccess: () => invalidatePortfolio(queryClient),
-  })
-}
-
-export function useUpdateHolding() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: ({ id, payload }: { id: string; payload: HoldingUpdatePayload }) =>
-      portfolioApi.updateHolding(id, payload),
-    onSuccess: () => invalidatePortfolio(queryClient),
-  })
-}
-
-export function useDeleteHolding() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (id: string) => portfolioApi.deleteHolding(id),
-    onSuccess: () => invalidatePortfolio(queryClient),
-  })
+  queryClient.invalidateQueries({ queryKey: ['portfolio-history'] })
 }

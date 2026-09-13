@@ -42,8 +42,10 @@ class Settings(BaseSettings):
 
     # --- External APIs ---
     exchange_rate_api_base_url: str = "https://api.frankfurter.app"
-    alpha_vantage_api_key: str | None = None  # phase 3: stock/ETF prices
-    alpha_vantage_api_base_url: str = "https://www.alphavantage.co/query"
+    # phase 3: stock/ETF prices. Unofficial endpoint, no API key/signup — but
+    # also no documented quota or support guarantee; swap providers here if
+    # it ever gets blocked or changes shape.
+    yahoo_finance_api_base_url: str = "https://query1.finance.yahoo.com/v8/finance/chart"
     coingecko_api_key: str | None = None  # phase 3: crypto prices, optional (free tier needs none)
     coingecko_api_base_url: str = "https://api.coingecko.com/api/v3"
 

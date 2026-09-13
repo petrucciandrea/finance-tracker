@@ -15,6 +15,8 @@ export type TransactionSource = 'manual' | 'import'
 export type BudgetPeriod = 'monthly' | 'yearly'
 export type SummaryGroupBy = 'category' | 'month'
 export type AssetType = 'stock' | 'etf' | 'crypto'
+export type AssetTransactionType = 'buy' | 'sell'
+export type PortfolioHistoryPeriod = '1m' | '3m' | '6m' | '1y' | 'all'
 
 // --- Auth ---
 
@@ -234,26 +236,51 @@ export interface AssetSearchResult {
   asset_type: AssetType
 }
 
-export interface HoldingCreatePayload {
+export interface AssetTransaction {
+  id: string
+  account_id: string
+  asset: Asset
+  type: AssetTransactionType
+  quantity: string
+  price: string
+  fee: string
+  amount_base_currency: string
+  exchange_rate: string
+  date: string
+  notes: string | null
+  created_at: string
+  deleted_at: string | null
+}
+
+export interface AssetTransactionCreatePayload {
   account_id: string
   symbol: string
   asset_type: AssetType
+  type: AssetTransactionType
   quantity: string
-  avg_buy_price: string
+  price: string
+  fee?: string
+  date: string
+  notes?: string | null
 }
 
-export interface HoldingUpdatePayload {
+export interface AssetTransactionUpdatePayload {
   quantity?: string
-  avg_buy_price?: string
+  price?: string
+  fee?: string
+  date?: string
+  notes?: string | null
 }
 
+// Not a DB row — computed from AssetTransaction history, `id` is a
+// synthetic "accountId:assetId" key for a stable React key / lookup.
 export interface HoldingWithValue {
   id: string
   account_id: string
   asset: Asset
   quantity: string
   avg_buy_price: string
-  created_at: string
+  realized_pnl: string
   current_price: string
   price_date: string
   market_value: string
@@ -277,6 +304,18 @@ export interface NetWorthSummary {
   total_holdings_value: string
   accounts: AccountBalance[]
   holdings: HoldingWithValue[]
+}
+
+export interface PortfolioHistoryPoint {
+  date: string
+  total_holdings_value_base_currency: string
+  total_cash_balance_base_currency: string
+  total_net_worth: string
+}
+
+export interface PortfolioHistoryResponse {
+  base_currency: string
+  points: PortfolioHistoryPoint[]
 }
 
 // --- Errors (the envelope from main.py's exception handlers) ---

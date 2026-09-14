@@ -21,6 +21,7 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    false,
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -124,6 +125,24 @@ class Category(Base, SoftDeleteMixin):
         PG_UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True
     )
 
+    # How essential this kind of spend is, for the planning engine's
+    # 50/25/15/10 split. NULL means "not classified yet" and is reported as
+    # its own bucket — never silently folded into 'primary', which would
+    # inflate the survival budget and the emergency-fund target in a way
+    # that looks plausible. Expense categories only.
+    # Note this is retroactive by construction: `parent_id` is patchable, so
+    # re-parenting a subcategory rewrites past bucket reports through the
+    # inheritance chain. Same prospective nature as the allocation plan.
+    necessity_level: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # Income categories only. CSV import types rows purely by sign (see
+    # routers/transactions.py), so refunds, reversals and cashback all land
+    # as `income`. Left uncorrected they inflate the denominator of the
+    # allocation model and the savings quota with it.
+    excluded_from_income_base: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+
     user: Mapped["User"] = relationship(back_populates="categories")
     parent: Mapped["Category | None"] = relationship(remote_side="Category.id", back_populates="children")
     children: Mapped[list["Category"]] = relationship(back_populates="parent")
@@ -132,6 +151,10 @@ class Category(Base, SoftDeleteMixin):
 
     __table_args__ = (
         CheckConstraint("type in ('expense','income','transfer')", name="ck_categories_type"),
+        CheckConstraint(
+            "necessity_level in ('primary','useful','discretionary')",
+            name="ck_categories_necessity_level",
+        ),
     )
 
 
@@ -164,12 +187,21 @@ class Transaction(Base, TimestampMixin, SoftDeleteMixin):
     type: Mapped[str] = mapped_column(String(10), nullable=False)  # TransactionType enum value
     source: Mapped[str] = mapped_column(String(10), nullable=False, default="manual")
 
+    # Per-transaction exception to the category's necessity level — e.g. a
+    # "Ristoranti" charge that was actually a work dinner. Wins over both the
+    # category's own level and the one inherited from its parent.
+    necessity_level_override: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
     account: Mapped["Account"] = relationship(back_populates="transactions")
     category: Mapped["Category | None"] = relationship(back_populates="transactions")
 
     __table_args__ = (
         CheckConstraint("type in ('expense','income','transfer')", name="ck_transactions_type"),
         CheckConstraint("source in ('manual','import')", name="ck_transactions_source"),
+        CheckConstraint(
+            "necessity_level_override in ('primary','useful','discretionary')",
+            name="ck_transactions_necessity_level_override",
+        ),
     )
 
 

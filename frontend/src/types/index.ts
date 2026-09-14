@@ -10,6 +10,10 @@
 
 export type AccountType = 'checking' | 'savings' | 'credit_card' | 'investment' | 'crypto_wallet'
 export type CategoryType = 'expense' | 'income' | 'transfer'
+// How essential a kind of spend is, for the planning engine's allocation
+// model. `null` means "not classified yet" and is reported as its own
+// bucket rather than folded into 'primary'.
+export type NecessityLevel = 'primary' | 'useful' | 'discretionary'
 export type TransactionType = 'expense' | 'income' | 'transfer'
 export type TransactionSource = 'manual' | 'import'
 export type BudgetPeriod = 'monthly' | 'yearly'
@@ -90,6 +94,12 @@ export interface Category {
   name: string
   type: CategoryType
   parent_id: string | null
+  // Expense categories only. A subcategory left null inherits its parent's
+  // level — the backend resolves that, this field is the raw stored value.
+  necessity_level: NecessityLevel | null
+  // Income categories only. Keeps refunds/reversals out of the denominator
+  // of the allocation model.
+  excluded_from_income_base: boolean
   deleted_at: string | null
 }
 
@@ -97,11 +107,15 @@ export interface CategoryCreatePayload {
   name: string
   type: CategoryType
   parent_id?: string | null
+  necessity_level?: NecessityLevel | null
+  excluded_from_income_base?: boolean
 }
 
 export interface CategoryUpdatePayload {
   name?: string
   parent_id?: string | null
+  necessity_level?: NecessityLevel | null
+  excluded_from_income_base?: boolean
 }
 
 // --- Transactions ---
@@ -118,6 +132,9 @@ export interface Transaction {
   description: string | null
   type: TransactionType
   source: TransactionSource
+  // Expense transactions only. Wins over the category's level and the one
+  // inherited from its parent.
+  necessity_level_override: NecessityLevel | null
   created_at: string
   deleted_at: string | null
 }
@@ -130,6 +147,7 @@ export interface TransactionCreatePayload {
   date: string
   description?: string | null
   type: TransactionType
+  necessity_level_override?: NecessityLevel | null
 }
 
 export interface TransactionUpdatePayload {
@@ -137,6 +155,7 @@ export interface TransactionUpdatePayload {
   amount?: string
   date?: string
   description?: string | null
+  necessity_level_override?: NecessityLevel | null
 }
 
 export interface TransactionListParams {

@@ -34,6 +34,18 @@ class CategoryType(str, Enum):
     transfer = "transfer"
 
 
+class NecessityLevel(str, Enum):
+    """
+    How essential a kind of spend is. Deliberately separate from savings:
+    the allocation model's fourth bucket is what is *not* spent, so it has
+    no necessity level of its own.
+    """
+
+    primary = "primary"
+    useful = "useful"
+    discretionary = "discretionary"
+
+
 class TransactionType(str, Enum):
     expense = "expense"
     income = "income"
@@ -173,11 +185,18 @@ class CategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     type: CategoryType
     parent_id: UUID | None = None
+    # Expense categories only (422 otherwise). None means "not classified";
+    # a subcategory left None inherits its parent's level at read time.
+    necessity_level: NecessityLevel | None = None
+    # Income categories only (422 otherwise).
+    excluded_from_income_base: bool = False
 
 
 class CategoryUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     parent_id: UUID | None = None
+    necessity_level: NecessityLevel | None = None
+    excluded_from_income_base: bool | None = None
 
 
 class Category(ORMBase):
@@ -185,6 +204,8 @@ class Category(ORMBase):
     name: str
     type: CategoryType
     parent_id: UUID | None = None
+    necessity_level: NecessityLevel | None = None
+    excluded_from_income_base: bool = False
     deleted_at: datetime | None = None
 
 
@@ -200,6 +221,8 @@ class TransactionCreate(BaseModel):
     date: date_
     description: str | None = Field(default=None, max_length=500)
     type: TransactionType
+    # Overrides the category's (or its parent's) level for this one row.
+    necessity_level_override: NecessityLevel | None = None
 
 
 class TransactionUpdate(BaseModel):
@@ -207,6 +230,7 @@ class TransactionUpdate(BaseModel):
     amount: Decimal | None = Field(default=None, max_digits=18, decimal_places=8)
     date: date_ | None = None
     description: str | None = Field(default=None, max_length=500)
+    necessity_level_override: NecessityLevel | None = None
 
 
 class Transaction(ORMBase):
@@ -221,6 +245,7 @@ class Transaction(ORMBase):
     description: str | None = None
     type: TransactionType
     source: TransactionSource
+    necessity_level_override: NecessityLevel | None = None
     created_at: datetime
     deleted_at: datetime | None = None
 

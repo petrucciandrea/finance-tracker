@@ -115,6 +115,21 @@ def _get_owned_leaf_category(
     return category
 
 
+def _validate_necessity_override(transaction_type: str, override: object) -> None:
+    """
+    A necessity level answers "how essential was this spend", so it only
+    means anything on an expense. Income has no necessity, and a transfer
+    isn't a spend at all — the planning engine's bucket queries filter
+    `type = 'expense'` for exactly that reason, so an override stored on
+    anything else would be silently ignored data. Reject it instead.
+    """
+    if override is not None and transaction_type != "expense":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="necessity_level_override can only be set on expense transactions",
+        )
+
+
 def _get_owned_account_or_404(db: Session, account_id: UUID, user: User) -> Account:
     account = (
         db.query(Account)
@@ -229,6 +244,7 @@ def create_transaction(
     current_user: User = Depends(get_current_user),
 ) -> Transaction:
     account = _get_owned_account_or_404(db, payload.account_id, current_user)
+    _validate_necessity_override(payload.type.value, payload.necessity_level_override)
 
     category_id = payload.category_id
     if category_id:
@@ -259,6 +275,11 @@ def create_transaction(
         description=payload.description,
         type=payload.type.value,
         source="manual",
+        necessity_level_override=(
+            payload.necessity_level_override.value
+            if payload.necessity_level_override is not None
+            else None
+        ),
     )
     db.add(transaction)
     db.commit()
@@ -373,11 +394,16 @@ def update_transaction(
                 db, update_data["category_id"], current_user, transaction.type
             ).id
 
+    if "necessity_level_override" in update_data:
+        _validate_necessity_override(transaction.type, update_data["necessity_level_override"])
+
     # If amount or date changes, the frozen conversion must be recomputed —
     # otherwise amount_base_currency would silently drift out of sync.
     needs_recompute = "amount" in update_data or "date" in update_data
     for field, value in update_data.items():
-        setattr(transaction, field, value)
+        # Enum members (necessity_level_override) are stored as their string
+        # value, like `type` on create.
+        setattr(transaction, field, value.value if hasattr(value, "value") else value)
 
     if needs_recompute:
         try:

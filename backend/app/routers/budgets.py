@@ -29,6 +29,7 @@ from app.schemas import (
 )
 from app.schemas import (
     BudgetCreate,
+    BudgetPeriod,
     BudgetStatus,
     BudgetUpdate,
 )
@@ -205,7 +206,7 @@ def budgets_status(
                 budget_id=budget.id,
                 category_id=budget.category_id,
                 category_name=budget.category.name,
-                period=budget.period,
+                period=BudgetPeriod(budget.period),
                 amount_limit=budget.amount_limit,
                 amount_spent=amount_spent,
                 percentage_used=round(percentage_used, 1),

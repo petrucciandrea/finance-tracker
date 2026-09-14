@@ -6,11 +6,13 @@ Notes:
 - `SoftDeleteMixin` adds `deleted_at`; a default query filter should be applied
   at the repository/service layer (e.g. `.where(Model.deleted_at.is_(None))`)
   rather than relying on callers to remember it every time.
-- Money fields use Numeric (maps to Postgres NUMERIC), never Float.
+- Money fields use Numeric (maps to Postgres NUMERIC), never Float, and are
+  annotated Mapped[Decimal] to match what SQLAlchemy actually hands back.
 """
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -146,7 +148,9 @@ class Category(Base, SoftDeleteMixin):
     )
 
     user: Mapped["User"] = relationship(back_populates="categories")
-    parent: Mapped["Category | None"] = relationship(remote_side="Category.id", back_populates="children")
+    parent: Mapped["Category | None"] = relationship(
+        remote_side="Category.id", back_populates="children"
+    )
     children: Mapped[list["Category"]] = relationship(back_populates="parent")
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="category")
     budgets: Mapped[list["Budget"]] = relationship(back_populates="category")
@@ -176,13 +180,13 @@ class Transaction(Base, TimestampMixin, SoftDeleteMixin):
     )
 
     # Original transaction currency/amount, as it happened.
-    amount: Mapped[float] = mapped_column(Numeric(18, 8), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), ForeignKey("currencies.code"), nullable=False)
 
     # Frozen conversion into the user's base currency at the transaction date —
     # never recomputed later, so historical reports stay stable. See exchange_rate.
-    amount_base_currency: Mapped[float] = mapped_column(Numeric(18, 8), nullable=False)
-    exchange_rate: Mapped[float] = mapped_column(Numeric(18, 8), nullable=False)
+    amount_base_currency: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    exchange_rate: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
 
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -222,7 +226,7 @@ class Budget(Base, SoftDeleteMixin):
         PG_UUID(as_uuid=True), ForeignKey("categories.id"), nullable=False
     )
     period: Mapped[str] = mapped_column(String(10), nullable=False)  # BudgetPeriod enum value
-    amount_limit: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
+    amount_limit: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
 
     user: Mapped["User"] = relationship(back_populates="budgets")
@@ -264,10 +268,10 @@ class AllocationPlan(Base, TimestampMixin, SoftDeleteMixin):
         PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
     )
 
-    pct_primary: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
-    pct_useful: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
-    pct_discretionary: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
-    pct_savings: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
+    pct_primary: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    pct_useful: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    pct_discretionary: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    pct_savings: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
 
     # How many complete months the primary-expense average looks back over.
     # Feeds both the survival budget and phase C's dynamic emergency-fund
@@ -323,7 +327,7 @@ class AssetPrice(Base):
     asset_id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("assets.id"), nullable=False, index=True
     )
-    price: Mapped[float] = mapped_column(Numeric(18, 8), nullable=False)
+    price: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     source: Mapped[str] = mapped_column(String(50), nullable=False)
 
@@ -342,15 +346,21 @@ class ExchangeRate(Base):
     __tablename__ = "exchange_rates"
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    from_currency: Mapped[str] = mapped_column(String(3), ForeignKey("currencies.code"), nullable=False)
-    to_currency: Mapped[str] = mapped_column(String(3), ForeignKey("currencies.code"), nullable=False)
-    rate: Mapped[float] = mapped_column(Numeric(18, 8), nullable=False)
+    from_currency: Mapped[str] = mapped_column(
+        String(3), ForeignKey("currencies.code"), nullable=False
+    )
+    to_currency: Mapped[str] = mapped_column(
+        String(3), ForeignKey("currencies.code"), nullable=False
+    )
+    rate: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     source: Mapped[str] = mapped_column(String(50), nullable=False)
 
     __table_args__ = (
-        UniqueConstraint("from_currency", "to_currency", "date", name="uq_exchange_rates_pair_date"),
+        UniqueConstraint(
+            "from_currency", "to_currency", "date", name="uq_exchange_rates_pair_date"
+        ),
     )
 
 from app.models.asset_transaction import AssetTransaction  # noqa: F401,E402
-from app.models.refresh_token import RefreshToken  # noqa: F401
+from app.models.refresh_token import RefreshToken  # noqa: F401,E402

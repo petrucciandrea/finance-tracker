@@ -13,6 +13,7 @@ event.
 
 import uuid
 from datetime import date
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import CheckConstraint, Date, ForeignKey, Numeric, String
@@ -45,13 +46,14 @@ class AssetTransaction(Base, TimestampMixin, SoftDeleteMixin):
         PG_UUID(as_uuid=True), ForeignKey("transactions.id"), nullable=True
     )
     type: Mapped[str] = mapped_column(String(4), nullable=False)  # buy/sell
-    quantity: Mapped[float] = mapped_column(Numeric(24, 8), nullable=False)
-    price: Mapped[float] = mapped_column(Numeric(18, 8), nullable=False)  # per unit, asset.currency
-    fee: Mapped[float] = mapped_column(Numeric(18, 8), nullable=False, default=0)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False)
+    # per unit, in asset.currency
+    price: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    fee: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False, default=0)
     # Frozen at write time, same rule as Transaction.amount_base_currency: never
     # recomputed on read, only when quantity/price/fee/date change on PATCH.
-    amount_base_currency: Mapped[float] = mapped_column(Numeric(18, 8), nullable=False)
-    exchange_rate: Mapped[float] = mapped_column(Numeric(18, 8), nullable=False)
+    amount_base_currency: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    exchange_rate: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
 

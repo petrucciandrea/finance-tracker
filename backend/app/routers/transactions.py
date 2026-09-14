@@ -6,7 +6,7 @@ currency conversion.
 
 import math
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
@@ -63,9 +63,13 @@ def _get_or_create_misc_category(db: Session, user: User, category_type: str) ->
     if existing is not None:
         return existing
 
-    category = Category(user_id=user.id, name=MISC_CATEGORY_NAME, type=category_type, parent_id=None)
+    category = Category(
+        user_id=user.id, name=MISC_CATEGORY_NAME, type=category_type, parent_id=None
+    )
     db.add(category)
-    db.flush()  # populates category.id without committing yet — caller commits alongside the transaction
+    # populates category.id without committing yet — the caller commits it
+    # alongside the transaction that needed it
+    db.flush()
     return category
 
 
@@ -219,7 +223,9 @@ def list_transactions(
     )
 
     return TransactionListResponse(
-        data=rows,
+        # ORM rows; `Transaction` is a from_attributes model, so Pydantic
+        # validates them on the way out.
+        data=rows,  # type: ignore[arg-type]
         meta=PaginationMeta(
             page=params.page,
             page_size=params.page_size,
@@ -298,12 +304,14 @@ def summary(
     group_by_month = SummaryGroupBy.month in group_by
     group_by_category = SummaryGroupBy.category in group_by
 
+    # Heterogeneous by construction: labels, plain columns and aggregates,
+    # picked at runtime from `group_by`.
     month_col = func.to_char(Transaction.date, "YYYY-MM").label("month")
-    columns = [
+    columns: list[Any] = [
         func.sum(Transaction.amount_base_currency).label("total"),
         func.count(Transaction.id).label("count"),
     ]
-    group_cols = []
+    group_cols: list[Any] = []
 
     if group_by_month:
         columns.append(month_col)

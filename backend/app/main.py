@@ -38,7 +38,9 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
     details = [
         {"field": ".".join(str(p) for p in err["loc"]), "message": err["msg"]}
         for err in exc.errors()

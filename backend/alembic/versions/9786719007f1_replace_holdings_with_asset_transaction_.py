@@ -13,18 +13,19 @@ same-currency, else the closest `exchange_rates` row cached on/before that
 date, else 1. Fine for a one-time personal-DB backfill; not a general
 reconciliation.
 """
+from collections.abc import Sequence
 from decimal import Decimal
-from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
+
 # revision identifiers, used by Alembic.
 revision: str = '9786719007f1'
-down_revision: Union[str, Sequence[str], None] = 'db7cc8537542'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = 'db7cc8537542'
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def _backfill_asset_transactions_from_holdings(bind) -> None:
@@ -106,16 +107,33 @@ def upgrade() -> None:
     sa.Column('exchange_rate', sa.Numeric(precision=18, scale=8), nullable=False),
     sa.Column('date', sa.Date(), nullable=False),
     sa.Column('notes', sa.String(length=500), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column(
+        'created_at',
+        sa.DateTime(timezone=True),
+        server_default=sa.text('now()'),
+        nullable=False,
+    ),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.CheckConstraint("type in ('buy','sell')", name='ck_asset_transactions_type'),
     sa.ForeignKeyConstraint(['account_id'], ['accounts.id'], ),
     sa.ForeignKeyConstraint(['asset_id'], ['assets.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_asset_transactions_account_id'), 'asset_transactions', ['account_id'], unique=False)
-    op.create_index(op.f('ix_asset_transactions_asset_id'), 'asset_transactions', ['asset_id'], unique=False)
-    op.create_index(op.f('ix_asset_transactions_date'), 'asset_transactions', ['date'], unique=False)
+    op.create_index(
+        op.f('ix_asset_transactions_account_id'),
+        'asset_transactions',
+        ['account_id'],
+        unique=False,
+    )
+    op.create_index(
+        op.f('ix_asset_transactions_asset_id'),
+        'asset_transactions',
+        ['asset_id'],
+        unique=False,
+    )
+    op.create_index(
+        op.f('ix_asset_transactions_date'), 'asset_transactions', ['date'], unique=False
+    )
     # ### end Alembic commands ###
 
     _backfill_asset_transactions_from_holdings(op.get_bind())
@@ -135,12 +153,26 @@ def downgrade() -> None:
     sa.Column('account_id', sa.UUID(), autoincrement=False, nullable=False),
     sa.Column('asset_id', sa.UUID(), autoincrement=False, nullable=False),
     sa.Column('quantity', sa.NUMERIC(precision=24, scale=8), autoincrement=False, nullable=False),
-    sa.Column('avg_buy_price', sa.NUMERIC(precision=18, scale=8), autoincrement=False, nullable=False),
-    sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), autoincrement=False, nullable=False),
+    sa.Column(
+        'avg_buy_price', sa.NUMERIC(precision=18, scale=8), autoincrement=False, nullable=False
+    ),
+    sa.Column(
+        'created_at',
+        postgresql.TIMESTAMP(timezone=True),
+        server_default=sa.text('now()'),
+        autoincrement=False,
+        nullable=False,
+    ),
     sa.ForeignKeyConstraint(['account_id'], ['accounts.id'], name=op.f('holdings_account_id_fkey')),
     sa.ForeignKeyConstraint(['asset_id'], ['assets.id'], name=op.f('holdings_asset_id_fkey')),
     sa.PrimaryKeyConstraint('id', name=op.f('holdings_pkey')),
-    sa.UniqueConstraint('account_id', 'asset_id', name=op.f('uq_holdings_account_asset'), postgresql_include=[], postgresql_nulls_not_distinct=False)
+    sa.UniqueConstraint(
+        'account_id',
+        'asset_id',
+        name=op.f('uq_holdings_account_asset'),
+        postgresql_include=[],
+        postgresql_nulls_not_distinct=False,
+    )
     )
     op.create_index(op.f('ix_holdings_asset_id'), 'holdings', ['asset_id'], unique=False)
     op.create_index(op.f('ix_holdings_account_id'), 'holdings', ['account_id'], unique=False)

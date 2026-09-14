@@ -5,10 +5,10 @@ currency conversion.
 """
 
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import Annotated
 from uuid import UUID
 
-from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -18,7 +18,6 @@ from app.models import Account, AssetTransaction, Category, Transaction, User
 from app.schemas import (
     PaginationMeta,
     SummaryGroupBy,
-    Transaction as TransactionSchema,
     TransactionCreate,
     TransactionImportConfirm,
     TransactionImportPreview,
@@ -30,8 +29,12 @@ from app.schemas import (
     TransactionSummaryResponse,
     TransactionUpdate,
 )
+from app.schemas import (
+    Transaction as TransactionSchema,
+)
 from app.services import csv_import as csv_import_service
 from app.services.exchange_rates import ExchangeRateUnavailable, get_rate
+from app.services.ownership import get_owned_account
 
 router = APIRouter(prefix="/api/v1/transactions", tags=["transactions"])
 
@@ -128,17 +131,6 @@ def _validate_necessity_override(transaction_type: str, override: object) -> Non
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="necessity_level_override can only be set on expense transactions",
         )
-
-
-def _get_owned_account_or_404(db: Session, account_id: UUID, user: User) -> Account:
-    account = (
-        db.query(Account)
-        .filter(Account.id == account_id, Account.user_id == user.id, Account.deleted_at.is_(None))
-        .first()
-    )
-    if account is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
-    return account
 
 
 def _get_owned_transaction(db: Session, transaction_id: UUID, user: User) -> Transaction:
@@ -243,7 +235,7 @@ def create_transaction(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Transaction:
-    account = _get_owned_account_or_404(db, payload.account_id, current_user)
+    account = get_owned_account(db, payload.account_id, current_user)
     _validate_necessity_override(payload.type.value, payload.necessity_level_override)
 
     category_id = payload.category_id
@@ -428,7 +420,7 @@ def delete_transaction(
 ) -> None:
     transaction = _get_owned_transaction(db, transaction_id, current_user)
     _reject_if_linked_to_asset_transaction(db, transaction.id)
-    transaction.deleted_at = datetime.now(timezone.utc)
+    transaction.deleted_at = datetime.now(UTC)
     db.commit()
 
 
@@ -443,7 +435,7 @@ async def import_preview(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> TransactionImportPreview:
-    _get_owned_account_or_404(db, account_id, current_user)
+    get_owned_account(db, account_id, current_user)
 
     content = await file.read()
     preview = csv_import_service.parse_csv(db, account_id, content)
@@ -484,7 +476,7 @@ def import_confirm(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Import preview not found or expired — please re-upload the file",
         )
-    _get_owned_account_or_404(db, preview.account_id, current_user)
+    get_owned_account(db, preview.account_id, current_user)
 
     selected = {r.row_number: r for r in preview.rows if r.row_number in payload.row_numbers}
     created: list[Transaction] = []

@@ -3,7 +3,7 @@ Categories endpoints: CRUD with soft delete and a self-referential
 parent/child hierarchy (e.g. "Food" -> "Restaurants").
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.deps import get_current_user, get_db
 from app.models import Category, User
-from app.schemas import Category as CategorySchema, CategoryCreate, CategoryUpdate
+from app.schemas import Category as CategorySchema
+from app.schemas import CategoryCreate, CategoryUpdate
 
 router = APIRouter(prefix="/api/v1/categories", tags=["categories"])
 
@@ -212,7 +213,7 @@ def delete_category(
             detail="Cannot delete a category that still has active subcategories",
         )
 
-    category.deleted_at = datetime.now(timezone.utc)
+    category.deleted_at = datetime.now(UTC)
     db.commit()
     # Transactions referencing this category keep their category_id — the
     # frontend shows "Deleted category" instead of erroring, as decided

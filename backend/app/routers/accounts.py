@@ -7,6 +7,7 @@ Mostly the template for `categories` and then the more involved
 transaction (see below).
 """
 
+from datetime import UTC
 from datetime import date as date_
 from uuid import UUID
 
@@ -15,30 +16,12 @@ from sqlalchemy.orm import Session
 
 from app.deps import get_current_user, get_db
 from app.models import Account, Currency, Transaction, User
-from app.schemas import Account as AccountSchema, AccountCreate, AccountUpdate
+from app.schemas import Account as AccountSchema
+from app.schemas import AccountCreate, AccountUpdate
 from app.services.exchange_rates import ExchangeRateUnavailable, get_rate
+from app.services.ownership import get_owned_account
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["accounts"])
-
-
-def _get_owned_account(db: Session, account_id: UUID, user: User) -> Account:
-    """
-    Fetch an account by id, scoped to the current user and excluding
-    soft-deleted rows. Used by every endpoint below so ownership and the
-    soft-delete filter can't be forgotten in one of them.
-    """
-    account = (
-        db.query(Account)
-        .filter(
-            Account.id == account_id,
-            Account.user_id == user.id,
-            Account.deleted_at.is_(None),
-        )
-        .first()
-    )
-    if account is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
-    return account
 
 
 @router.get("", response_model=list[AccountSchema])
@@ -121,7 +104,7 @@ def get_account(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Account:
-    return _get_owned_account(db, account_id, current_user)
+    return get_owned_account(db, account_id, current_user)
 
 
 @router.patch("/{account_id}", response_model=AccountSchema)
@@ -131,7 +114,7 @@ def update_account(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Account:
-    account = _get_owned_account(db, account_id, current_user)
+    account = get_owned_account(db, account_id, current_user)
 
     update_data = payload.model_dump(exclude_unset=True)
     for field, value in update_data.items():
@@ -149,10 +132,10 @@ def delete_account(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> None:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    account = _get_owned_account(db, account_id, current_user)
-    account.deleted_at = datetime.now(timezone.utc)
+    account = get_owned_account(db, account_id, current_user)
+    account.deleted_at = datetime.now(UTC)
     db.commit()
     # Note: transactions referencing this account are left untouched — the
     # frontend renders them with the account's last known name/currency by

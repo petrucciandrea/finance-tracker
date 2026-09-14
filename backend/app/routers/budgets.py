@@ -13,8 +13,8 @@ parent/child chain. Nesting is capped at two levels, so one level of
 roll-up covers the whole hierarchy.
 """
 
+from datetime import UTC, datetime
 from datetime import date as date_
-from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
@@ -26,6 +26,8 @@ from app.deps import get_current_user, get_db
 from app.models import Account, Budget, Category, Transaction, User
 from app.schemas import (
     Budget as BudgetSchema,
+)
+from app.schemas import (
     BudgetCreate,
     BudgetStatus,
     BudgetUpdate,
@@ -246,5 +248,5 @@ def delete_budget(
     current_user: User = Depends(get_current_user),
 ) -> None:
     budget = _get_owned_budget(db, budget_id, current_user)
-    budget.deleted_at = datetime.now(timezone.utc)
+    budget.deleted_at = datetime.now(UTC)
     db.commit()

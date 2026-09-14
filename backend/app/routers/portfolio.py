@@ -48,6 +48,7 @@ from app.services.net_worth import (
     holdings_with_value,
     user_asset_transactions_query,
 )
+from app.services.ownership import get_owned_account
 
 router = APIRouter(prefix="/api/v1/portfolio", tags=["portfolio"])
 
@@ -100,17 +101,6 @@ def _create_linked_cash_transaction(
     db.add(cash_transaction)
     db.flush()  # populates cash_transaction.id for the AssetTransaction FK
     return cash_transaction
-
-
-def _get_owned_account_or_404(db: Session, account_id: UUID, user: User) -> Account:
-    account = (
-        db.query(Account)
-        .filter(Account.id == account_id, Account.user_id == user.id, Account.deleted_at.is_(None))
-        .first()
-    )
-    if account is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
-    return account
 
 
 def _get_owned_asset_transaction(db: Session, transaction_id: UUID, user: User) -> AssetTransaction:
@@ -215,7 +205,7 @@ def create_asset_transaction(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> AssetTransaction:
-    account = _get_owned_account_or_404(db, payload.account_id, current_user)
+    account = get_owned_account(db, payload.account_id, current_user)
     if account.type not in ("investment", "crypto_wallet"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -362,7 +352,7 @@ async def asset_transaction_import_preview(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> AssetTransactionImportPreview:
-    account = _get_owned_account_or_404(db, account_id, current_user)
+    account = get_owned_account(db, account_id, current_user)
     if account.type not in ("investment", "crypto_wallet"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -412,7 +402,7 @@ def asset_transaction_import_confirm(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Import preview not found or expired — please re-upload the file",
         )
-    account = _get_owned_account_or_404(db, preview.account_id, current_user)
+    account = get_owned_account(db, preview.account_id, current_user)
     if account.type not in ("investment", "crypto_wallet"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

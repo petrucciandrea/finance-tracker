@@ -8,13 +8,12 @@ the `_get_owned_*` shape the other routers use.
 """
 
 from datetime import date as date_
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.deps import get_current_user, get_db
-from app.models import Account, AllocationPlan, Category, User
+from app.models import AllocationPlan, Category, User
 from app.schemas import (
     AllocationPlan as AllocationPlanSchema,
 )
@@ -26,25 +25,11 @@ from app.schemas import (
     SurvivalBudget,
 )
 from app.services import planning as planning_service
+from app.services.ownership import get_owned_account
 
 router = APIRouter(prefix="/api/v1/planning", tags=["planning"])
 
 _PERCENTAGE_FIELDS = ("pct_primary", "pct_useful", "pct_discretionary", "pct_savings")
-
-
-def _get_owned_account(db: Session, account_id: UUID, user: User) -> Account:
-    account = (
-        db.query(Account)
-        .filter(
-            Account.id == account_id,
-            Account.user_id == user.id,
-            Account.deleted_at.is_(None),
-        )
-        .first()
-    )
-    if account is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
-    return account
 
 
 def _validate_percentages(update_data: dict) -> None:
@@ -138,7 +123,7 @@ def update_plan(
     _validate_percentages(update_data)
 
     if update_data.get("default_source_account_id") is not None:
-        _get_owned_account(db, update_data["default_source_account_id"], current_user)
+        get_owned_account(db, update_data["default_source_account_id"], current_user)
 
     for field, value in update_data.items():
         setattr(plan, field, value)

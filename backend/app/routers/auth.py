@@ -5,7 +5,7 @@ Refresh tokens are stored hashed in the DB (see RefreshToken model) so
 `/auth/logout` performs a real revocation, not just a client-side forget.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -45,7 +45,7 @@ def _hash_token(token: str) -> str:
 
 
 def _store_refresh_token(db: Session, user_id, token: str) -> None:
-    expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
+    expires_at = datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days)
     db.add(
         RefreshToken(
             user_id=user_id,
@@ -102,14 +102,14 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> TokenPair
     token_hash = _hash_token(payload.refresh_token)
     stored = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
 
-    if stored is None or stored.revoked_at is not None or stored.expires_at < datetime.now(timezone.utc):
+    if stored is None or stored.revoked_at is not None or stored.expires_at < datetime.now(UTC):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token expired or revoked"
         )
 
     # Rotate: revoke the used refresh token and issue a new pair. This limits
     # the damage window if a refresh token is ever stolen (it's single-use).
-    stored.revoked_at = datetime.now(timezone.utc)
+    stored.revoked_at = datetime.now(UTC)
 
     new_access_token = create_access_token(token_data.user_id)
     new_refresh_token = create_refresh_token(token_data.user_id)
@@ -124,7 +124,7 @@ def logout(payload: RefreshRequest, db: Session = Depends(get_db)) -> None:
     token_hash = _hash_token(payload.refresh_token)
     stored = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
     if stored is not None and stored.revoked_at is None:
-        stored.revoked_at = datetime.now(timezone.utc)
+        stored.revoked_at = datetime.now(UTC)
         db.commit()
     # Idempotent: logging out an already-revoked/unknown token still returns 204.
 

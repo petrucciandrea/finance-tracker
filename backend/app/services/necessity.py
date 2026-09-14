@@ -86,6 +86,53 @@ def spend_by_necessity(
     }
 
 
+def spend_by_necessity_and_category(
+    db: Session, user: User, *, date_from: date_, date_to: date_
+) -> list[tuple[str | None, object, Decimal]]:
+    """
+    The same expense total as `spend_by_necessity`, but broken down one
+    level finer, as `(bucket, category_id, positive_amount)` rows.
+
+    The simulator needs this grain to honour its precedence rule: a cut
+    aimed at one category must win over a cut aimed at the bucket that
+    contains it, and the category must then be excluded from the bucket
+    cut's base. Applying both to a single per-bucket total would count that
+    category's spend twice.
+    """
+    category = aliased(Category)
+    parent = aliased(Category)
+    bucket = _effective_necessity_expression(category, parent).label("bucket")
+
+    rows = (
+        db.query(
+            bucket,
+            Transaction.category_id.label("category_id"),
+            func.coalesce(func.sum(Transaction.amount_base_currency), 0).label("total"),
+        )
+        .join(Account, Account.id == Transaction.account_id)
+        .outerjoin(category, category.id == Transaction.category_id)
+        .outerjoin(parent, parent.id == category.parent_id)
+        .filter(
+            Account.user_id == user.id,
+            Transaction.deleted_at.is_(None),
+            Transaction.type == "expense",
+            Transaction.date >= date_from,
+            Transaction.date <= date_to,
+        )
+        .group_by(bucket, Transaction.category_id)
+        .all()
+    )
+
+    return [
+        (
+            row._mapping["bucket"],
+            row._mapping["category_id"],
+            -Decimal(str(row._mapping["total"])),
+        )
+        for row in rows
+    ]
+
+
 def income_total(db: Session, user: User, *, date_from: date_, date_to: date_) -> Decimal:
     """
     Income over an inclusive range, in base currency — the denominator of

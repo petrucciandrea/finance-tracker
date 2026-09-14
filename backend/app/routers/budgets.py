@@ -6,7 +6,6 @@ date returns historical status for that period, so one endpoint covers
 both "how am I doing this month" and "how did I do in July".
 """
 
-import calendar
 from datetime import date as date_
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -24,6 +23,7 @@ from app.schemas import (
     BudgetStatus,
     BudgetUpdate,
 )
+from app.services.periods import period_bounds
 
 router = APIRouter(prefix="/api/v1/budgets", tags=["budgets"])
 
@@ -37,18 +37,6 @@ def _get_owned_budget(db: Session, budget_id: UUID, user: User) -> Budget:
     if budget is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Budget not found")
     return budget
-
-
-def _period_bounds(period: str, on_date: date_) -> tuple[date_, date_]:
-    """Returns (start, end) inclusive dates for the month/year containing on_date."""
-    if period == "monthly":
-        start = on_date.replace(day=1)
-        last_day = calendar.monthrange(on_date.year, on_date.month)[1]
-        end = on_date.replace(day=last_day)
-    else:  # yearly
-        start = on_date.replace(month=1, day=1)
-        end = on_date.replace(month=12, day=31)
-    return start, end
 
 
 @router.get("", response_model=list[BudgetSchema])
@@ -121,7 +109,7 @@ def budgets_status(
 
     results: list[BudgetStatus] = []
     for budget in budgets:
-        period_start, period_end = _period_bounds(budget.period, on_date)
+        period_start, period_end = period_bounds(budget.period, on_date)
         # A budget's start_date can fall mid-period (e.g. created on the
         # 10th of the month) — only count spend from start_date onward,
         # never before the budget existed.

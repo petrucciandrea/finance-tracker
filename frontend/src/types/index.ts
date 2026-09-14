@@ -14,6 +14,9 @@ export type CategoryType = 'expense' | 'income' | 'transfer'
 // model. `null` means "not classified yet" and is reported as its own
 // bucket rather than folded into 'primary'.
 export type NecessityLevel = 'primary' | 'useful' | 'discretionary'
+// The four slots income is split into. The first three mirror
+// NecessityLevel; `savings` is the residual — what wasn't spent.
+export type AllocationBucket = NecessityLevel | 'savings'
 export type TransactionType = 'expense' | 'income' | 'transfer'
 export type TransactionSource = 'manual' | 'import'
 export type BudgetPeriod = 'monthly' | 'yearly'
@@ -377,6 +380,107 @@ export interface PortfolioHistoryPoint {
 export interface PortfolioHistoryResponse {
   base_currency: string
   points: PortfolioHistoryPoint[]
+}
+
+// --- Planning (allocation model, survival budget, simulator) ---
+
+export interface AllocationPlan {
+  id: string
+  pct_primary: string
+  pct_useful: string
+  pct_discretionary: string
+  pct_savings: string
+  lookback_months: number
+  default_source_account_id: string | null
+}
+
+export interface AllocationPlanUpdatePayload {
+  // All four percentages move together — the backend 422s a partial set,
+  // since the database constrains them to sum to 100.
+  pct_primary?: string
+  pct_useful?: string
+  pct_discretionary?: string
+  pct_savings?: string
+  lookback_months?: number
+  default_source_account_id?: string | null
+}
+
+export interface AllocationBucketStatus {
+  bucket: AllocationBucket
+  percentage: string
+  target_amount: string
+  actual_amount: string
+  // target - actual. Positive is "under target": good for the three spend
+  // buckets, bad for `savings`.
+  deviation: string
+  percentage_used: number
+  is_over_target: boolean
+}
+
+export interface IncomeCategoryBreakdown {
+  category_id: string | null
+  category_name: string | null
+  excluded_from_income_base: boolean
+  total_amount_base_currency: string
+}
+
+export interface AllocationStatus {
+  base_currency: string
+  period_start: string
+  period_end: string
+  income_total: string
+  buckets: AllocationBucketStatus[]
+  unclassified_amount: string
+  classification_coverage: number
+  income_breakdown: IncomeCategoryBreakdown[]
+}
+
+export interface SurvivalBudget {
+  base_currency: string
+  lookback_months: number
+  months_analysed: number
+  // null, never 0, when there is no complete month of history yet.
+  monthly_primary_expenses: string | null
+  monthly_total_expenses: string | null
+  monthly_income: string | null
+  total_cash_balance: string
+  months_of_runway: number | null
+}
+
+export interface SimulationCut {
+  // Exactly one of these two.
+  necessity_level?: NecessityLevel
+  category_id?: string
+  cut_percentage: string
+}
+
+export interface SimulationRequest {
+  date?: string
+  cuts: SimulationCut[]
+}
+
+export interface SimulatedBucket {
+  bucket: AllocationBucket
+  baseline_amount: string
+  simulated_amount: string
+  freed_amount: string
+}
+
+export interface SimulationResponse {
+  base_currency: string
+  period_start: string
+  period_end: string
+  income_total: string
+  buckets: SimulatedBucket[]
+  total_baseline_spend: string
+  total_simulated_spend: string
+  total_freed: string
+  baseline_savings_amount: string
+  simulated_savings_amount: string
+  baseline_savings_rate: number
+  simulated_savings_rate: number
+  baseline_survival_budget: string | null
+  simulated_survival_budget: string | null
 }
 
 // --- Errors (the envelope from main.py's exception handlers) ---

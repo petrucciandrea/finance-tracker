@@ -18,6 +18,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Integer,
     Numeric,
     String,
     UniqueConstraint,
@@ -66,6 +67,7 @@ class User(Base, TimestampMixin):
     accounts: Mapped[list["Account"]] = relationship(back_populates="user")
     categories: Mapped[list["Category"]] = relationship(back_populates="user")
     budgets: Mapped[list["Budget"]] = relationship(back_populates="user")
+    allocation_plans: Mapped[list["AllocationPlan"]] = relationship(back_populates="user")
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +230,67 @@ class Budget(Base, SoftDeleteMixin):
 
     __table_args__ = (
         CheckConstraint("period in ('monthly','yearly')", name="ck_budgets_period"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Allocation plan (planning engine — how income should be split)
+# ---------------------------------------------------------------------------
+
+class AllocationPlan(Base, TimestampMixin, SoftDeleteMixin):
+    """
+    The user's income-split model, preset to 50/25/15/10.
+
+    One live plan per user, but deliberately with NO unique index on
+    `user_id`: the plan is get-or-created on first read, and a unique index
+    would turn two concurrent first reads into an IntegrityError surfacing
+    as a generic 500. The "Varie" category get-or-create works precisely
+    because a duplicate row is harmless. Callers take the oldest surviving
+    row, which is deterministic whether or not a race ever happened.
+
+    Unlike `Budget`, which freezes everything except its limit, this is
+    deliberately mutable. A budget is a historical commitment ("in July my
+    limit was 200"); a plan is prospective ("this is how I want income
+    split now"), so editing the percentages *should* change how the current
+    period reads. The flip side is that it also changes how past periods
+    read — which is the honest behaviour for a planning tool, and is called
+    out in the API docs rather than hidden.
+    """
+
+    __tablename__ = "allocation_plans"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+
+    pct_primary: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
+    pct_useful: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
+    pct_discretionary: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
+    pct_savings: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
+
+    # How many complete months the primary-expense average looks back over.
+    # Feeds both the survival budget and phase C's dynamic emergency-fund
+    # target, so it is a plan-level setting rather than a query parameter.
+    lookback_months: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=6, server_default="6"
+    )
+
+    # The account income lands on — the source leg of any suggested
+    # transfer. Without it the waterfall can only advise, not propose an
+    # executable giroconto.
+    default_source_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=True
+    )
+
+    user: Mapped["User"] = relationship(back_populates="allocation_plans")
+
+    __table_args__ = (
+        CheckConstraint(
+            "pct_primary + pct_useful + pct_discretionary + pct_savings = 100",
+            name="ck_allocation_plans_percentages_sum",
+        ),
+        CheckConstraint("lookback_months between 1 and 60", name="ck_allocation_plans_lookback"),
     )
 
 

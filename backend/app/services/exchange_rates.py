@@ -4,6 +4,14 @@ Exchange rate lookup: DB cache first, fallback to the Frankfurter API.
 Rates are cached per (from_currency, to_currency, date) in the `exchange_rates`
 table so repeated lookups for the same day don't hit the external API, and so
 historical transactions keep a durable, queryable record of the rate used.
+
+Cache writes `flush()` and leave the commit to the caller. They used to
+commit the caller's session outright, which meant a cache miss halfway
+through a multi-row write committed a half-finished state — and a handler
+writing N linked pairs could end up persisting a pair with one leg. The
+cost of the change is that a read-only endpoint must commit if it wants
+the fetched rate to persist; the three that populate the cache on a read
+path do so explicitly.
 """
 
 from datetime import date as date_
@@ -53,7 +61,8 @@ def get_rate(db: Session, from_currency: str, to_currency: str, on_date: date_) 
             source="frankfurter",
         )
     )
-    db.commit()
+    # Not commit(): see the module docstring. The caller owns the transaction.
+    db.flush()
 
     return rate
 
@@ -120,7 +129,7 @@ def get_rate_history(
             .on_conflict_do_nothing(index_elements=["from_currency", "to_currency", "date"])
         )
         db.execute(stmt)
-        db.commit()
+        db.flush()
 
     cached.update(fetched)
     return {d: r for d, r in cached.items() if start_date <= d <= end_date}

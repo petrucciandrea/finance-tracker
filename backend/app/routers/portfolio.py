@@ -184,7 +184,12 @@ def list_holdings(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[HoldingWithValue]:
-    return holdings_with_value(db, current_user)
+    holdings = holdings_with_value(db, current_user)
+    # A read that writes: price and rate lookups populate their caches but
+    # no longer commit the session themselves, so persist them here. Without
+    # this the provider would be hit again on every single request.
+    db.commit()
+    return holdings
 
 
 @router.get("/transactions", response_model=list[AssetTransactionSchema])
@@ -490,6 +495,7 @@ def net_worth(
 ) -> NetWorthSummary:
     accounts = account_balances(db, current_user)
     holdings = holdings_with_value(db, current_user)
+    db.commit()  # persist the price/rate cache rows filled in above
 
     total_cash_balance = sum((a.balance_base_currency for a in accounts), Decimal("0"))
     total_holdings_value = sum((h.market_value_base_currency for h in holdings), Decimal("0"))
@@ -625,4 +631,5 @@ def portfolio_history(
             )
         )
 
+    db.commit()  # persist the price/rate history cache rows filled in above
     return PortfolioHistoryResponse(base_currency=current_user.base_currency, points=points)

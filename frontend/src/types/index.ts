@@ -17,6 +17,12 @@ export type NecessityLevel = 'primary' | 'useful' | 'discretionary'
 // The four slots income is split into. The first three mirror
 // NecessityLevel; `savings` is the residual — what wasn't spent.
 export type AllocationBucket = NecessityLevel | 'savings'
+export type SavingsGoalKind = 'emergency_fund' | 'medium_term' | 'long_term'
+// months_of_primary_expenses: target follows the user's real cost of living.
+// open_ended: no target, absorbs the remainder and closes the cascade.
+export type TargetMode = 'months_of_primary_expenses' | 'fixed_amount' | 'open_ended'
+// 'transfer' is executable by the backend; 'advice' must be done by hand.
+export type WaterfallActionKind = 'transfer' | 'advice'
 export type TransactionType = 'expense' | 'income' | 'transfer'
 export type TransactionSource = 'manual' | 'import'
 export type BudgetPeriod = 'monthly' | 'yearly'
@@ -482,6 +488,84 @@ export interface SimulationResponse {
   simulated_savings_rate: number
   baseline_survival_budget: string | null
   simulated_survival_budget: string | null
+}
+
+// --- Savings goals and the waterfall ---
+
+export interface SavingsGoalSource {
+  id: string
+  account_id: string
+}
+
+export interface SavingsGoal {
+  id: string
+  name: string
+  kind: SavingsGoalKind
+  priority: number
+  target_mode: TargetMode
+  target_months: string | null
+  target_amount: string | null
+  sources: SavingsGoalSource[]
+  deleted_at: string | null
+}
+
+export interface SavingsGoalCreatePayload {
+  name: string
+  kind: SavingsGoalKind
+  priority: number
+  target_mode: TargetMode
+  target_months?: string | null
+  target_amount?: string | null
+}
+
+export interface SavingsGoalUpdatePayload {
+  name?: string
+  priority?: number
+  target_mode?: TargetMode
+  target_months?: string | null
+  target_amount?: string | null
+}
+
+export interface WaterfallStep {
+  goal_id: string
+  name: string
+  kind: SavingsGoalKind
+  priority: number
+  target_mode: TargetMode
+  // null while a dynamic target can't be computed. Such a rung is skipped,
+  // never shown as funded.
+  target_amount: string | null
+  target_unavailable: boolean
+  current_amount: string
+  gap: string
+  allocated_amount: string
+  funding_percentage: number
+  is_funded: boolean
+}
+
+export interface WaterfallAction {
+  kind: WaterfallActionKind
+  goal_id: string
+  goal_name: string
+  amount: string
+  currency: string
+  from_account_id: string | null
+  from_account_name: string | null
+  to_account_id: string | null
+  to_account_name: string | null
+  reason: string
+}
+
+export interface WaterfallPlan {
+  base_currency: string
+  period_start: string
+  period_end: string
+  income_total: string
+  savings_quota: string
+  already_allocated: string
+  steps: WaterfallStep[]
+  unallocated_amount: string
+  actions: WaterfallAction[]
 }
 
 // --- Errors (the envelope from main.py's exception handlers) ---

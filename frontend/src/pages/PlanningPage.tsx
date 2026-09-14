@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { isAxiosError } from 'axios'
+import { WaterfallSection } from '@/components/planning/WaterfallSection'
 import { useAuth } from '@/context/AuthContext'
 import { useAccounts } from '@/hooks/useAccounts'
 import { useCategories } from '@/hooks/useCategories'
@@ -415,6 +416,10 @@ export function PlanningPage() {
               <Simulator />
             </Card>
           </div>
+
+          <Card title="Cascata del risparmio">
+            <WaterfallSection format={format} />
+          </Card>
         </>
       )}
     </div>

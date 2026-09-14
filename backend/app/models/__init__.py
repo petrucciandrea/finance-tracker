@@ -70,6 +70,7 @@ class User(Base, TimestampMixin):
     categories: Mapped[list["Category"]] = relationship(back_populates="user")
     budgets: Mapped[list["Budget"]] = relationship(back_populates="user")
     allocation_plans: Mapped[list["AllocationPlan"]] = relationship(back_populates="user")
+    savings_goals: Mapped[list["SavingsGoal"]] = relationship(back_populates="user")
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +297,95 @@ class AllocationPlan(Base, TimestampMixin, SoftDeleteMixin):
         ),
         CheckConstraint("lookback_months between 1 and 60", name="ck_allocation_plans_lookback"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Savings goals (planning engine — the rungs of the waterfall)
+# ---------------------------------------------------------------------------
+
+class SavingsGoal(Base, TimestampMixin, SoftDeleteMixin):
+    """
+    One rung of the savings ladder. The savings quota fills rungs in
+    `priority` order and only spills into the next once the one above is
+    full, which is what makes the emergency fund refill itself: drain it
+    and its gap reopens, putting it back at the top with no special case.
+
+    There is deliberately no unique index on (user_id, priority) — see the
+    migration for why swapping two priorities could never satisfy one.
+    Ordering is (priority, created_at), deterministic even on a tie.
+    """
+
+    __tablename__ = "savings_goals"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    target_mode: Mapped[str] = mapped_column(String(30), nullable=False)
+    # `months_of_primary_expenses` only: the multiplier on average monthly
+    # primary spend (4 / 8 / 12 or anything else). Makes the target move
+    # with the user's actual cost of living instead of a fixed number that
+    # silently goes stale.
+    target_months: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    # `fixed_amount` only.
+    target_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+
+    user: Mapped["User"] = relationship(back_populates="savings_goals")
+    sources: Mapped[list["SavingsGoalSource"]] = relationship(back_populates="goal")
+
+    __table_args__ = (
+        CheckConstraint(
+            "kind in ('emergency_fund','medium_term','long_term')",
+            name="ck_savings_goals_kind",
+        ),
+        CheckConstraint(
+            "target_mode in ('months_of_primary_expenses','fixed_amount','open_ended')",
+            name="ck_savings_goals_target_mode",
+        ),
+        CheckConstraint(
+            "(target_mode = 'months_of_primary_expenses'"
+            "  AND target_months IS NOT NULL AND target_amount IS NULL)"
+            " OR (target_mode = 'fixed_amount'"
+            "  AND target_amount IS NOT NULL AND target_months IS NULL)"
+            " OR (target_mode = 'open_ended'"
+            "  AND target_months IS NULL AND target_amount IS NULL)",
+            name="ck_savings_goals_target_parameters",
+        ),
+        CheckConstraint("priority >= 0", name="ck_savings_goals_priority"),
+    )
+
+
+class SavingsGoalSource(Base, TimestampMixin, SoftDeleteMixin):
+    """
+    An account whose balance counts toward a goal.
+
+    Accounts only, not assets: valuing a holding means a live price and FX
+    call per position, which would put N external requests behind a plain
+    GET of the waterfall. An asset-backed rung is a later phase, and its
+    right grain is (account, asset) rather than the globally-shared asset
+    row.
+
+    An account may fund at most one goal, or its balance would be counted
+    twice over. That rule's scope is the user rather than the goal, so it
+    can't be a unique index here and lives in the router as a 409.
+    """
+
+    __tablename__ = "savings_goal_sources"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    goal_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("savings_goals.id"), nullable=False, index=True
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False, index=True
+    )
+
+    goal: Mapped["SavingsGoal"] = relationship(back_populates="sources")
+    account: Mapped["Account"] = relationship()
 
 
 # ---------------------------------------------------------------------------

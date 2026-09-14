@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.deps import get_current_user, get_db
-from app.models import Account, Currency, Transaction, User
+from app.models import Account, Currency, SavingsGoal, SavingsGoalSource, Transaction, User
 from app.schemas import Account as AccountSchema
 from app.schemas import AccountCreate, AccountUpdate
 from app.services.exchange_rates import ExchangeRateUnavailable, get_rate
@@ -135,6 +135,30 @@ def delete_account(
     from datetime import datetime
 
     account = get_owned_account(db, account_id, current_user)
+
+    # A soft-deleted account vanishes from the balance map the waterfall
+    # reads, so a savings goal funded by it would quietly report zero and
+    # the cascade would suggest refilling it — into a deleted account.
+    funded_goal = (
+        db.query(SavingsGoal)
+        .join(SavingsGoalSource, SavingsGoalSource.goal_id == SavingsGoal.id)
+        .filter(
+            SavingsGoal.user_id == current_user.id,
+            SavingsGoal.deleted_at.is_(None),
+            SavingsGoalSource.account_id == account.id,
+            SavingsGoalSource.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if funded_goal is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"This account funds the savings goal «{funded_goal.name}» — "
+                "detach it from the goal first"
+            ),
+        )
+
     account.deleted_at = datetime.now(UTC)
     db.commit()
     # Note: transactions referencing this account are left untouched — the

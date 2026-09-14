@@ -46,6 +46,19 @@ class NecessityLevel(str, Enum):
     discretionary = "discretionary"
 
 
+class AllocationBucket(str, Enum):
+    """
+    The four slots income is split into. The first three mirror
+    NecessityLevel; `savings` is the residual — what wasn't spent — so it
+    has no necessity level of its own and never appears on a category.
+    """
+
+    primary = "primary"
+    useful = "useful"
+    discretionary = "discretionary"
+    savings = "savings"
+
+
 class TransactionType(str, Enum):
     expense = "expense"
     income = "income"
@@ -510,3 +523,130 @@ class PortfolioHistoryPoint(BaseModel):
 class PortfolioHistoryResponse(BaseModel):
     base_currency: str
     points: list[PortfolioHistoryPoint]
+
+
+# ---------------------------------------------------------------------------
+# Planning — allocation plan, status, survival budget, simulator
+# ---------------------------------------------------------------------------
+
+class AllocationPlan(ORMBase):
+    id: UUID
+    pct_primary: Decimal
+    pct_useful: Decimal
+    pct_discretionary: Decimal
+    pct_savings: Decimal
+    lookback_months: int
+    default_source_account_id: UUID | None = None
+
+
+class AllocationPlanUpdate(BaseModel):
+    """
+    All four percentages move together or not at all: the database enforces
+    that they sum to 100, so a partial update could only ever fail. The
+    router rejects a partial set with a message saying so, rather than
+    letting a CheckConstraint violation surface as a generic 500.
+    """
+
+    pct_primary: Decimal | None = Field(default=None, ge=0, le=100, max_digits=5, decimal_places=2)
+    pct_useful: Decimal | None = Field(default=None, ge=0, le=100, max_digits=5, decimal_places=2)
+    pct_discretionary: Decimal | None = Field(
+        default=None, ge=0, le=100, max_digits=5, decimal_places=2
+    )
+    pct_savings: Decimal | None = Field(default=None, ge=0, le=100, max_digits=5, decimal_places=2)
+    lookback_months: int | None = Field(default=None, ge=1, le=60)
+    default_source_account_id: UUID | None = None
+
+
+class AllocationBucketStatus(BaseModel):
+    bucket: AllocationBucket
+    percentage: Decimal
+    target_amount: Decimal
+    actual_amount: Decimal
+    # target - actual. Positive means "under target", which is good for the
+    # three spend buckets and bad for `savings` — the bucket is named, so
+    # the client decides how to colour it rather than the API guessing.
+    deviation: Decimal
+    percentage_used: float
+    is_over_target: bool
+
+
+class IncomeCategoryBreakdown(BaseModel):
+    category_id: UUID | None = None
+    category_name: str | None = None
+    excluded_from_income_base: bool
+    total_amount_base_currency: Decimal
+
+
+class AllocationStatus(BaseModel):
+    base_currency: str
+    period_start: date_
+    period_end: date_
+    income_total: Decimal
+    buckets: list[AllocationBucketStatus]
+    # Spend whose category (and its parent) carry no necessity level. Kept
+    # out of the buckets on purpose: folding it into `primary` would make an
+    # unclassified account look like a disciplined one.
+    unclassified_amount: Decimal
+    classification_coverage: float
+    income_breakdown: list[IncomeCategoryBreakdown]
+
+
+class SurvivalBudget(BaseModel):
+    base_currency: str
+    lookback_months: int
+    # Complete months actually used for the average — smaller than
+    # lookback_months for a user whose history is shorter.
+    months_analysed: int
+    # None, never zero, when there isn't a single complete month of history.
+    # Zero would read as "you need nothing to live on", which would in turn
+    # mark a dynamic emergency-fund target as already met.
+    monthly_primary_expenses: Decimal | None = None
+    monthly_total_expenses: Decimal | None = None
+    monthly_income: Decimal | None = None
+    total_cash_balance: Decimal
+    # Cash divided by the survival budget. None whenever the survival budget
+    # is unknown or zero.
+    months_of_runway: float | None = None
+
+
+class SimulationCut(BaseModel):
+    """
+    One "what if I cut this" lever. Exactly one of `necessity_level` or
+    `category_id` must be set; the router rejects both or neither.
+    """
+
+    necessity_level: NecessityLevel | None = None
+    category_id: UUID | None = None
+    cut_percentage: Decimal = Field(ge=0, le=100, max_digits=5, decimal_places=2)
+
+
+class SimulationRequest(BaseModel):
+    date: date_ | None = None
+    cuts: list[SimulationCut] = Field(default_factory=list)
+
+
+class SimulatedBucket(BaseModel):
+    bucket: AllocationBucket
+    baseline_amount: Decimal
+    simulated_amount: Decimal
+    freed_amount: Decimal
+
+
+class SimulationResponse(BaseModel):
+    base_currency: str
+    period_start: date_
+    period_end: date_
+    income_total: Decimal
+    buckets: list[SimulatedBucket]
+    total_baseline_spend: Decimal
+    total_simulated_spend: Decimal
+    total_freed: Decimal
+    baseline_savings_amount: Decimal
+    simulated_savings_amount: Decimal
+    baseline_savings_rate: float
+    simulated_savings_rate: float
+    baseline_survival_budget: Decimal | None = None
+    # The survival budget with the same cuts applied to the historical
+    # primary average — i.e. "if you made these cuts permanent". An
+    # approximation, and labelled as one in the UI.
+    simulated_survival_budget: Decimal | None = None

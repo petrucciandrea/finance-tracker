@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as accountsApi from '@/api/accounts'
+import { PLANNING_KEY } from '@/hooks/usePlanning'
 import { NET_WORTH_KEY } from '@/hooks/usePortfolio'
 import { TRANSACTIONS_KEY } from '@/hooks/useTransactions'
 import type { AccountCreatePayload } from '@/types'
@@ -23,6 +24,8 @@ export function useCreateAccount() {
       queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY })
       // Net worth's per-account breakdown depends on the account list too.
       queryClient.invalidateQueries({ queryKey: NET_WORTH_KEY })
+      // Months of runway divides cash by monthly primary spend.
+      queryClient.invalidateQueries({ queryKey: PLANNING_KEY })
       // A starting_balance creates an opening-balance transaction server-side.
       queryClient.invalidateQueries({ queryKey: TRANSACTIONS_KEY })
     },
@@ -38,6 +41,8 @@ export function useDeleteAccount() {
       // A deleted account's balance must drop out of net worth immediately,
       // not linger for up to the global 30s staleTime.
       queryClient.invalidateQueries({ queryKey: NET_WORTH_KEY })
+      // Months of runway divides cash by monthly primary spend.
+      queryClient.invalidateQueries({ queryKey: PLANNING_KEY })
     },
   })
 }

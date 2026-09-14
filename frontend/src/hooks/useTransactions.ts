@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as transactionsApi from '@/api/transactions'
 import { BUDGETS_STATUS_KEY } from '@/hooks/useBudgets'
+import { PLANNING_KEY } from '@/hooks/usePlanning'
 import { NET_WORTH_KEY } from '@/hooks/usePortfolio'
 import type { TransactionCreatePayload, TransactionListParams, TransactionSummaryParams } from '@/types'
 
@@ -15,6 +16,9 @@ export const TRANSACTIONS_KEY = ['transactions'] as const
 function invalidateTransactionsAndDerived(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({ queryKey: TRANSACTIONS_KEY })
   queryClient.invalidateQueries({ queryKey: BUDGETS_STATUS_KEY })
+  // The allocation model, the survival budget and the waterfall are all
+  // computed from transactions, under their own top-level key.
+  queryClient.invalidateQueries({ queryKey: PLANNING_KEY })
   queryClient.invalidateQueries({ queryKey: NET_WORTH_KEY })
   // The portfolio value-over-time chart's cash-balance series is also
   // derived from cash transactions.

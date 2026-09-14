@@ -14,7 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.deps import get_current_user, get_db
-from app.models import Account, AssetTransaction, Category, Transaction, User
+from app.models import Account, AssetTransaction, Category, SavingsAllocation, Transaction, User
 from app.schemas import (
     PaginationMeta,
     SummaryGroupBy,
@@ -183,6 +183,59 @@ def _reject_if_linked_to_asset_transaction(
             detail="This transaction's amount/date are managed by a portfolio "
             "operation — edit or delete it from Portfolio instead",
         )
+
+
+def _reject_amount_or_date_edit_on_a_linked_leg(
+    transaction: Transaction, changed_fields: set[str]
+) -> None:
+    """
+    The two legs of a giroconto must stay mirror images. Editing one side's
+    amount or date would silently desynchronise them, so the answer is
+    delete and recreate — unlike a portfolio cash leg, which has another
+    screen that owns it, a plain giroconto has nowhere else to be edited.
+    `category_id`/`description` stay free, as they do there.
+    """
+    if transaction.counterpart_transaction_id is None:
+        return
+    if not changed_fields & {"amount", "date"}:
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            "This transfer is one leg of a linked giroconto — "
+            "delete it and create a new one instead of editing amount or date"
+        ),
+    )
+
+
+def _soft_delete_with_counterpart(db: Session, transaction: Transaction) -> None:
+    """
+    Retire both legs together, plus any savings allocation the destination
+    leg backed. Leaving the allocation behind would keep consuming the
+    period's savings quota for money that was never actually moved.
+    """
+    now = datetime.now(UTC)
+    legs = [transaction]
+
+    if transaction.counterpart_transaction_id is not None:
+        counterpart = db.get(Transaction, transaction.counterpart_transaction_id)
+        if counterpart is not None and counterpart.deleted_at is None:
+            legs.append(counterpart)
+
+    for leg in legs:
+        leg.deleted_at = now
+
+    allocations = (
+        db.query(SavingsAllocation)
+        .filter(
+            SavingsAllocation.transaction_id.in_([leg.id for leg in legs]),
+            SavingsAllocation.deleted_at.is_(None),
+        )
+        .all()
+    )
+    for allocation in allocations:
+        allocation.deleted_at = now
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +433,7 @@ def update_transaction(
     transaction = _get_owned_transaction(db, transaction_id, current_user)
     update_data = payload.model_dump(exclude_unset=True)
     _reject_if_linked_to_asset_transaction(db, transaction.id, changed_fields=set(update_data))
+    _reject_amount_or_date_edit_on_a_linked_leg(transaction, set(update_data))
 
     if "category_id" in update_data:
         if update_data["category_id"] is None:
@@ -428,7 +482,7 @@ def delete_transaction(
 ) -> None:
     transaction = _get_owned_transaction(db, transaction_id, current_user)
     _reject_if_linked_to_asset_transaction(db, transaction.id)
-    transaction.deleted_at = datetime.now(UTC)
+    _soft_delete_with_counterpart(db, transaction)
     db.commit()
 
 

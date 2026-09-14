@@ -1,7 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as goalsApi from '@/api/savingsGoals'
 import { PLANNING_KEY } from '@/hooks/usePlanning'
-import type { SavingsGoalCreatePayload, SavingsGoalUpdatePayload } from '@/types'
+import { NET_WORTH_KEY } from '@/hooks/usePortfolio'
+import { TRANSACTIONS_KEY } from '@/hooks/useTransactions'
+import type {
+  SavingsGoalCreatePayload,
+  SavingsGoalUpdatePayload,
+  WaterfallExecuteRequest,
+} from '@/types'
 
 const GOALS_KEY = ['planning', 'goals'] as const
 const WATERFALL_KEY = ['planning', 'waterfall'] as const
@@ -64,5 +70,19 @@ export function useRemoveGoalSource() {
     mutationFn: ({ goalId, sourceId }: { goalId: string; sourceId: string }) =>
       goalsApi.removeSource(goalId, sourceId),
     onSuccess: () => invalidatePlanning(queryClient),
+  })
+}
+
+export function useExecuteWaterfall() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: WaterfallExecuteRequest) => goalsApi.executeWaterfall(payload),
+    onSuccess: () => {
+      // The only planning mutation that writes transactions, so it has to
+      // bust the transaction and net-worth caches as well as its own.
+      invalidatePlanning(queryClient)
+      queryClient.invalidateQueries({ queryKey: TRANSACTIONS_KEY })
+      queryClient.invalidateQueries({ queryKey: NET_WORTH_KEY })
+    },
   })
 }

@@ -199,6 +199,14 @@ class Transaction(Base, TimestampMixin, SoftDeleteMixin):
     # category's own level and the one inherited from its parent.
     necessity_level_override: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
+    # The other leg of a two-sided giroconto. Read it as "MAY have a
+    # counterpart": every opening balance and every portfolio cash leg is a
+    # `transfer` with nothing on the other side, so code must never assume
+    # a transfer is paired.
+    counterpart_transaction_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("transactions.id"), nullable=True
+    )
+
     account: Mapped["Account"] = relationship(back_populates="transactions")
     category: Mapped["Category | None"] = relationship(back_populates="transactions")
 
@@ -208,6 +216,10 @@ class Transaction(Base, TimestampMixin, SoftDeleteMixin):
         CheckConstraint(
             "necessity_level_override in ('primary','useful','discretionary')",
             name="ck_transactions_necessity_level_override",
+        ),
+        CheckConstraint(
+            "counterpart_transaction_id IS NULL OR counterpart_transaction_id <> id",
+            name="ck_transactions_counterpart_not_self",
         ),
     )
 
@@ -386,6 +398,41 @@ class SavingsGoalSource(Base, TimestampMixin, SoftDeleteMixin):
 
     goal: Mapped["SavingsGoal"] = relationship(back_populates="sources")
     account: Mapped["Account"] = relationship()
+
+
+class SavingsAllocation(Base, TimestampMixin, SoftDeleteMixin):
+    """
+    A giroconto executed against a savings goal, for one period.
+
+    Its only job is to answer "how much of this period's savings quota is
+    already spoken for". Without it, reloading the waterfall after acting
+    on it would offer the same money again, and a user following the
+    suggestions twice would double-transfer.
+
+    `transaction_id` points at the destination leg. Deleting that leg
+    soft-deletes this row as well — otherwise a cancelled giroconto would
+    keep consuming quota that was never actually moved.
+    """
+
+    __tablename__ = "savings_allocations"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    goal_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("savings_goals.id"), nullable=False, index=True
+    )
+    transaction_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("transactions.id"), nullable=False, index=True
+    )
+    # Always the canonical month start from services/periods.py — a second
+    # definition of "which month" would make this lookup silently miss.
+    period_start: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    amount_base_currency: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+
+    goal: Mapped["SavingsGoal"] = relationship()
+    transaction: Mapped["Transaction"] = relationship()
 
 
 # ---------------------------------------------------------------------------

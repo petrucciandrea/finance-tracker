@@ -25,9 +25,10 @@ from datetime import date as date_
 from decimal import ROUND_DOWN, Decimal
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import Account, SavingsGoal, User
+from app.models import Account, SavingsAllocation, SavingsGoal, User
 from app.schemas import (
     SavingsGoalKind,
     TargetMode,
@@ -79,26 +80,35 @@ def _goal_target(
     return None, False  # open_ended
 
 
-def compute_waterfall(
-    db: Session,
-    user: User,
-    on_date: date_,
-    *,
-    already_allocated: Decimal | None = None,
-) -> WaterfallPlan:
+def allocated_in_period(db: Session, user: User, period_start: date_) -> Decimal:
     """
-    Build the cascade for the period containing `on_date`.
+    How much of a period's savings quota has already been transferred.
 
-    `already_allocated` is what phase D will pass once executed giroconti
-    are recorded, so the same period's quota isn't offered twice. Until
-    then it is zero.
+    Executed giroconti raise the destination balance, which shrinks each
+    goal's gap on its own — but the *quota* would still look untouched, so
+    reloading the page would offer the same money again. This is what stops
+    a user who follows the suggestions twice from double-transferring.
     """
+    total = (
+        db.query(func.coalesce(func.sum(SavingsAllocation.amount_base_currency), 0))
+        .filter(
+            SavingsAllocation.user_id == user.id,
+            SavingsAllocation.period_start == period_start,
+            SavingsAllocation.deleted_at.is_(None),
+        )
+        .scalar()
+    )
+    return Decimal(str(total))
+
+
+def compute_waterfall(db: Session, user: User, on_date: date_) -> WaterfallPlan:
+    """Build the cascade for the period containing `on_date`."""
     plan = get_or_create_plan(db, user)
     period_start, period_end = period_bounds("monthly", on_date)
 
     income = income_total(db, user, date_from=period_start, date_to=period_end)
     quota = _quantize(income * Decimal(str(plan.pct_savings)) / Decimal("100"))
-    allocated_already = already_allocated or Decimal("0")
+    allocated_already = allocated_in_period(db, user, period_start)
     # Clamped: deleting an income after executing its transfers would
     # otherwise make the remainder negative and invert the cascade.
     remaining = max(Decimal("0"), quota - allocated_already)

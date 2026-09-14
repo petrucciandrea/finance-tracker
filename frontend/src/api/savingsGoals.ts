@@ -1,6 +1,8 @@
 import { apiClient } from './client'
 import type {
   SavingsGoal,
+  WaterfallExecuteRequest,
+  WaterfallExecuteResponse,
   SavingsGoalCreatePayload,
   SavingsGoalSource,
   SavingsGoalUpdatePayload,
@@ -43,5 +45,15 @@ export async function removeSource(goalId: string, sourceId: string): Promise<vo
 
 export async function getWaterfall(date?: string): Promise<WaterfallPlan> {
   const { data } = await apiClient.get<WaterfallPlan>('/planning/waterfall', { params: { date } })
+  return data
+}
+
+export async function executeWaterfall(
+  payload: WaterfallExecuteRequest,
+): Promise<WaterfallExecuteResponse> {
+  const { data } = await apiClient.post<WaterfallExecuteResponse>(
+    '/planning/waterfall/execute',
+    payload,
+  )
   return data
 }

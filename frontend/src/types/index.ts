@@ -144,6 +144,9 @@ export interface Transaction {
   // Expense transactions only. Wins over the category's level and the one
   // inherited from its parent.
   necessity_level_override: NecessityLevel | null
+  // The other leg of a giroconto, when there is one. Null on every opening
+  // balance and portfolio cash leg — read it as "may have".
+  counterpart_transaction_id: string | null
   created_at: string
   deleted_at: string | null
 }
@@ -554,6 +557,31 @@ export interface WaterfallAction {
   to_account_id: string | null
   to_account_name: string | null
   reason: string
+}
+
+export interface WaterfallExecutionItem {
+  goal_id: string
+  from_account_id: string
+  amount: string
+}
+
+export interface WaterfallExecuteRequest {
+  date?: string
+  items: WaterfallExecutionItem[]
+}
+
+export interface SavingsAllocation {
+  id: string
+  goal_id: string
+  transaction_id: string
+  period_start: string
+  amount_base_currency: string
+  created_at: string
+}
+
+export interface WaterfallExecuteResponse {
+  allocations: SavingsAllocation[]
+  transactions: Transaction[]
 }
 
 export interface WaterfallPlan {

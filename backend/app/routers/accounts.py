@@ -73,7 +73,7 @@ def create_account(
     db.add(account)
     db.flush()  # populates account.id so the opening-balance transaction below can reference it
 
-    if payload.starting_balance:
+    if payload.starting_balance and rate is not None:
         # Modeled as a `transfer` transaction — like an inter-account
         # transfer, an opening balance isn't a categorizable spend/income,
         # so it's exempt from the "no category -> Varie" rule and never

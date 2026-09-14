@@ -10,8 +10,9 @@ Run after the initial schema migration that creates the `currencies` table
 must be seeded before any of those rows can be created).
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "0002_seed_currencies"

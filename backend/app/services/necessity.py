@@ -25,6 +25,7 @@ Three rules this module exists to enforce:
 from datetime import date as date_
 from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session, aliased
@@ -88,7 +89,7 @@ def spend_by_necessity(
 
 def spend_by_necessity_and_category(
     db: Session, user: User, *, date_from: date_, date_to: date_
-) -> list[tuple[str | None, object, Decimal]]:
+) -> list[tuple[str | None, UUID | None, Decimal]]:
     """
     The same expense total as `spend_by_necessity`, but broken down one
     level finer, as `(bucket, category_id, positive_amount)` rows.

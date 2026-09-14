@@ -44,7 +44,10 @@ def get_current_user(
     try:
         payload = decode_token(credentials.credentials, expected_type="access")
     except (JWTError, ValueError):
-        raise credentials_exception
+        # `from None`, not `from exc`: the 401 is deliberate and identical
+        # for every decode failure, and chaining the JWT error would leak
+        # which part of the token was wrong into logs and tracebacks.
+        raise credentials_exception from None
 
     user = db.get(User, payload.user_id)
     if user is None:

@@ -5,17 +5,17 @@ Revises:
 Create Date: 2026-09-06 14:15:47.345693
 
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = '756e0a81c20a'
-down_revision: Union[str, Sequence[str], None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -33,7 +33,12 @@ def upgrade() -> None:
     sa.Column('email', sa.String(length=255), nullable=False),
     sa.Column('password_hash', sa.String(length=255), nullable=False),
     sa.Column('base_currency', sa.String(length=3), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column(
+        'created_at',
+        sa.DateTime(timezone=True),
+        server_default=sa.text('now()'),
+        nullable=False,
+    ),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=True)
@@ -43,9 +48,17 @@ def upgrade() -> None:
     sa.Column('name', sa.String(length=100), nullable=False),
     sa.Column('type', sa.String(length=20), nullable=False),
     sa.Column('currency', sa.String(length=3), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column(
+        'created_at',
+        sa.DateTime(timezone=True),
+        server_default=sa.text('now()'),
+        nullable=False,
+    ),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
-    sa.CheckConstraint("type in ('checking','savings','credit_card','investment','crypto_wallet')", name='ck_accounts_type'),
+    sa.CheckConstraint(
+        "type in ('checking','savings','credit_card','investment','crypto_wallet')",
+        name='ck_accounts_type',
+    ),
     sa.ForeignKeyConstraint(['currency'], ['currencies.code'], ),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -121,7 +134,12 @@ def upgrade() -> None:
     sa.Column('asset_id', sa.UUID(), nullable=False),
     sa.Column('quantity', sa.Numeric(precision=24, scale=8), nullable=False),
     sa.Column('avg_buy_price', sa.Numeric(precision=18, scale=8), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column(
+        'created_at',
+        sa.DateTime(timezone=True),
+        server_default=sa.text('now()'),
+        nullable=False,
+    ),
     sa.ForeignKeyConstraint(['account_id'], ['accounts.id'], ),
     sa.ForeignKeyConstraint(['asset_id'], ['assets.id'], ),
     sa.PrimaryKeyConstraint('id'),
@@ -141,7 +159,12 @@ def upgrade() -> None:
     sa.Column('description', sa.String(length=500), nullable=True),
     sa.Column('type', sa.String(length=10), nullable=False),
     sa.Column('source', sa.String(length=10), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column(
+        'created_at',
+        sa.DateTime(timezone=True),
+        server_default=sa.text('now()'),
+        nullable=False,
+    ),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.CheckConstraint("source in ('manual','import')", name='ck_transactions_source'),
     sa.CheckConstraint("type in ('expense','income','transfer')", name='ck_transactions_type'),
@@ -150,8 +173,12 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['currency'], ['currencies.code'], ),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_transactions_account_id'), 'transactions', ['account_id'], unique=False)
-    op.create_index(op.f('ix_transactions_category_id'), 'transactions', ['category_id'], unique=False)
+    op.create_index(
+        op.f('ix_transactions_account_id'), 'transactions', ['account_id'], unique=False
+    )
+    op.create_index(
+        op.f('ix_transactions_category_id'), 'transactions', ['category_id'], unique=False
+    )
     op.create_index(op.f('ix_transactions_date'), 'transactions', ['date'], unique=False)
     # ### end Alembic commands ###
 

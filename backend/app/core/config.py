@@ -74,7 +74,9 @@ def get_settings() -> Settings:
     easy to override in tests via dependency overrides / monkeypatching the
     cache, instead of mutating a shared global.
     """
-    return Settings()
+    # pydantic-settings populates `database_url` and `jwt_secret_key` from
+    # the environment / .env, which mypy can't see from the constructor call.
+    return Settings()  # type: ignore[call-arg]
 
 
 # Module-level convenience instance for places that just want `settings.x`

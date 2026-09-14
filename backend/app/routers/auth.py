@@ -97,7 +97,11 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> TokenPair
     try:
         token_data = decode_token(payload.refresh_token, expected_type="refresh")
     except (JWTError, ValueError):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+        # `from None` for the same reason as deps.get_current_user: one
+        # opaque 401 regardless of how the token was malformed.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token"
+        ) from None
 
     token_hash = _hash_token(payload.refresh_token)
     stored = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()

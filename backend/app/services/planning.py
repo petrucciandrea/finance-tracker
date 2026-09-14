@@ -307,8 +307,8 @@ def simulate(
         db, user, date_from=period_start, date_to=period_end
     )
 
-    category_cuts: dict[UUID, Decimal] = {}
-    bucket_cuts: dict[str, Decimal] = {}
+    category_cuts: dict[UUID | None, Decimal] = {}
+    bucket_cuts: dict[str | None, Decimal] = {}
     for cut in request.cuts:
         if cut.category_id is not None:
             category_cuts[cut.category_id] = cut.cut_percentage

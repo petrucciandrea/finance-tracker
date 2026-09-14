@@ -15,8 +15,9 @@ a user "changes" a budget's frozen fields today.
 """
 from collections.abc import Sequence
 
-from alembic import op
 from sqlalchemy import text as sa_text
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = 'e5f92c1a7d84'

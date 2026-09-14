@@ -32,7 +32,9 @@ def test_register_rejects_duplicate_email(client: TestClient, registered_user: d
     assert response.status_code == 409
 
 
-def test_login_with_correct_credentials_returns_tokens(client: TestClient, registered_user: dict) -> None:
+def test_login_with_correct_credentials_returns_tokens(
+    client: TestClient, registered_user: dict
+) -> None:
     response = client.post(
         "/api/v1/auth/login",
         json={"email": registered_user["email"], "password": registered_user["password"]},

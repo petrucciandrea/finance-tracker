@@ -17,13 +17,11 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
-from sqlalchemy import case, func
 from sqlalchemy.orm import Session, joinedload
 
 from app.deps import get_current_user, get_db
 from app.models import Account, Asset, AssetTransaction, Transaction, User
 from app.schemas import (
-    AccountBalance,
     AssetSearchResult,
     AssetTransactionCreate,
     AssetTransactionImportConfirm,
@@ -45,6 +43,11 @@ from app.services import asset_prices as asset_prices_service
 from app.services import csv_import as csv_import_service
 from app.services.asset_prices import AssetPriceUnavailable
 from app.services.exchange_rates import ExchangeRateUnavailable, get_rate, get_rate_history
+from app.services.net_worth import (
+    account_balances,
+    holdings_with_value,
+    user_asset_transactions_query,
+)
 
 router = APIRouter(prefix="/api/v1/portfolio", tags=["portfolio"])
 
@@ -130,19 +133,6 @@ def _get_owned_asset_transaction(db: Session, transaction_id: UUID, user: User) 
     return transaction
 
 
-def _user_asset_transactions_query(db: Session, user: User):
-    return (
-        db.query(AssetTransaction)
-        .join(Account, Account.id == AssetTransaction.account_id)
-        .options(joinedload(AssetTransaction.asset))
-        .filter(
-            Account.user_id == user.id,
-            Account.deleted_at.is_(None),
-            AssetTransaction.deleted_at.is_(None),
-        )
-    )
-
-
 def _current_quantity(
     db: Session, account_id: UUID, asset_id: UUID, exclude_transaction_id: UUID | None = None
 ) -> Decimal:
@@ -167,99 +157,6 @@ def _current_quantity(
     return total
 
 
-def _compute_holding_positions(db: Session, user: User) -> dict[tuple[UUID, UUID], dict]:
-    """
-    Aggregate every non-deleted AssetTransaction into a live position per
-    (account_id, asset_id) using weighted-average cost. Realized P&L on a
-    sell depends on the average cost of every prior buy, so — unlike every
-    other aggregation in this app — this has to be a sequential walk in
-    Python rather than a SQL GROUP BY.
-
-    `date` has day granularity (no time-of-day), so same-day buys and sells
-    tie on it — `created_at` alone isn't a safe tiebreaker either, since
-    requests issued in the same wall-clock instant (or the same DB
-    transaction, as in tests) can carry an identical timestamp. Explicitly
-    ordering buys before sells on a tied date is the only interpretation
-    that can't spuriously "sell" from a position that's still at zero.
-    """
-    buy_before_sell = case((AssetTransaction.type == "buy", 0), else_=1)
-    transactions = (
-        _user_asset_transactions_query(db, user)
-        .order_by(AssetTransaction.date, buy_before_sell, AssetTransaction.created_at)
-        .all()
-    )
-
-    positions: dict[tuple[UUID, UUID], dict] = {}
-    for tx in transactions:
-        key = (tx.account_id, tx.asset_id)
-        position = positions.setdefault(
-            key,
-            {
-                "account_id": tx.account_id,
-                "asset": tx.asset,
-                "quantity": Decimal("0"),
-                "cost_basis": Decimal("0"),
-                "realized_pnl": Decimal("0"),
-            },
-        )
-        quantity = Decimal(str(tx.quantity))
-        price = Decimal(str(tx.price))
-        fee = Decimal(str(tx.fee))
-
-        if tx.type == "buy":
-            position["cost_basis"] += quantity * price + fee
-            position["quantity"] += quantity
-        else:
-            held = position["quantity"]
-            avg_cost = position["cost_basis"] / held if held else Decimal("0")
-            position["realized_pnl"] += (price - avg_cost) * quantity - fee
-            position["cost_basis"] -= avg_cost * quantity
-            position["quantity"] -= quantity
-
-    return positions
-
-
-def _holdings_with_value(db: Session, user: User) -> list[HoldingWithValue]:
-    today = date_.today()
-    holdings = []
-
-    for (account_id, asset_id), position in _compute_holding_positions(db, user).items():
-        if position["quantity"] <= 0:
-            continue
-
-        asset = position["asset"]
-        quantity = position["quantity"]
-        avg_buy_price = position["cost_basis"] / quantity
-        price = asset_prices_service.get_price(db, asset, today)
-
-        market_value = quantity * price
-        market_value_base_currency = market_value * get_rate(
-            db, asset.currency, user.base_currency, today
-        )
-        cost_basis = position["cost_basis"]
-        unrealized_pnl = market_value - cost_basis
-        unrealized_pnl_percentage = float(unrealized_pnl / cost_basis * 100) if cost_basis else 0.0
-
-        holdings.append(
-            HoldingWithValue(
-                id=f"{account_id}:{asset_id}",
-                account_id=account_id,
-                asset=asset,
-                quantity=quantity,
-                avg_buy_price=avg_buy_price,
-                realized_pnl=position["realized_pnl"],
-                current_price=price,
-                price_date=today,
-                market_value=market_value,
-                market_value_base_currency=market_value_base_currency,
-                unrealized_pnl=unrealized_pnl,
-                unrealized_pnl_percentage=round(unrealized_pnl_percentage, 2),
-            )
-        )
-
-    return holdings
-
-
 def _sample_dates(start_date: date_, end_date: date_) -> list[date_]:
     """Daily points for a range up to ~3 months, weekly beyond that, always ending today."""
     span_days = (end_date - start_date).days
@@ -271,45 +168,6 @@ def _sample_dates(start_date: date_, end_date: date_) -> list[date_]:
     if dates[-1] != end_date:
         dates.append(end_date)
     return dates
-
-
-def _account_balances(db: Session, user: User) -> list[AccountBalance]:
-    accounts = (
-        db.query(Account)
-        .filter(Account.user_id == user.id, Account.deleted_at.is_(None))
-        .all()
-    )
-
-    rows = (
-        db.query(
-            Transaction.account_id,
-            func.sum(Transaction.amount).label("balance"),
-            func.sum(Transaction.amount_base_currency).label("balance_base_currency"),
-        )
-        .join(Account, Account.id == Transaction.account_id)
-        .filter(Account.user_id == user.id, Transaction.deleted_at.is_(None))
-        .group_by(Transaction.account_id)
-        .all()
-    )
-    balance_by_account: dict[UUID, tuple[Decimal, Decimal]] = {
-        row._mapping["account_id"]: (
-            Decimal(str(row._mapping["balance"])),
-            Decimal(str(row._mapping["balance_base_currency"])),
-        )
-        for row in rows
-    }
-    zero_balance = (Decimal("0"), Decimal("0"))
-
-    return [
-        AccountBalance(
-            account_id=account.id,
-            account_name=account.name,
-            currency=account.currency,
-            balance=balance_by_account.get(account.id, zero_balance)[0],
-            balance_base_currency=balance_by_account.get(account.id, zero_balance)[1],
-        )
-        for account in accounts
-    ]
 
 
 @router.get("/assets/search", response_model=list[AssetSearchResult])
@@ -326,7 +184,7 @@ def list_holdings(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[HoldingWithValue]:
-    return _holdings_with_value(db, current_user)
+    return holdings_with_value(db, current_user)
 
 
 @router.get("/transactions", response_model=list[AssetTransactionSchema])
@@ -336,7 +194,7 @@ def list_asset_transactions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[AssetTransaction]:
-    query = _user_asset_transactions_query(db, current_user)
+    query = user_asset_transactions_query(db, current_user)
     if account_id is not None:
         query = query.filter(AssetTransaction.account_id == account_id)
     if asset_id is not None:
@@ -559,7 +417,7 @@ def asset_transaction_import_confirm(
 
     selected = {r.row_number: r for r in preview.rows if r.row_number in payload.row_numbers}
     # Process buys before sells on a tied date, same reasoning as
-    # `_compute_holding_positions` — otherwise a same-day sell can look like
+    # `compute_holding_positions` — otherwise a same-day sell can look like
     # it's overdrawing a position a later-processed same-day buy would cover.
     ordered = sorted(selected.values(), key=lambda r: (r.date, r.type != "buy"))
 
@@ -630,8 +488,8 @@ def net_worth(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> NetWorthSummary:
-    accounts = _account_balances(db, current_user)
-    holdings = _holdings_with_value(db, current_user)
+    accounts = account_balances(db, current_user)
+    holdings = holdings_with_value(db, current_user)
 
     total_cash_balance = sum((a.balance_base_currency for a in accounts), Decimal("0"))
     total_holdings_value = sum((h.market_value_base_currency for h in holdings), Decimal("0"))
@@ -663,7 +521,7 @@ def portfolio_history(
     today = date_.today()
 
     asset_transactions = (
-        _user_asset_transactions_query(db, current_user).order_by(AssetTransaction.date).all()
+        user_asset_transactions_query(db, current_user).order_by(AssetTransaction.date).all()
     )
     cash_transactions = (
         db.query(Transaction)

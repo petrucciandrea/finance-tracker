@@ -64,10 +64,15 @@ def _mock_yahoo_finance(monkeypatch: pytest.MonkeyPatch) -> None:
 def _mock_get_rate(monkeypatch: pytest.MonkeyPatch) -> None:
     # Same-currency conversions still short-circuit to 1 inside the real
     # get_rate — only patch it where a test needs a specific foreign rate.
-    monkeypatch.setattr(
-        "app.routers.portfolio.get_rate",
-        lambda db, from_currency, to_currency, on_date: Decimal("1"),
-    )
+    #
+    # Two patch targets because monkeypatch binds to the import site, and
+    # there are two: the router converts a buy/sell's cash leg, while
+    # holding valuation moved into services/net_worth.py when the planning
+    # engine started needing the same balances.
+    for target in ("app.routers.portfolio.get_rate", "app.services.net_worth.get_rate"):
+        monkeypatch.setattr(
+            target, lambda db, from_currency, to_currency, on_date: Decimal("1")
+        )
 
 
 def _create_asset_transaction(
@@ -483,8 +488,9 @@ def test_net_worth_converts_foreign_currency_holdings(
     investment_account: dict,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Holding valuation, so the net_worth service is the import site here.
     monkeypatch.setattr(
-        "app.routers.portfolio.get_rate",
+        "app.services.net_worth.get_rate",
         lambda db, from_currency, to_currency, on_date: Decimal("0.90"),
     )
     headers = registered_user["auth_headers"]

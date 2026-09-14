@@ -59,6 +59,30 @@ class AllocationBucket(str, Enum):
     savings = "savings"
 
 
+class SavingsGoalKind(str, Enum):
+    emergency_fund = "emergency_fund"
+    medium_term = "medium_term"
+    long_term = "long_term"
+
+
+class TargetMode(str, Enum):
+    # Target = average monthly primary spend x target_months. Moves with
+    # the user's real cost of living instead of going stale.
+    months_of_primary_expenses = "months_of_primary_expenses"
+    fixed_amount = "fixed_amount"
+    # No target: absorbs whatever is left and ends the cascade. The PAC /
+    # pension rung at the bottom of the ladder.
+    open_ended = "open_ended"
+
+
+class WaterfallActionKind(str, Enum):
+    # A giroconto the backend can actually execute in phase D.
+    transfer = "transfer"
+    # Something to do by hand — no source account configured, mismatched
+    # currencies, or a rung with no account to transfer into.
+    advice = "advice"
+
+
 class TransactionType(str, Enum):
     expense = "expense"
     income = "income"
@@ -654,3 +678,89 @@ class SimulationResponse(BaseModel):
     # primary average — i.e. "if you made these cuts permanent". An
     # approximation, and labelled as one in the UI.
     simulated_survival_budget: Decimal | None = None
+
+
+# ---------------------------------------------------------------------------
+# Savings goals and the waterfall
+# ---------------------------------------------------------------------------
+
+class SavingsGoalCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    kind: SavingsGoalKind
+    priority: int = Field(ge=0)
+    target_mode: TargetMode
+    target_months: Decimal | None = Field(default=None, gt=0, max_digits=5, decimal_places=2)
+    target_amount: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=2)
+
+
+class SavingsGoalUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    priority: int | None = Field(default=None, ge=0)
+    target_mode: TargetMode | None = None
+    target_months: Decimal | None = Field(default=None, gt=0, max_digits=5, decimal_places=2)
+    target_amount: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=2)
+
+
+class SavingsGoalSource(ORMBase):
+    id: UUID
+    account_id: UUID
+
+
+class SavingsGoalSourceCreate(BaseModel):
+    account_id: UUID
+
+
+class SavingsGoal(ORMBase):
+    id: UUID
+    name: str
+    kind: SavingsGoalKind
+    priority: int
+    target_mode: TargetMode
+    target_months: Decimal | None = None
+    target_amount: Decimal | None = None
+    sources: list[SavingsGoalSource] = Field(default_factory=list)
+    deleted_at: datetime | None = None
+
+
+class WaterfallStep(BaseModel):
+    goal_id: UUID
+    name: str
+    kind: SavingsGoalKind
+    priority: int
+    target_mode: TargetMode
+    # None when the target can't be computed yet — a dynamic target needs
+    # at least one complete month of history. Such a rung is skipped, never
+    # treated as already funded, which would hand its quota to the next one
+    # down the ladder.
+    target_amount: Decimal | None = None
+    target_unavailable: bool = False
+    current_amount: Decimal
+    gap: Decimal
+    allocated_amount: Decimal
+    funding_percentage: float
+    is_funded: bool
+
+
+class WaterfallAction(BaseModel):
+    kind: WaterfallActionKind
+    goal_id: UUID
+    goal_name: str
+    amount: Decimal
+    currency: str
+    from_account_id: UUID | None = None
+    from_account_name: str | None = None
+    to_account_id: UUID | None = None
+    to_account_name: str | None = None
+    reason: str
+
+
+class WaterfallPlan(BaseModel):
+    base_currency: str
+    period_start: date_
+    period_end: date_
+    income_total: Decimal
+    savings_quota: Decimal
+    already_allocated: Decimal
+    steps: list[WaterfallStep]
+    unallocated_amount: Decimal
+    actions: list[WaterfallAction]

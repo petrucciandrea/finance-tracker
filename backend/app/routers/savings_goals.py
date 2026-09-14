@@ -17,7 +17,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, selectinload
 
 from app.deps import get_current_user, get_db
-from app.models import SavingsGoal, SavingsGoalSource, User
+from app.models import SavingsAllocation, SavingsGoal, SavingsGoalSource, Transaction, User
+from app.schemas import (
+    SavingsAllocation as SavingsAllocationSchema,
+)
 from app.schemas import (
     SavingsGoal as SavingsGoalSchema,
 )
@@ -26,13 +29,20 @@ from app.schemas import (
     SavingsGoalSourceCreate,
     SavingsGoalUpdate,
     TargetMode,
+    WaterfallExecuteRequest,
+    WaterfallExecuteResponse,
     WaterfallPlan,
 )
 from app.schemas import (
     SavingsGoalSource as SavingsGoalSourceSchema,
 )
+from app.schemas import (
+    Transaction as TransactionSchema,
+)
 from app.services import waterfall as waterfall_service
 from app.services.ownership import get_owned_account
+from app.services.periods import period_bounds
+from app.services.transfers import create_linked_transfer
 
 router = APIRouter(prefix="/api/v1/planning", tags=["planning"])
 
@@ -144,6 +154,119 @@ def waterfall(
     # Read-only: it computes suggestions but writes nothing. Executing them
     # is phase D's separate, explicit endpoint.
     return waterfall_service.compute_waterfall(db, current_user, on_date)
+
+
+@router.post("/waterfall/execute", response_model=WaterfallExecuteResponse)
+def execute_waterfall(
+    payload: WaterfallExecuteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> WaterfallExecuteResponse:
+    """
+    Materialise selected suggestions as giroconti.
+
+    The only endpoint in the planning engine that writes transactions, and
+    it only ever acts on what the user explicitly selected — the cascade is
+    never executed as a side effect of recording income.
+
+    Every item is re-validated rather than trusted: ownership of the goal
+    and the source account, a destination account still mapped to the goal,
+    and (inside `create_linked_transfer`) matching currencies and distinct
+    accounts. Everything commits once at the end, so a rejected item leaves
+    no half-executed batch behind.
+    """
+    on_date = payload.date or date_.today()
+    period_start, _ = period_bounds("monthly", on_date)
+
+    allocations: list[SavingsAllocation] = []
+    created: list[Transaction] = []
+
+    try:
+        _build_transfers(db, current_user, payload, on_date, period_start, allocations, created)
+    except HTTPException:
+        # The batch is all-or-nothing. Without this, a bad item late in the
+        # list would leave the earlier giroconti flushed and visible —
+        # money moved for a request the user was told had failed. Relying
+        # on session teardown to undo them is not a guarantee worth making.
+        db.rollback()
+        raise
+
+    db.commit()
+    for row in [*allocations, *created]:
+        db.refresh(row)
+
+    # Validated explicitly rather than handed the ORM rows: both schemas are
+    # from_attributes models, so this is what FastAPI would do anyway, and
+    # doing it here keeps the return type honest.
+    return WaterfallExecuteResponse(
+        allocations=[SavingsAllocationSchema.model_validate(a) for a in allocations],
+        transactions=[TransactionSchema.model_validate(t) for t in created],
+    )
+
+
+def _build_transfers(
+    db: Session,
+    current_user: User,
+    payload: WaterfallExecuteRequest,
+    on_date: date_,
+    period_start: date_,
+    allocations: list[SavingsAllocation],
+    created: list[Transaction],
+) -> None:
+    for item in payload.items:
+        goal = _get_owned_goal(db, item.goal_id, current_user)
+        from_account = get_owned_account(db, item.from_account_id, current_user)
+
+        destination_id = next(
+            (s.account_id for s in goal.sources if s.deleted_at is None), None
+        )
+        if destination_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Savings goal «{goal.name}» has no account to transfer into",
+            )
+        to_account = get_owned_account(db, destination_id, current_user)
+
+        outgoing, incoming = create_linked_transfer(
+            db,
+            current_user,
+            from_account=from_account,
+            to_account=to_account,
+            amount=item.amount,
+            on_date=on_date,
+            description=f"Risparmio: {goal.name}",
+        )
+
+        allocation = SavingsAllocation(
+            user_id=current_user.id,
+            goal_id=goal.id,
+            # The destination leg: the money arriving is what funds the goal.
+            transaction_id=incoming.id,
+            period_start=period_start,
+            amount_base_currency=abs(incoming.amount_base_currency),
+        )
+        db.add(allocation)
+        allocations.append(allocation)
+        created.extend([outgoing, incoming])
+
+
+@router.get("/waterfall/allocations", response_model=list[SavingsAllocationSchema])
+def list_allocations(
+    on_date: date_ = Query(default_factory=date_.today, alias="date"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[SavingsAllocation]:
+    period_start, _ = period_bounds("monthly", on_date)
+    return (
+        db.query(SavingsAllocation)
+        .filter(
+            SavingsAllocation.user_id == current_user.id,
+            SavingsAllocation.period_start == period_start,
+            SavingsAllocation.deleted_at.is_(None),
+        )
+        .order_by(SavingsAllocation.created_at)
+        .all()
+    )
 
 
 @router.get("/goals/{goal_id}", response_model=SavingsGoalSchema)

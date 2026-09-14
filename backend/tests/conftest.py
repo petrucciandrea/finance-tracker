@@ -9,6 +9,13 @@ Strategy:
   head; they never create or drop it.
 - Each test runs inside a DB transaction that's rolled back afterwards, so
   tests don't leak data into each other and don't need manual cleanup.
+- The session joins that transaction with `join_transaction_mode="create_savepoint"`,
+  so a `commit()` or `rollback()` inside a request handler acts on a
+  SAVEPOINT instead of the test's outer transaction. Without it the
+  handler's own transaction boundaries were invisible here: a rollback
+  would tear down the test's transaction, and a commit would look like a
+  no-op — which is precisely the blind spot that let a batch endpoint
+  leave half its rows behind unnoticed.
 - `client` overrides the app's `get_db` dependency to use that same
   per-test transaction, so requests made through the test client see
   exactly the data the test set up.
@@ -39,7 +46,13 @@ def engine():
 def db_session(engine) -> Generator[Session, None, None]:
     connection = engine.connect()
     transaction = connection.begin()
-    TestSessionLocal = sessionmaker(bind=connection, expire_on_commit=False)
+    TestSessionLocal = sessionmaker(
+        bind=connection,
+        expire_on_commit=False,
+        # Makes the handler's commits and rollbacks observable without
+        # letting them escape the test — see the module docstring.
+        join_transaction_mode="create_savepoint",
+    )
     session = TestSessionLocal()
 
     try:

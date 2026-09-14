@@ -6,6 +6,7 @@ import {
   useAddGoalSource,
   useCreateGoal,
   useDeleteGoal,
+  useExecuteWaterfall,
   useRemoveGoalSource,
   useSavingsGoals,
   useWaterfall,
@@ -93,9 +94,13 @@ function StepRow({
 function ActionRow({
   action,
   format,
+  selected,
+  onToggle,
 }: {
   action: WaterfallAction
   format: (amount: string | null) => string
+  selected: boolean
+  onToggle: () => void
 }) {
   const executable = action.kind === 'transfer'
 
@@ -106,7 +111,16 @@ function ActionRow({
       }`}
     >
       <div className="flex items-baseline justify-between gap-3">
-        <span className="font-medium text-slate-800">
+        {executable && (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggle}
+            aria-label={`Seleziona il giroconto verso ${action.goal_name}`}
+            className="mt-1 shrink-0 rounded border-slate-300 text-slate-800 focus:ring-slate-500"
+          />
+        )}
+        <span className="flex-1 font-medium text-slate-800">
           {executable ? (
             <>
               Gira {format(action.amount)} da {action.from_account_name} a{' '}
@@ -342,7 +356,48 @@ export function WaterfallSection({ format }: { format: (amount: string | null) =
   const { data: waterfall, isLoading } = useWaterfall()
   const { data: goals } = useSavingsGoals()
   const deleteGoal = useDeleteGoal()
+  const executeWaterfall = useExecuteWaterfall()
   const [isAdding, setIsAdding] = useState(false)
+  const [deselected, setDeselected] = useState<Set<string>>(new Set())
+  const [executeError, setExecuteError] = useState<string | null>(null)
+
+  const executableActions = (waterfall?.actions ?? []).filter((a) => a.kind === 'transfer')
+  // Selected by default — the suggestions are the point of the page, so
+  // acting on all of them is the common case and opting out is the
+  // exception. Tracking the exceptions keeps the set correct when the
+  // cascade is recomputed after a transfer lands.
+  const selected = new Set(
+    executableActions.map((a) => a.goal_id).filter((id) => !deselected.has(id)),
+  )
+
+  function toggle(goalId: string) {
+    setDeselected((current) => {
+      const next = new Set(current)
+      if (next.has(goalId)) next.delete(goalId)
+      else next.add(goalId)
+      return next
+    })
+  }
+
+  async function runExecute() {
+    setExecuteError(null)
+    const items = executableActions
+      .filter((a) => selected.has(a.goal_id))
+      .map((a) => ({
+        goal_id: a.goal_id,
+        from_account_id: a.from_account_id as string,
+        amount: a.amount,
+      }))
+    if (items.length === 0) return
+
+    try {
+      await executeWaterfall.mutateAsync({ items })
+      setDeselected(new Set())
+    } catch (e) {
+      // The backend applies the batch all-or-nothing, so nothing landed.
+      setExecuteError(apiMessage(e, 'Impossibile eseguire i giroconti.'))
+    }
+  }
 
   if (isLoading) return <p className="text-slate-500">Caricamento...</p>
 
@@ -352,6 +407,9 @@ export function WaterfallSection({ format }: { format: (amount: string | null) =
         <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
           <span className="text-slate-600">
             Quota risparmio: <strong>{format(waterfall.savings_quota)}</strong>
+          </span>
+          <span className="text-slate-600">
+            Già allocato: <strong>{format(waterfall.already_allocated)}</strong>
           </span>
           <span className="text-slate-600">
             Non allocato: <strong>{format(waterfall.unallocated_amount)}</strong>
@@ -372,9 +430,30 @@ export function WaterfallSection({ format }: { format: (amount: string | null) =
           <h3 className="mb-2 text-sm font-semibold text-slate-700">Azioni consigliate</h3>
           <ul className="space-y-2">
             {waterfall.actions.map((action) => (
-              <ActionRow key={action.goal_id} action={action} format={format} />
+              <ActionRow
+                key={action.goal_id}
+                action={action}
+                format={format}
+                selected={selected.has(action.goal_id)}
+                onToggle={() => toggle(action.goal_id)}
+              />
             ))}
           </ul>
+
+          {executableActions.length > 0 && (
+            <div className="mt-3 flex items-center gap-3">
+              <button
+                onClick={runExecute}
+                disabled={selected.size === 0 || executeWaterfall.isPending}
+                className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+              >
+                {executeWaterfall.isPending
+                  ? 'Esecuzione...'
+                  : `Esegui ${selected.size} giroconto${selected.size === 1 ? '' : 'i'}`}
+              </button>
+              {executeError && <p className="text-sm text-red-600">{executeError}</p>}
+            </div>
+          )}
         </div>
       )}
 

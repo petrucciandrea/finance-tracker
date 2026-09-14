@@ -283,6 +283,9 @@ class Transaction(ORMBase):
     type: TransactionType
     source: TransactionSource
     necessity_level_override: NecessityLevel | None = None
+    # The other leg of a giroconto, when there is one. Null on every
+    # opening balance and portfolio cash leg — read it as "may have".
+    counterpart_transaction_id: UUID | None = None
     created_at: datetime
     deleted_at: datetime | None = None
 
@@ -764,3 +767,37 @@ class WaterfallPlan(BaseModel):
     steps: list[WaterfallStep]
     unallocated_amount: Decimal
     actions: list[WaterfallAction]
+
+
+class WaterfallExecutionItem(BaseModel):
+    goal_id: UUID
+    from_account_id: UUID
+    amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
+
+
+class WaterfallExecuteRequest(BaseModel):
+    """
+    The client sends back the actions it displayed, with explicit amounts.
+
+    Deliberately not opaque action ids: those would need an ephemeral
+    server-side store with a TTL, and the CSV import already has one of
+    those documented as the thing blocking a second backend replica. Every
+    field is re-validated server-side, so echoing them back is safe.
+    """
+
+    date: date_ | None = None
+    items: list[WaterfallExecutionItem] = Field(min_length=1)
+
+
+class SavingsAllocation(ORMBase):
+    id: UUID
+    goal_id: UUID
+    transaction_id: UUID
+    period_start: date_
+    amount_base_currency: Decimal
+    created_at: datetime
+
+
+class WaterfallExecuteResponse(BaseModel):
+    allocations: list[SavingsAllocation]
+    transactions: list["Transaction"]

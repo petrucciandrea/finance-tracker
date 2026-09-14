@@ -67,6 +67,20 @@ def create_account(
             detail=f"Unknown currency code: {payload.currency}",
         )
 
+    # Resolve the rate BEFORE writing anything. `get_rate` can fail, and an
+    # unresolvable rate must leave no trace of a half-created account —
+    # which the previous ordering (add + flush, then get_rate) could not
+    # guarantee back when the service committed the caller's session.
+    rate = None
+    if payload.starting_balance:
+        try:
+            rate = get_rate(db, payload.currency, current_user.base_currency, date_.today())
+        except ExchangeRateUnavailable as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+
     account = Account(
         user_id=current_user.id,
         name=payload.name,
@@ -81,14 +95,6 @@ def create_account(
         # transfer, an opening balance isn't a categorizable spend/income,
         # so it's exempt from the "no category -> Varie" rule and never
         # counts toward a budget's spend.
-        try:
-            rate = get_rate(db, account.currency, current_user.base_currency, date_.today())
-        except ExchangeRateUnavailable as exc:
-            db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-            ) from exc
-
         db.add(
             Transaction(
                 account_id=account.id,

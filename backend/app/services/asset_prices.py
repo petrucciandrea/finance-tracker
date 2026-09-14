@@ -71,7 +71,9 @@ def get_price(db: Session, asset: Asset, on_date: date_) -> Decimal:
         source = "yahoo_finance"
 
     db.add(AssetPrice(asset_id=asset.id, price=price, date=on_date, source=source))
-    db.commit()
+    # Not commit(): the caller owns the transaction — see
+    # services/exchange_rates.py's module docstring for why.
+    db.flush()
 
     return price
 
@@ -125,7 +127,7 @@ def get_price_history(
             .on_conflict_do_nothing(index_elements=["asset_id", "date"])
         )
         db.execute(stmt)
-        db.commit()
+        db.flush()
 
     cached.update(fetched)
     return {d: p for d, p in cached.items() if start_date <= d <= end_date}

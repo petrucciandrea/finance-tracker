@@ -249,6 +249,7 @@ export interface BudgetUpdatePayload {
 }
 
 export interface BudgetStatus {
+  budget_id: string
   category_id: string
   category_name: string
   period: BudgetPeriod

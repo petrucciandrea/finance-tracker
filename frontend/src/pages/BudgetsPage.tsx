@@ -78,7 +78,9 @@ export function BudgetsPage() {
     await deleteBudget.mutateAsync(id)
   }
 
-  const statusByCategory = new Map((statusList ?? []).map((s) => [s.category_id, s]))
+  // Keyed by budget_id, not category_id: a category can hold both a monthly
+  // and a yearly budget, so category alone doesn't identify a status row.
+  const statusByBudget = new Map((statusList ?? []).map((s) => [s.budget_id, s]))
 
   return (
     <div className="space-y-6">
@@ -186,7 +188,7 @@ export function BudgetsPage() {
         {budgets && budgets.length > 0 && (
           <ul className="divide-y divide-slate-100">
             {budgets.map((budget) => {
-              const status = statusByCategory.get(budget.category_id)
+              const status = statusByBudget.get(budget.id)
               const categoryName = status?.category_name ?? '—'
               return (
                 <li key={budget.id} className="px-6 py-4">

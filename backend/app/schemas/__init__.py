@@ -359,6 +359,10 @@ class Budget(ORMBase):
 
 
 class BudgetStatus(BaseModel):
+    # Lets the client tie a status row back to the budget it came from —
+    # previously it could only join on category_id, which was ambiguous
+    # while two budgets could share one.
+    budget_id: UUID
     category_id: UUID
     category_name: str
     period: BudgetPeriod

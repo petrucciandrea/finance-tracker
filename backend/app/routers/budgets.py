@@ -4,6 +4,13 @@ that computes spent-vs-limit for whichever period (month or year) contains
 a given date — defaults to today (current period), but passing any past
 date returns historical status for that period, so one endpoint covers
 both "how am I doing this month" and "how did I do in July".
+
+A budget on a parent category includes its subcategories' spend. The
+alternative — matching the exact category_id — meant a budget on "Casa"
+reported zero while every euro was filed under "Affitto", and disagreed
+with the planning engine, which resolves necessity through the same
+parent/child chain. Nesting is capped at two levels, so one level of
+roll-up covers the whole hierarchy.
 """
 
 from datetime import date as date_
@@ -12,11 +19,11 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func, or_
+from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.deps import get_current_user, get_db
-from app.models import Budget, Category, Transaction, User
+from app.models import Account, Budget, Category, Transaction, User
 from app.schemas import (
     Budget as BudgetSchema,
     BudgetCreate,
@@ -77,6 +84,24 @@ def create_budget(
             detail="Budgets can only be set on expense categories",
         )
 
+    existing = (
+        db.query(Budget)
+        .filter(
+            Budget.user_id == current_user.id,
+            Budget.category_id == payload.category_id,
+            Budget.period == payload.period.value,
+            Budget.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if existing is not None:
+        # Enforced by a partial unique index too; checking here turns an
+        # IntegrityError-shaped 500 into a 409 that says what happened.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A budget already exists for this category and period",
+        )
+
     budget = Budget(
         user_id=current_user.id,
         category_id=payload.category_id,
@@ -107,29 +132,67 @@ def budgets_status(
         .all()
     )
 
-    results: list[BudgetStatus] = []
+    if not budgets:
+        return []
+
+    # One aggregate for every budget rather than a query per budget. The
+    # window differs per budget (period, and a start_date that can fall
+    # mid-period), so spend is grouped by budget category and date, then
+    # summed per budget in Python over a handful of rows.
+    windows = {}
     for budget in budgets:
         period_start, period_end = period_bounds(budget.period, on_date)
         # A budget's start_date can fall mid-period (e.g. created on the
         # 10th of the month) — only count spend from start_date onward,
         # never before the budget existed.
-        effective_start = max(period_start, budget.start_date)
+        windows[budget.id] = (max(period_start, budget.start_date), period_end)
 
-        spent = (
-            db.query(func.coalesce(func.sum(Transaction.amount_base_currency), 0))
-            .join(Category, Category.id == Transaction.category_id)
-            .filter(
-                Transaction.category_id == budget.category_id,
-                Transaction.type == "expense",
-                Transaction.deleted_at.is_(None),
-                Transaction.date >= effective_start,
-                Transaction.date <= period_end,
-            )
-            .scalar()
+    earliest = min(start for start, _ in windows.values())
+    latest = max(end for _, end in windows.values())
+    budget_category_ids = {budget.category_id for budget in budgets}
+
+    # A transaction counts toward a budget if it is filed on the budget's
+    # own category, or on one of that category's children. `parent_id` is
+    # the roll-up key; the two-level nesting cap means no deeper walk.
+    category = aliased(Category)
+    rows = (
+        db.query(
+            func.coalesce(category.parent_id, category.id).label("budget_category_id"),
+            Transaction.date.label("date"),
+            func.sum(Transaction.amount_base_currency).label("total"),
+        )
+        .join(Account, Account.id == Transaction.account_id)
+        .join(category, category.id == Transaction.category_id)
+        .filter(
+            Account.user_id == current_user.id,
+            Transaction.type == "expense",
+            Transaction.deleted_at.is_(None),
+            Transaction.date >= earliest,
+            Transaction.date <= latest,
+            or_(
+                category.id.in_(budget_category_ids),
+                category.parent_id.in_(budget_category_ids),
+            ),
+        )
+        .group_by(func.coalesce(category.parent_id, category.id), Transaction.date)
+        .all()
+    )
+
+    results: list[BudgetStatus] = []
+    for budget in budgets:
+        window_start, window_end = windows[budget.id]
+        total = sum(
+            (
+                Decimal(str(row._mapping["total"]))
+                for row in rows
+                if row._mapping["budget_category_id"] == budget.category_id
+                and window_start <= row._mapping["date"] <= window_end
+            ),
+            Decimal("0"),
         )
         # Expenses are stored negative; a positive "amount spent" is more
         # intuitive to compare against a positive amount_limit.
-        amount_spent = -Decimal(str(spent))
+        amount_spent = -total
 
         percentage_used = (
             float(amount_spent / budget.amount_limit * 100) if budget.amount_limit else 0.0
@@ -137,6 +200,7 @@ def budgets_status(
 
         results.append(
             BudgetStatus(
+                budget_id=budget.id,
                 category_id=budget.category_id,
                 category_name=budget.category.name,
                 period=budget.period,

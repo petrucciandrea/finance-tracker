@@ -55,6 +55,48 @@ def _validate_parent(db: Session, parent_id: UUID | None, user: User, category_t
         )
 
 
+def _validate_necessity_fields(
+    category_type: str,
+    necessity_level: object,
+    excluded_from_income_base: object,
+    *,
+    necessity_provided: bool,
+    exclusion_provided: bool,
+) -> None:
+    """
+    The two planning fields belong to opposite halves of the taxonomy and
+    are rejected on the wrong one rather than silently ignored.
+
+    `necessity_level` answers "how essential is this spend", so it only
+    means something on an expense category — same rule as "budgets only on
+    expense categories". `excluded_from_income_base` answers "does this
+    count as income for the allocation model", so it only means something
+    on an income category.
+
+    Clearing `necessity_level` back to NULL is legitimate (it means
+    "unclassified"), so only a non-null value on the wrong type is an
+    error. `excluded_from_income_base` is NOT NULL in the database, so an
+    explicit null is rejected instead of being quietly dropped.
+    """
+    if necessity_provided and necessity_level is not None and category_type != "expense":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="necessity_level can only be set on expense categories",
+        )
+
+    if exclusion_provided:
+        if excluded_from_income_base is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="excluded_from_income_base cannot be null",
+            )
+        if excluded_from_income_base and category_type != "income":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="excluded_from_income_base can only be set on income categories",
+            )
+
+
 def _has_active_children(db: Session, category_id: UUID) -> bool:
     return (
         db.query(Category)
@@ -86,12 +128,23 @@ def create_category(
     current_user: User = Depends(get_current_user),
 ) -> Category:
     _validate_parent(db, payload.parent_id, current_user, payload.type.value)
+    _validate_necessity_fields(
+        payload.type.value,
+        payload.necessity_level,
+        payload.excluded_from_income_base,
+        necessity_provided=True,
+        exclusion_provided=True,
+    )
 
     category = Category(
         user_id=current_user.id,
         name=payload.name,
         type=payload.type.value,
         parent_id=payload.parent_id,
+        necessity_level=(
+            payload.necessity_level.value if payload.necessity_level is not None else None
+        ),
+        excluded_from_income_base=payload.excluded_from_income_base,
     )
     db.add(category)
     db.commit()
@@ -127,8 +180,18 @@ def update_category(
             )
         _validate_parent(db, new_parent_id, current_user, category.type)
 
+    _validate_necessity_fields(
+        category.type,
+        update_data.get("necessity_level"),
+        update_data.get("excluded_from_income_base"),
+        necessity_provided="necessity_level" in update_data,
+        exclusion_provided="excluded_from_income_base" in update_data,
+    )
+
     for field, value in update_data.items():
-        setattr(category, field, value)
+        # `necessity_level` arrives as an enum member; store its string value
+        # like `type` does on create.
+        setattr(category, field, value.value if hasattr(value, "value") else value)
 
     db.commit()
     db.refresh(category)

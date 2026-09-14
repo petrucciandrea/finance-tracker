@@ -7,12 +7,93 @@ import {
   useDeleteCategory,
   useUpdateCategory,
 } from '@/hooks/useCategories'
-import type { Category, CategoryType } from '@/types'
+import type { Category, CategoryType, NecessityLevel } from '@/types'
 
 const TYPE_LABELS: Record<CategoryType, string> = {
   expense: 'Spese',
   income: 'Entrate',
   transfer: 'Trasferimenti',
+}
+
+const NECESSITY_LABELS: Record<NecessityLevel, string> = {
+  primary: 'Primario',
+  useful: 'Utile',
+  discretionary: 'Accessorio',
+}
+
+// Inherited level of a subcategory: its own if set, otherwise its parent's.
+// Mirrors the backend's COALESCE chain so the "Eredita" option can name the
+// level the user will actually get.
+function inheritedLevel(category: Category, categories: Category[]): NecessityLevel | null {
+  if (category.necessity_level) return category.necessity_level
+  if (!category.parent_id) return null
+  return categories.find((c) => c.id === category.parent_id)?.necessity_level ?? null
+}
+
+// A <select> inside a draggable <li> would start a drag on mousedown, so the
+// wrapper cancels it — the row stays draggable by its name and grip handle.
+function NecessitySelect({
+  category,
+  categories,
+  onChange,
+  disabled,
+}: {
+  category: Category
+  categories: Category[]
+  onChange: (level: NecessityLevel | null) => void
+  disabled: boolean
+}) {
+  const inherited = category.parent_id ? inheritedLevel(category, categories) : null
+  const emptyLabel =
+    category.parent_id && inherited
+      ? `Eredita (${NECESSITY_LABELS[inherited]})`
+      : 'Non classificato'
+
+  return (
+    <span draggable={false} onDragStart={(e) => e.preventDefault()}>
+      <select
+        value={category.necessity_level ?? ''}
+        disabled={disabled}
+        onChange={(e) => onChange((e.target.value || null) as NecessityLevel | null)}
+        aria-label={`Livello di necessità di ${category.name}`}
+        title="Livello di necessità"
+        className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600 focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500 disabled:opacity-50"
+      >
+        <option value="">{emptyLabel}</option>
+        {(Object.keys(NECESSITY_LABELS) as NecessityLevel[]).map((level) => (
+          <option key={level} value={level}>
+            {NECESSITY_LABELS[level]}
+          </option>
+        ))}
+      </select>
+    </span>
+  )
+}
+
+function IncomeBaseToggle({
+  category,
+  onChange,
+  disabled,
+}: {
+  category: Category
+  onChange: (excluded: boolean) => void
+  disabled: boolean
+}) {
+  return (
+    <label
+      className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500"
+      title="Le entrate di questa categoria non contano nella base di calcolo del piano (es. rimborsi, storni)"
+    >
+      <input
+        type="checkbox"
+        checked={category.excluded_from_income_base}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        className="rounded border-slate-300 text-slate-800 focus:ring-slate-500"
+      />
+      Esclusa dal reddito
+    </label>
+  )
 }
 
 // A subcategory drag carries its id under a type-specific MIME key, so a
@@ -70,6 +151,14 @@ function CategoryTypeSection({ type, categories }: { type: CategoryType; categor
     if (!editingName.trim()) return
     await updateCategory.mutateAsync({ id, payload: { name: editingName.trim() } })
     setEditingId(null)
+  }
+
+  async function handleNecessityChange(id: string, level: NecessityLevel | null) {
+    await updateCategory.mutateAsync({ id, payload: { necessity_level: level } })
+  }
+
+  async function handleIncomeBaseChange(id: string, excluded: boolean) {
+    await updateCategory.mutateAsync({ id, payload: { excluded_from_income_base: excluded } })
   }
 
   async function handleMove(childId: string, newParentId: string) {
@@ -196,7 +285,24 @@ function CategoryTypeSection({ type, categories }: { type: CategoryType; categor
                     </button>
                   </div>
                 ) : (
-                  <p className="text-sm font-medium text-slate-800">{root.name}</p>
+                  <p className="flex-1 text-sm font-medium text-slate-800">{root.name}</p>
+                )}
+
+                {editingId !== root.id && type === 'expense' && (
+                  <NecessitySelect
+                    category={root}
+                    categories={categories}
+                    disabled={updateCategory.isPending}
+                    onChange={(level) => handleNecessityChange(root.id, level)}
+                  />
+                )}
+
+                {editingId !== root.id && type === 'income' && (
+                  <IncomeBaseToggle
+                    category={root}
+                    disabled={updateCategory.isPending}
+                    onChange={(excluded) => handleIncomeBaseChange(root.id, excluded)}
+                  />
                 )}
 
                 {editingId !== root.id && (
@@ -280,10 +386,27 @@ function CategoryTypeSection({ type, categories }: { type: CategoryType; categor
                           </button>
                         </div>
                       ) : (
-                        <span className="flex items-center gap-1.5 text-sm text-slate-700">
+                        <span className="flex flex-1 items-center gap-1.5 text-sm text-slate-700">
                           <GripVerticalIcon className="h-3.5 w-3.5 shrink-0 text-slate-300" />
                           {child.name}
                         </span>
+                      )}
+
+                      {editingId !== child.id && type === 'expense' && (
+                        <NecessitySelect
+                          category={child}
+                          categories={categories}
+                          disabled={updateCategory.isPending}
+                          onChange={(level) => handleNecessityChange(child.id, level)}
+                        />
+                      )}
+
+                      {editingId !== child.id && type === 'income' && (
+                        <IncomeBaseToggle
+                          category={child}
+                          disabled={updateCategory.isPending}
+                          onChange={(excluded) => handleIncomeBaseChange(child.id, excluded)}
+                        />
                       )}
 
                       {editingId !== child.id && (

@@ -11,7 +11,7 @@ import {
   useDeleteTransaction,
   useTransactionsList,
 } from '@/hooks/useTransactions'
-import type { Category, TransactionType } from '@/types'
+import type { Category, NecessityLevel, Transaction, TransactionType } from '@/types'
 
 type PanelMode = 'none' | 'form' | 'import'
 
@@ -45,6 +45,36 @@ function buildCategoryOptions(categories: Category[] | undefined, type: Transact
   })
 }
 
+const NECESSITY_LABELS: Record<NecessityLevel, string> = {
+  primary: 'Primario',
+  useful: 'Utile',
+  discretionary: 'Accessorio',
+}
+
+// Mirrors the backend's COALESCE(override, category, parent) so the list can
+// show the level that actually applies, and mark whether it came from an
+// override or was inherited.
+function effectiveNecessity(
+  transaction: Transaction,
+  category: Category | undefined,
+  categories: Category[] | undefined,
+): { level: NecessityLevel; isOverride: boolean } | null {
+  if (transaction.type !== 'expense') return null
+  if (transaction.necessity_level_override) {
+    return { level: transaction.necessity_level_override, isOverride: true }
+  }
+  if (category?.necessity_level) {
+    return { level: category.necessity_level, isOverride: false }
+  }
+  const parent = category?.parent_id
+    ? categories?.find((c) => c.id === category.parent_id)
+    : undefined
+  if (parent?.necessity_level) {
+    return { level: parent.necessity_level, isOverride: false }
+  }
+  return null
+}
+
 const transactionSchema = z.object({
   account_id: z.string().min(1, 'Seleziona un conto'),
   category_id: z.string().optional(),
@@ -56,6 +86,9 @@ const transactionSchema = z.object({
   date: z.string().min(1, 'Data obbligatoria'),
   description: z.string().optional(),
   type: z.enum(['expense', 'income', 'transfer']),
+  // Expense only — the backend 422s an override on income/transfer, since a
+  // necessity level has no meaning there.
+  necessity_level_override: z.enum(['primary', 'useful', 'discretionary']).or(z.literal('')).optional(),
 })
 
 type TransactionFormValues = z.infer<typeof transactionSchema>
@@ -116,6 +149,10 @@ export function TransactionsPage() {
       date: values.date,
       description: values.description || null,
       type: values.type,
+      necessity_level_override:
+        values.type === 'expense' && values.necessity_level_override
+          ? values.necessity_level_override
+          : null,
     })
     reset({
       type: 'expense',
@@ -125,6 +162,7 @@ export function TransactionsPage() {
       category_id: '',
       amount: '',
       description: '',
+      necessity_level_override: '',
     })
     setPanel('none')
   }
@@ -267,6 +305,32 @@ export function TransactionsPage() {
             {errors.date && <p className="mt-1 text-sm text-red-600">{errors.date.message}</p>}
           </div>
 
+          {selectedType === 'expense' && (
+            <div className="sm:col-span-3">
+              <label
+                htmlFor="necessity_level_override"
+                className="block text-sm font-medium text-slate-700"
+              >
+                Livello di necessità (opzionale)
+              </label>
+              <select
+                id="necessity_level_override"
+                {...register('necessity_level_override')}
+                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+              >
+                <option value="">Eredita dalla categoria</option>
+                {(Object.keys(NECESSITY_LABELS) as NecessityLevel[]).map((level) => (
+                  <option key={level} value={level}>
+                    {NECESSITY_LABELS[level]}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-slate-400">
+                Usalo solo per le eccezioni — ad esempio una cena di lavoro sotto "Ristoranti".
+              </p>
+            </div>
+          )}
+
           <div className="sm:col-span-3">
             <label htmlFor="description" className="block text-sm font-medium text-slate-700">
               Descrizione (opzionale)
@@ -322,6 +386,7 @@ export function TransactionsPage() {
             {transactionsData.data.map((t) => {
               const category = categories?.find((c) => c.id === t.category_id)
               const account = accounts?.find((a) => a.id === t.account_id)
+              const necessity = effectiveNecessity(t, category, categories)
               return (
                 <li key={t.id} className="flex items-center justify-between px-6 py-4">
                   <div>
@@ -332,6 +397,22 @@ export function TransactionsPage() {
                       {t.date} · {account?.name ?? 'Conto eliminato'}
                       {category && ` · ${category.name}`}
                     </p>
+                    {necessity && (
+                      <span
+                        className={`mt-1 inline-block rounded px-1.5 py-0.5 text-[11px] ${
+                          necessity.isOverride
+                            ? 'bg-slate-800 text-white'
+                            : 'bg-slate-100 text-slate-500'
+                        }`}
+                        title={
+                          necessity.isOverride
+                            ? 'Livello impostato su questa transazione'
+                            : 'Livello ereditato dalla categoria'
+                        }
+                      >
+                        {NECESSITY_LABELS[necessity.level]}
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-4">
                     <p

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { TransactionImport } from '@/components/transactions/TransactionImport'
@@ -120,7 +120,7 @@ export function TransactionsPage() {
     register,
     handleSubmit,
     reset,
-    watch,
+    control,
     formState: { errors, isSubmitting },
   } = useForm<TransactionFormValues>({
     resolver: zodResolver(transactionSchema),
@@ -131,7 +131,8 @@ export function TransactionsPage() {
     },
   })
 
-  const selectedType = watch('type')
+  // useWatch, not watch(): watch() opts this component out of React Compiler memoization.
+  const selectedType = useWatch({ control, name: 'type' })
   const categoryOptions = buildCategoryOptions(categories, selectedType)
 
   async function onSubmit(values: TransactionFormValues) {

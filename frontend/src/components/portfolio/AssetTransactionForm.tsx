@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { isAxiosError } from 'axios'
@@ -49,7 +49,7 @@ export function AssetTransactionForm({ onDone }: { onDone: () => void }) {
     register,
     handleSubmit,
     reset,
-    watch,
+    control,
     setValue,
     formState: { errors, isSubmitting },
   } = useForm<AssetTransactionFormValues>({
@@ -61,10 +61,12 @@ export function AssetTransactionForm({ onDone }: { onDone: () => void }) {
     },
   })
 
-  const selectedAccountId = watch('account_id')
-  const selectedAssetType = watch('asset_type')
-  const selectedType = watch('type')
-  const symbolQuery = watch('symbol') ?? ''
+  // useWatch rather than watch(): watch() opts the whole component out of
+  // React Compiler memoization (react-hooks/incompatible-library).
+  const selectedAccountId = useWatch({ control, name: 'account_id' })
+  const selectedAssetType = useWatch({ control, name: 'asset_type' })
+  const selectedType = useWatch({ control, name: 'type' })
+  const symbolQuery = useWatch({ control, name: 'symbol' }) ?? ''
   const { data: searchResults } = useSearchAssets(symbolQuery, selectedAssetType)
 
   // Holdings only make sense on investment/crypto accounts — the backend

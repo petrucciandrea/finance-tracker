@@ -6,20 +6,27 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+import bcrypt
 from jose import jwt
-from passlib.context import CryptContext
 
 from app.core.config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# bcrypt only reads the first 72 bytes. passlib truncated silently, so every
+# stored hash was made from the truncated prefix; bcrypt>=5 raises instead.
+# Truncating here keeps those hashes verifiable and long passwords a non-error.
+_BCRYPT_MAX_BYTES = 72
+
+
+def _bcrypt_input(password: str) -> bytes:
+    return password.encode("utf-8")[:_BCRYPT_MAX_BYTES]
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(_bcrypt_input(password), bcrypt.gensalt()).decode("ascii")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    return bcrypt.checkpw(_bcrypt_input(plain_password), hashed_password.encode("ascii"))
 
 
 def _create_token(subject: UUID, expires_delta: timedelta, token_type: str) -> str:

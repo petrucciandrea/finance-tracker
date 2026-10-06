@@ -56,6 +56,19 @@ def test_login_with_wrong_password_returns_401(client: TestClient, registered_us
     assert response.status_code == 401
 
 
+def test_password_longer_than_bcrypt_limit_registers_and_logs_in(client: TestClient) -> None:
+    # bcrypt>=5 raises on input over 72 bytes; security.py truncates first,
+    # as passlib did, so this must stay a normal register/login, not a 500.
+    password = "ü" * 50  # 100 bytes in UTF-8
+    credentials = {"email": "long.password@example.com", "password": password}
+
+    register = client.post("/api/v1/auth/register", json={**credentials, "base_currency": "EUR"})
+    login = client.post("/api/v1/auth/login", json=credentials)
+
+    assert register.status_code == 201
+    assert login.status_code == 200
+
+
 def test_login_with_unknown_email_returns_same_401_as_wrong_password(client: TestClient) -> None:
     # Same status/detail as a wrong password — asserts we don't leak whether
     # the email exists (see auth_router's comment on this).

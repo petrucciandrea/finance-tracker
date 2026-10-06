@@ -37,9 +37,6 @@ export function AppLayout() {
             <NavLink to="/categories" className={navLinkClass}>
               Categorie
             </NavLink>
-            <NavLink to="/budgets" className={navLinkClass}>
-              Budget
-            </NavLink>
             <NavLink to="/planning" className={navLinkClass}>
               Piano
             </NavLink>

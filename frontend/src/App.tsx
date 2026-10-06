@@ -7,7 +7,6 @@ import { RegisterPage } from '@/pages/RegisterPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { AccountsPage } from '@/pages/AccountsPage'
 import { CategoriesPage } from '@/pages/CategoriesPage'
-import { BudgetsPage } from '@/pages/BudgetsPage'
 import { PlanningPage } from '@/pages/PlanningPage'
 import { PortfolioPage } from '@/pages/PortfolioPage'
 import { TransactionsPage } from '@/pages/TransactionsPage'
@@ -26,8 +25,10 @@ function App() {
             <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/transactions" element={<TransactionsPage />} />
             <Route path="/categories" element={<CategoriesPage />} />
-            <Route path="/budgets" element={<BudgetsPage />} />
-          <Route path="/planning" element={<PlanningPage />} />
+            {/* Budgets are archived: no route and no nav link, but the page,
+                its hooks/API client and the backend endpoints are untouched.
+                Re-enable by restoring the import + <Route path="/budgets">. */}
+            <Route path="/planning" element={<PlanningPage />} />
             <Route path="/portfolio" element={<PortfolioPage />} />
             <Route path="/profile" element={<ProfilePage />} />
           </Route>

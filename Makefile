@@ -37,15 +37,11 @@ test-cov:
 migrate:
 	docker compose exec backend alembic upgrade head
 
-# db_test has no persistent volume by design (always starts empty) — run
-# this after any restart/rebuild that recreates the db_test container,
-# before running the test suite.
+# Applies migrations to db_test. Its data lives in a named volume, so this
+# is usually a no-op; `make test` runs it first as a safety net.
 migrate-test:
 	docker compose exec -e DATABASE_URL=postgresql+psycopg://postgres:postgres@db_test:5432/finance_tracker_test backend alembic upgrade head
 
-# Use this when the test DB is in a broken/inconsistent state (e.g. it
-# thinks it's fully migrated but tables are missing) or you just want a
-# guaranteed-clean slate. Wipes the named volume entirely.
 # Use this when the test DB is in a broken/inconsistent state (e.g. it
 # thinks it's fully migrated but tables are missing) or you just want a
 # guaranteed-clean slate. Wipes db_test's volume entirely.

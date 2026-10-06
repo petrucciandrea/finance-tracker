@@ -5,22 +5,11 @@
  * a new one before rendering protected routes).
  */
 
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import * as authApi from '@/api/auth'
 import { getStoredRefreshToken, setAccessToken, setStoredRefreshToken } from '@/api/client'
+import { AuthContext } from '@/context/auth'
 import type { LoginPayload, PasswordChangePayload, RegisterPayload, User, UserUpdatePayload } from '@/types'
-
-interface AuthContextValue {
-  user: User | null
-  isLoading: boolean // true only during the initial bootstrap, not during login/register calls
-  login: (payload: LoginPayload) => Promise<void>
-  register: (payload: RegisterPayload) => Promise<void>
-  logout: () => Promise<void>
-  updateProfile: (payload: UserUpdatePayload) => Promise<void>
-  changePassword: (payload: PasswordChangePayload) => Promise<void>
-}
-
-const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
@@ -110,10 +99,3 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 }
 
-export function useAuth(): AuthContextValue {
-  const context = useContext(AuthContext)
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider')
-  }
-  return context
-}

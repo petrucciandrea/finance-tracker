@@ -46,6 +46,10 @@ export function setStoredRefreshToken(token: string | null) {
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
+  // Arrays as repeated keys (group_by=category&group_by=month). Axios's
+  // default "group_by[]=…" is a different key to FastAPI, which then
+  // silently ignores the parameter.
+  paramsSerializer: { indexes: null },
 })
 
 apiClient.interceptors.request.use((config) => {

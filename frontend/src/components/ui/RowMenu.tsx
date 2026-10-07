@@ -16,7 +16,7 @@ export interface RowMenuItem {
  * live inside `overflow-x-auto` tables that would clip an absolute popup.
  */
 export function RowMenu({ label, items }: { label: string; items: RowMenuItem[] }) {
-  const [position, setPosition] = useState<{ top: number; right: number } | null>(null)
+  const [position, setPosition] = useState<{ top?: number; bottom?: number; right: number } | null>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
   const menuId = useId()
@@ -25,7 +25,15 @@ export function RowMenu({ label, items }: { label: string; items: RowMenuItem[] 
   function openMenu() {
     const rect = buttonRef.current?.getBoundingClientRect()
     if (!rect) return
-    setPosition({ top: rect.bottom + 4, right: window.innerWidth - rect.right })
+    const right = window.innerWidth - rect.right
+    // Fixed, so it can't be scrolled to: open upwards when the list (44px per
+    // item plus padding) wouldn't fit under a row near the bottom edge.
+    const height = items.length * 44 + 16
+    if (rect.bottom + 4 + height > window.innerHeight && rect.top - 4 - height > 0) {
+      setPosition({ bottom: window.innerHeight - rect.top + 4, right })
+    } else {
+      setPosition({ top: rect.bottom + 4, right })
+    }
   }
 
   function close(returnFocus = true) {
@@ -91,7 +99,7 @@ export function RowMenu({ label, items }: { label: string; items: RowMenuItem[] 
           role="menu"
           aria-label={label}
           onKeyDown={onKeyDown}
-          style={{ top: position.top, right: position.right }}
+          style={position}
           className="fixed z-50 min-w-[200px] rounded-[14px] border border-line bg-card p-1.5 shadow-[0_12px_32px_rgba(0,0,0,0.18)]"
         >
           {items.map((item) => (

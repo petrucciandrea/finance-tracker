@@ -37,10 +37,11 @@ export function useTransactionSummary(params: TransactionSummaryParams) {
   })
 }
 
-export function useTransactionsList(params: TransactionListParams) {
+export function useTransactionsList(params: TransactionListParams, enabled = true) {
   return useQuery({
     queryKey: [...TRANSACTIONS_KEY, 'list', params],
     queryFn: () => transactionsApi.listTransactions(params),
+    enabled,
   })
 }
 

@@ -1,450 +1,554 @@
-import { useState } from 'react'
-import { useForm, useWatch } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
+import { useState, type ReactNode } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { CategorySelect } from '@/components/transactions/CategorySelect'
+import { TransactionFormDialog } from '@/components/transactions/TransactionFormDialog'
 import { TransactionImport } from '@/components/transactions/TransactionImport'
-import { TrashIcon } from '@/components/ui/Icon'
+import { Amount } from '@/components/ui/Amount'
+import { Button } from '@/components/ui/Button'
+import { ConfirmDialog } from '@/components/ui/Dialog'
+import { EmptyState, ErrorBlock, LoadingBlock, Notice } from '@/components/ui/EmptyState'
+import { SearchIcon, UploadIcon } from '@/components/ui/Icon'
+import { PageHeader } from '@/components/ui/PageHeader'
+import { Pagination } from '@/components/ui/Pagination'
+import { RowMenu } from '@/components/ui/RowMenu'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { useAccounts } from '@/hooks/useAccounts'
+import { useAuth } from '@/hooks/useAuth'
 import { useCategories } from '@/hooks/useCategories'
+import { useAllTransactions, useDeleteTransaction, useTransactionsList } from '@/hooks/useTransactions'
+import { apiErrorMessage } from '@/lib/apiError'
+import { categoryPath, indexById, isMiscCategory, NECESSITY_LABELS, transactionNecessity } from '@/lib/categories'
+import { formatAmount, formatDayHeader } from '@/lib/format'
+import { amountKind, totals } from '@/lib/transactions'
 import {
-  useCreateTransaction,
-  useDeleteTransaction,
-  useTransactionsList,
-} from '@/hooks/useTransactions'
-import type { Category, NecessityLevel, Transaction, TransactionType } from '@/types'
+  PAGE_SIZES,
+  PERIOD_LABELS,
+  periodPhrase,
+  periodRange,
+  readFilters,
+  type PeriodKey,
+  type TransactionFilters,
+} from '@/lib/transactionFilters'
+import type { Account, Category, Transaction, TransactionType } from '@/types'
 
-type PanelMode = 'none' | 'form' | 'import'
-
-const TRANSACTION_TYPES: { value: TransactionType; label: string }[] = [
-  { value: 'expense', label: 'Spesa' },
-  { value: 'income', label: 'Entrata' },
-  { value: 'transfer', label: 'Trasferimento' },
+const TYPE_OPTIONS: { value: TransactionType | ''; label: string }[] = [
+  { value: '', label: 'Tutti' },
+  { value: 'expense', label: 'Uscite' },
+  { value: 'income', label: 'Entrate' },
+  { value: 'transfer', label: 'Trasferimenti' },
 ]
 
-type CategoryOption =
-  | { kind: 'leaf'; category: Category }
-  | { kind: 'group'; parent: Category; children: Category[] }
+const TYPE_LABELS: Record<TransactionType, string> = { expense: 'Uscite', income: 'Entrate', transfer: 'Trasferimenti' }
 
-/**
- * A category with active subcategories can't be assigned to a transaction
- * directly (the backend rejects it — a subcategory must be picked instead),
- * so parents with children render as a non-selectable optgroup label and
- * only their children/childless roots are actual options. Also scoped to
- * the transaction's own type — a category's type must match the
- * transaction's (expense/income/transfer), same rule the backend enforces.
- */
-function buildCategoryOptions(categories: Category[] | undefined, type: TransactionType): CategoryOption[] {
-  if (!categories) return []
-  const relevant = categories.filter((c) => c.type === type)
-  const roots = relevant.filter((c) => c.parent_id === null)
-  return roots.map((root) => {
-    const children = relevant.filter((c) => c.parent_id === root.id)
-    return children.length > 0
-      ? { kind: 'group' as const, parent: root, children }
-      : { kind: 'leaf' as const, category: root }
-  })
+interface Lookups {
+  categories: Map<string, Category>
+  accounts: Map<string, Account>
+  baseCurrency: string
 }
 
-const NECESSITY_LABELS: Record<NecessityLevel, string> = {
-  primary: 'Primario',
-  useful: 'Utile',
-  discretionary: 'Accessorio',
-}
-
-// Mirrors the backend's COALESCE(override, category, parent) so the list can
-// show the level that actually applies, and mark whether it came from an
-// override or was inherited.
-function effectiveNecessity(
-  transaction: Transaction,
-  category: Category | undefined,
-  categories: Category[] | undefined,
-): { level: NecessityLevel; isOverride: boolean } | null {
-  if (transaction.type !== 'expense') return null
-  if (transaction.necessity_level_override) {
-    return { level: transaction.necessity_level_override, isOverride: true }
+function CategoryCell({ t, lookups, onAssign }: { t: Transaction; lookups: Lookups; onAssign: () => void }) {
+  if (t.type === 'transfer') {
+    return <span className="rounded-full bg-card-2 px-2 py-0.5 text-[12px] font-bold text-ink-3">⇄ Trasferimento</span>
   }
-  if (category?.necessity_level) {
-    return { level: category.necessity_level, isOverride: false }
+  const category = lookups.categories.get(t.category_id ?? '')
+  if (!category || isMiscCategory(category)) {
+    return (
+      <button
+        type="button"
+        onClick={onAssign}
+        className="min-h-8 cursor-pointer rounded-full bg-warn-soft px-2.5 text-[12px] font-bold whitespace-nowrap text-warn hover:underline"
+      >
+        {category ? 'Varie' : 'Senza categoria'} · Assegna
+      </button>
+    )
   }
-  const parent = category?.parent_id
-    ? categories?.find((c) => c.id === category.parent_id)
-    : undefined
-  if (parent?.necessity_level) {
-    return { level: parent.necessity_level, isOverride: false }
-  }
-  return null
+  return (
+    <span className="rounded-full bg-card-2 px-2 py-0.5 text-[12px] font-bold whitespace-nowrap text-ink-2">
+      {categoryPath(category, lookups.categories)}
+    </span>
+  )
 }
 
-const transactionSchema = z.object({
-  account_id: z.string().min(1, 'Seleziona un conto'),
-  category_id: z.string().optional(),
-  amount: z
-    .string()
-    .min(1, 'Importo obbligatorio')
-    .refine((v) => !Number.isNaN(Number(v)), 'Inserisci un numero valido'),
-  currency: z.string().length(3, 'Codice valuta di 3 lettere'),
-  date: z.string().min(1, 'Data obbligatoria'),
-  description: z.string().optional(),
-  type: z.enum(['expense', 'income', 'transfer']),
-  // Expense only — the backend 422s an override on income/transfer, since a
-  // necessity level has no meaning there.
-  necessity_level_override: z.enum(['primary', 'useful', 'discretionary']).or(z.literal('')).optional(),
-})
-
-type TransactionFormValues = z.infer<typeof transactionSchema>
-
-function formatAmount(amount: string, currency: string): string {
-  return Number(amount).toLocaleString('it-IT', { style: 'currency', currency })
+/** Filled = set on this row; outlined = inherited from the category. */
+function NecessityCell({ t, lookups }: { t: Transaction; lookups: Lookups }) {
+  if (t.type !== 'expense') return <span className="text-ink-3">—</span>
+  const { level, source } = transactionNecessity(t, lookups.categories)
+  if (!level) {
+    return <span className="rounded-full border border-warn px-2 py-px text-[12px] font-bold whitespace-nowrap text-warn">Da classificare</span>
+  }
+  return source === 'override' ? (
+    <span title="Impostato su questo movimento" className="rounded-full bg-bar px-2 py-0.5 text-[12px] font-bold text-card">
+      {NECESSITY_LABELS[level]}
+      <span className="sr-only"> (impostato sul movimento)</span>
+    </span>
+  ) : (
+    <span title="Ereditato dalla categoria" className="rounded-full border border-field px-2 py-px text-[12px] font-bold text-ink-2">
+      {NECESSITY_LABELS[level]}
+      <span className="sr-only"> (ereditato dalla categoria)</span>
+    </span>
+  )
 }
+
+function SourceBadge({ t }: { t: Transaction }) {
+  if (t.source !== 'import') return null
+  return (
+    <span title="Importato da CSV" className="rounded bg-card-2 px-1.5 py-px text-[10px] font-extrabold tracking-[0.04em] text-ink-3">
+      CSV
+    </span>
+  )
+}
+
+interface DayGroup {
+  date: string
+  rows: Transaction[]
+}
+
+function groupByDay(rows: Transaction[]): DayGroup[] {
+  const groups: DayGroup[] = []
+  for (const row of rows) {
+    const last = groups[groups.length - 1]
+    if (last?.date === row.date) last.rows.push(row)
+    else groups.push({ date: row.date, rows: [row] })
+  }
+  return groups
+}
+
+function DayTotal({ value, currency }: { value: number | undefined; currency: string }) {
+  if (value === undefined) return null
+  return (
+    <>
+      {formatAmount(value, currency, { sign: value > 0 ? 'always' : 'auto' })} {currency}
+    </>
+  )
+}
+
+function TransactionTable({
+  groups,
+  dayTotals,
+  lookups,
+  onEdit,
+  onDelete,
+}: {
+  groups: DayGroup[]
+  dayTotals: Map<string, number>
+  lookups: Lookups
+  onEdit: (t: Transaction) => void
+  onDelete: (t: Transaction) => void
+}) {
+  const menu = (t: Transaction) => (
+    <RowMenu
+      label={`Azioni per ${t.description || 'movimento'}`}
+      items={[
+        { label: 'Modifica', onSelect: () => onEdit(t) },
+        { label: 'Elimina', tone: 'danger', onSelect: () => onDelete(t) },
+      ]}
+    />
+  )
+
+  return (
+    <>
+      {/* Desktop/tablet: grouped table. */}
+      <div className="relative overflow-x-auto max-md:hidden">
+        <table className="w-full min-w-[860px] border-collapse tabular-nums">
+          <thead>
+            <tr className="text-left text-[12px] text-ink-3">
+              <th scope="col" className="border-b border-line px-4 py-2.5 font-bold">Descrizione</th>
+              <th scope="col" className="border-b border-line px-3 py-2.5 font-bold">Categoria</th>
+              <th scope="col" className="border-b border-line px-3 py-2.5 font-bold">Necessità</th>
+              <th scope="col" className="border-b border-line px-3 py-2.5 font-bold">Conto</th>
+              <th scope="col" className="border-b border-line px-3 py-2.5 text-right font-bold">Importo</th>
+              <th scope="col" className="w-14 border-b border-line py-2.5 pr-4 pl-1">
+                <span className="sr-only">Azioni</span>
+              </th>
+            </tr>
+          </thead>
+          {groups.map((group) => (
+            <tbody key={group.date}>
+              <tr className="bg-card-2">
+                <th scope="rowgroup" colSpan={4} className="px-4 py-2 text-left text-[12px] font-extrabold text-ink-2">
+                  {formatDayHeader(group.date)}
+                </th>
+                <td colSpan={2} className="py-2 pr-[70px] text-right text-[12px] font-bold text-ink-3">
+                  <DayTotal value={dayTotals.get(group.date)} currency={lookups.baseCurrency} />
+                </td>
+              </tr>
+              {group.rows.map((t) => (
+                <tr key={t.id}>
+                  <td className="border-t border-line px-4 py-2.5">
+                    <div className="flex items-center gap-2 font-bold">
+                      {t.description || '—'}
+                      <SourceBadge t={t} />
+                    </div>
+                  </td>
+                  <td className="border-t border-line px-3 py-2.5">
+                    <CategoryCell t={t} lookups={lookups} onAssign={() => onEdit(t)} />
+                  </td>
+                  <td className="border-t border-line px-3 py-2.5">
+                    <NecessityCell t={t} lookups={lookups} />
+                  </td>
+                  <td className="border-t border-line px-3 py-2.5 text-[13px] text-ink-2">
+                    {lookups.accounts.get(t.account_id)?.name ?? 'Conto eliminato'}
+                  </td>
+                  <td className="border-t border-line px-3 py-2.5 text-right">
+                    <Amount
+                      value={t.amount}
+                      currency={t.currency}
+                      baseValue={t.amount_base_currency}
+                      baseCurrency={lookups.baseCurrency}
+                      kind={amountKind(t)}
+                    />
+                  </td>
+                  <td className="border-t border-line py-1 pr-4 pl-1">{menu(t)}</td>
+                </tr>
+              ))}
+            </tbody>
+          ))}
+        </table>
+      </div>
+
+      {/* Phones: one card-list per day, as in D-Transazioni-Mobile. */}
+      <div className="md:hidden">
+        {groups.map((group) => (
+          <section key={group.date} aria-label={formatDayHeader(group.date)}>
+            <div className="flex justify-between bg-card-2 px-3.5 py-2 text-[12px] font-extrabold text-ink-2 tabular-nums">
+              <span>{formatDayHeader(group.date)}</span>
+              <span className="text-ink-3">
+                <DayTotal value={dayTotals.get(group.date)} currency={lookups.baseCurrency} />
+              </span>
+            </div>
+            <ul>
+              {group.rows.map((t) => (
+                <li key={t.id} className="flex items-center gap-1 border-t border-line py-1.5 pr-1 pl-3.5">
+                  <div className="min-w-0 flex-1 py-1">
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <span className="truncate">{t.description || '—'}</span>
+                      <SourceBadge t={t} />
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      <CategoryCell t={t} lookups={lookups} onAssign={() => onEdit(t)} />
+                    </div>
+                  </div>
+                  <Amount
+                    value={t.amount}
+                    currency={t.currency}
+                    baseValue={t.amount_base_currency}
+                    baseCurrency={lookups.baseCurrency}
+                    kind={amountKind(t)}
+                  />
+                  {menu(t)}
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))}
+      </div>
+    </>
+  )
+}
+
+function FilterChip({ children, onRemove, label }: { children: ReactNode; onRemove: () => void; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-accent bg-accent-soft py-0.5 pr-0.5 pl-3 text-[13px] font-bold text-accent">
+      {children}
+      <button type="button" onClick={onRemove} aria-label={`Rimuovi filtro ${label}`} className="grid h-8 w-8 cursor-pointer place-items-center rounded-full hover:bg-card">
+        ✕
+      </button>
+    </span>
+  )
+}
+
+type FilterPatch = Partial<Record<keyof TransactionFilters | 'import' | 'new', string | null>>
+
+const filterLabel = 'flex min-w-0 flex-col gap-1 text-[12px] font-bold text-ink-3'
 
 export function TransactionsPage() {
+  const { user } = useAuth()
+  const baseCurrency = user?.base_currency ?? ''
+  const [params, setParams] = useSearchParams()
+  const filters = readFilters(params)
+  const [today] = useState(() => new Date())
+  const [editing, setEditing] = useState<Transaction | null>(null)
+  const [deleting, setDeleting] = useState<Transaction | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
   const { data: accounts } = useAccounts()
   const { data: categories } = useCategories()
-  const [categoryFilter, setCategoryFilter] = useState<string>('')
-  const [panel, setPanel] = useState<PanelMode>('none')
-
-  function togglePanel(mode: PanelMode) {
-    setPanel((current) => (current === mode ? 'none' : mode))
-  }
-
-  const { data: transactionsData, isLoading, isError } = useTransactionsList({
-    category_id: categoryFilter || undefined,
-    page: 1,
-    page_size: 50,
-  })
-
-  const createTransaction = useCreateTransaction()
   const deleteTransaction = useDeleteTransaction()
 
-  const {
-    register,
-    handleSubmit,
-    reset,
-    control,
-    formState: { errors, isSubmitting },
-  } = useForm<TransactionFormValues>({
-    resolver: zodResolver(transactionSchema),
-    defaultValues: {
-      type: 'expense',
-      currency: 'EUR',
-      date: new Date().toISOString().slice(0, 10),
-    },
-  })
-
-  // useWatch, not watch(): watch() opts this component out of React Compiler memoization.
-  const selectedType = useWatch({ control, name: 'type' })
-  const categoryOptions = buildCategoryOptions(categories, selectedType)
-
-  async function onSubmit(values: TransactionFormValues) {
-    // Sign convention matches the backend's design: expenses are negative,
-    // income positive. The form takes a plain positive number and applies
-    // the sign here so the user doesn't have to type a minus themselves.
-    const signedAmount =
-      values.type === 'expense' ? `-${Math.abs(Number(values.amount))}` : String(Math.abs(Number(values.amount)))
-
-    await createTransaction.mutateAsync({
-      account_id: values.account_id,
-      category_id: values.category_id || null,
-      amount: signedAmount,
-      currency: values.currency,
-      date: values.date,
-      description: values.description || null,
-      type: values.type,
-      necessity_level_override:
-        values.type === 'expense' && values.necessity_level_override
-          ? values.necessity_level_override
-          : null,
-    })
-    reset({
-      type: 'expense',
-      currency: 'EUR',
-      date: new Date().toISOString().slice(0, 10),
-      account_id: '',
-      category_id: '',
-      amount: '',
-      description: '',
-      necessity_level_override: '',
-    })
-    setPanel('none')
+  function update(patch: FilterPatch, { keepPage = false } = {}) {
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        for (const [key, value] of Object.entries(patch)) {
+          if (value === null || value === '') next.delete(key)
+          else next.set(key, value)
+        }
+        if (!keepPage && !('page' in patch)) next.delete('page')
+        return next
+      },
+      // Typing in the search box shouldn't add a history entry per keystroke.
+      { replace: 'q' in patch },
+    )
   }
 
-  async function handleDelete(id: string) {
-    if (!window.confirm('Eliminare questa transazione?')) return
-    await deleteTransaction.mutateAsync(id)
+  const apiFilters = {
+    ...periodRange(filters.period, today),
+    account_id: filters.account || undefined,
+    category_id: filters.category || undefined,
+    currency: filters.currency || undefined,
+    type: filters.type || undefined,
+  }
+
+  // The API filters and paginates by itself, except for text search and
+  // "only Varie": those fall back to filtering the whole period here.
+  // The full set is fetched either way, for the summary and day totals.
+  const clientSide = !!filters.q.trim() || filters.misc
+  const all = useAllTransactions(apiFilters)
+  const paged = useTransactionsList({ ...apiFilters, page: filters.page, page_size: filters.size }, !clientSide)
+
+  const lookups: Lookups = { categories: indexById(categories), accounts: indexById(accounts), baseCurrency }
+  const needle = filters.q.trim().toLowerCase()
+  const matching = (all.data ?? []).filter((t) => {
+    if (filters.misc && !(t.type !== 'transfer' && isMiscCategory(lookups.categories.get(t.category_id ?? '')))) return false
+    if (!needle) return true
+    const category = lookups.categories.get(t.category_id ?? '')
+    return [t.description, category?.name, t.amount, formatAmount(t.amount, t.currency, { sign: 'never' })]
+      .filter(Boolean)
+      .some((field) => String(field).toLowerCase().includes(needle))
+  })
+
+  const totalItems = clientSide ? matching.length : (paged.data?.meta.total_items ?? 0)
+  const totalPages = Math.max(1, Math.ceil(totalItems / filters.size))
+  const rows = clientSide ? matching.slice((filters.page - 1) * filters.size, filters.page * filters.size) : (paged.data?.data ?? [])
+  const isLoading = clientSide ? all.isLoading : paged.isLoading
+  const isError = clientSide ? all.isError : paged.isError
+
+  const sum = totals(matching)
+  const dayTotals = new Map<string, number>()
+  for (const t of matching) {
+    // Transfers net to zero across your own accounts; leave them out of the day's figure.
+    if (t.type === 'transfer') continue
+    dayTotals.set(t.date, (dayTotals.get(t.date) ?? 0) + Number(t.amount_base_currency))
+  }
+  const misc = (all.data ?? []).filter((t) => t.type !== 'transfer' && isMiscCategory(lookups.categories.get(t.category_id ?? '')))
+  const miscSum = misc.reduce((s, t) => s + Number(t.amount_base_currency), 0)
+
+  const currencies = [...new Set((accounts ?? []).map((a) => a.currency))].sort()
+  const chips: { key: string; label: string; text: string; clear: FilterPatch }[] = []
+  if (filters.period !== 'all') chips.push({ key: 'period', label: 'periodo', text: `Periodo: ${PERIOD_LABELS[filters.period]}`, clear: { period: 'all' } })
+  if (filters.account) chips.push({ key: 'account', label: 'conto', text: `Conto: ${lookups.accounts.get(filters.account)?.name ?? '—'}`, clear: { account: null } })
+  if (filters.category) chips.push({ key: 'category', label: 'categoria', text: `Categoria: ${lookups.categories.get(filters.category)?.name ?? '—'}`, clear: { category: null } })
+  if (filters.currency) chips.push({ key: 'currency', label: 'valuta', text: `Valuta: ${filters.currency}`, clear: { currency: null } })
+  if (filters.type) chips.push({ key: 'type', label: 'tipo', text: TYPE_LABELS[filters.type], clear: { type: null } })
+  if (filters.misc) chips.push({ key: 'misc', label: 'da assegnare', text: 'Solo da assegnare (Varie)', clear: { misc: null } })
+  if (filters.q) chips.push({ key: 'q', label: 'ricerca', text: `“${filters.q}”`, clear: { q: null } })
+
+  const importOpen = params.get('import') === '1'
+  const creating = params.get('new') === '1'
+
+  async function confirmDelete() {
+    if (!deleting) return
+    setDeleteError(null)
+    try {
+      await deleteTransaction.mutateAsync(deleting.id)
+      setDeleting(null)
+    } catch (error) {
+      setDeleteError(apiErrorMessage(error))
+    }
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-slate-800">Transazioni</h1>
-        <div className="flex gap-2">
-          <button
-            onClick={() => togglePanel('import')}
-            className="rounded-md px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
-          >
-            {panel === 'import' ? 'Annulla' : 'Importa CSV'}
-          </button>
-          <button
-            onClick={() => togglePanel('form')}
-            className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-          >
-            {panel === 'form' ? 'Annulla' : 'Nuova transazione'}
-          </button>
-        </div>
-      </div>
-
-      {panel === 'import' && <TransactionImport onDone={() => setPanel('none')} />}
-
-      {panel === 'form' && (
-        <form
-          onSubmit={handleSubmit(onSubmit)}
-          className="grid grid-cols-1 gap-4 rounded-lg bg-white p-6 shadow-sm sm:grid-cols-3"
-          noValidate
-        >
-          <div>
-            <label htmlFor="account_id" className="block text-sm font-medium text-slate-700">
-              Conto
-            </label>
-            <select
-              id="account_id"
-              {...register('account_id')}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+    <>
+      <PageHeader
+        title="Transazioni"
+        subtitle={`${sum.count} movimenti ${periodPhrase(filters.period, today)} · importi in valuta originale, totali in ${baseCurrency}`}
+        actions={
+          <>
+            <Button
+              aria-expanded={importOpen}
+              onClick={() => update({ import: importOpen ? null : '1' }, { keepPage: true })}
+              className={importOpen ? 'border-accent bg-accent-soft text-accent' : ''}
             >
-              <option value="">Seleziona un conto</option>
+              <UploadIcon />
+              Importa CSV
+            </Button>
+            <Button variant="primary" onClick={() => update({ new: '1' }, { keepPage: true })}>
+              + Nuova transazione
+            </Button>
+          </>
+        }
+      />
+
+      {importOpen && <TransactionImport onDone={() => update({ import: null }, { keepPage: true })} />}
+
+      <section aria-label="Filtri" className="flex flex-col gap-3 rounded-[14px] border border-line bg-card px-4 py-3.5">
+        <div className="grid grid-cols-2 gap-2.5 md:grid-cols-[minmax(220px,2fr)_repeat(4,minmax(0,1fr))]">
+          <label className={`${filterLabel} col-span-2 md:col-span-1`}>
+            Cerca
+            <span className="flex min-h-11 items-center gap-2 rounded-[10px] border border-field bg-card px-3 text-ink-3 focus-within:border-accent focus-within:shadow-[0_0_0_3px_var(--color-accent-soft)]">
+              <SearchIcon />
+              <input
+                type="search"
+                value={filters.q}
+                onChange={(e) => update({ q: e.target.value })}
+                placeholder="Descrizione, importo, categoria…"
+                className="min-w-0 flex-1 bg-transparent text-[14px] font-normal text-ink outline-none placeholder:text-ink-3"
+              />
+            </span>
+          </label>
+          <label className={filterLabel}>
+            Periodo
+            <select value={filters.period} onChange={(e) => update({ period: e.target.value })} className="field text-[14px] font-normal">
+              {(Object.keys(PERIOD_LABELS) as PeriodKey[]).map((p) => (
+                <option key={p} value={p}>
+                  {PERIOD_LABELS[p]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className={filterLabel}>
+            Conto
+            <select value={filters.account} onChange={(e) => update({ account: e.target.value })} className="field text-[14px] font-normal">
+              <option value="">Tutti i conti</option>
               {accounts?.map((a) => (
                 <option key={a.id} value={a.id}>
-                  {a.name} ({a.currency})
+                  {a.name}
                 </option>
               ))}
             </select>
-            {errors.account_id && <p className="mt-1 text-sm text-red-600">{errors.account_id.message}</p>}
-          </div>
-
-          <div>
-            <label htmlFor="category_id" className="block text-sm font-medium text-slate-700">
-              Categoria (opzionale)
-            </label>
-            <select
-              id="category_id"
-              {...register('category_id')}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-            >
-              <option value="">Nessuna categoria</option>
-              {categoryOptions.map((opt) =>
-                opt.kind === 'leaf' ? (
-                  <option key={opt.category.id} value={opt.category.id}>
-                    {opt.category.name}
-                  </option>
-                ) : (
-                  <optgroup key={opt.parent.id} label={opt.parent.name}>
-                    {opt.children.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                ),
-              )}
-            </select>
-          </div>
-
-          <div>
-            <label htmlFor="type" className="block text-sm font-medium text-slate-700">
-              Tipo
-            </label>
-            <select
-              id="type"
-              {...register('type')}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-            >
-              {TRANSACTION_TYPES.map((t) => (
-                <option key={t.value} value={t.value}>
-                  {t.label}
+          </label>
+          <label className={filterLabel}>
+            Categoria
+            <CategorySelect
+              categories={categories}
+              emptyLabel="Tutte"
+              value={filters.category}
+              onChange={(e) => update({ category: e.target.value })}
+              className="field text-[14px] font-normal"
+            />
+          </label>
+          <label className={filterLabel}>
+            Valuta
+            <select value={filters.currency} onChange={(e) => update({ currency: e.target.value })} className="field text-[14px] font-normal">
+              <option value="">Tutte</option>
+              {currencies.map((c) => (
+                <option key={c} value={c}>
+                  {c}
                 </option>
               ))}
             </select>
-          </div>
-
-          <div>
-            <label htmlFor="amount" className="block text-sm font-medium text-slate-700">
-              Importo
-            </label>
-            <input
-              id="amount"
-              type="number"
-              step="0.01"
-              placeholder="0.00"
-              {...register('amount')}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-            />
-            {errors.amount && <p className="mt-1 text-sm text-red-600">{errors.amount.message}</p>}
-          </div>
-
-          <div>
-            <label htmlFor="currency" className="block text-sm font-medium text-slate-700">
-              Valuta
-            </label>
-            <input
-              id="currency"
-              maxLength={3}
-              {...register('currency')}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm uppercase focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-            />
-            {errors.currency && <p className="mt-1 text-sm text-red-600">{errors.currency.message}</p>}
-          </div>
-
-          <div>
-            <label htmlFor="date" className="block text-sm font-medium text-slate-700">
-              Data
-            </label>
-            <input
-              id="date"
-              type="date"
-              {...register('date')}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-            />
-            {errors.date && <p className="mt-1 text-sm text-red-600">{errors.date.message}</p>}
-          </div>
-
-          {selectedType === 'expense' && (
-            <div className="sm:col-span-3">
-              <label
-                htmlFor="necessity_level_override"
-                className="block text-sm font-medium text-slate-700"
-              >
-                Livello di necessità (opzionale)
-              </label>
-              <select
-                id="necessity_level_override"
-                {...register('necessity_level_override')}
-                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-              >
-                <option value="">Eredita dalla categoria</option>
-                {(Object.keys(NECESSITY_LABELS) as NecessityLevel[]).map((level) => (
-                  <option key={level} value={level}>
-                    {NECESSITY_LABELS[level]}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1 text-xs text-slate-400">
-                Usalo solo per le eccezioni — ad esempio una cena di lavoro sotto "Ristoranti".
-              </p>
+          </label>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          <SegmentedControl label="Tipo di movimento" options={TYPE_OPTIONS} value={filters.type} onChange={(type) => update({ type })} />
+          {chips.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              {chips.map((chip) => (
+                <FilterChip key={chip.key} label={chip.label} onRemove={() => update(chip.clear)}>
+                  {chip.text}
+                </FilterChip>
+              ))}
+              <button type="button" onClick={() => setParams(new URLSearchParams())} className="link min-h-11 cursor-pointer px-1 text-[13px]">
+                Azzera filtri
+              </button>
             </div>
           )}
+        </div>
+      </section>
 
-          <div className="sm:col-span-3">
-            <label htmlFor="description" className="block text-sm font-medium text-slate-700">
-              Descrizione (opzionale)
-            </label>
-            <input
-              id="description"
-              {...register('description')}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-            />
+      <section
+        aria-label="Riepilogo del filtro"
+        className="grid overflow-hidden rounded-[14px] border border-line bg-card tabular-nums"
+        style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(150px, 100%), 1fr))' }}
+      >
+        {[
+          { label: 'Movimenti', value: String(sum.count), tone: 'text-ink' },
+          { label: 'Entrate', value: `${formatAmount(sum.income, baseCurrency, { sign: 'always' })}`, tone: 'text-pos' },
+          { label: 'Uscite', value: formatAmount(sum.expense, baseCurrency), tone: 'text-ink' },
+          { label: 'Trasferimenti', value: `⇄ ${sum.transferCount}`, tone: 'text-ink-3' },
+          { label: 'Saldo', value: formatAmount(sum.net, baseCurrency, { sign: 'always' }), tone: sum.net < 0 ? 'text-neg' : 'text-ink' },
+        ].map((item) => (
+          <div key={item.label} className="px-4 py-3 shadow-[-1px_0_0_var(--color-line),0_-1px_0_var(--color-line)]">
+            <div className="text-[12px] font-bold text-ink-3">{item.label}</div>
+            <div className={`text-[17px] font-extrabold ${item.tone}`}>
+              {item.value}
+              {item.label !== 'Movimenti' && item.label !== 'Trasferimenti' && <span className="ccy ml-1">{baseCurrency}</span>}
+            </div>
           </div>
+        ))}
+      </section>
 
-          <div className="sm:col-span-3">
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
-            >
-              {isSubmitting ? 'Creazione...' : 'Crea transazione'}
+      {misc.length > 0 && !filters.misc && (
+        <Notice
+          action={
+            <button type="button" onClick={() => update({ misc: '1' })} className="min-h-8 cursor-pointer text-warn underline">
+              Mostra solo questi
             </button>
-          </div>
-        </form>
+          }
+        >
+          {misc.length} {misc.length === 1 ? 'movimento è' : 'movimenti sono'} in Varie ({formatAmount(miscSum, baseCurrency)} {baseCurrency}): assegna una
+          categoria perché contino nel piano giusto.
+        </Notice>
       )}
 
-      <div className="flex items-center gap-3">
-        <label htmlFor="category-filter" className="text-sm font-medium text-slate-700">
-          Filtra per categoria:
-        </label>
-        <select
-          id="category-filter"
-          value={categoryFilter}
-          onChange={(e) => setCategoryFilter(e.target.value)}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-        >
-          <option value="">Tutte</option>
-          {categories?.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="rounded-lg bg-white shadow-sm">
-        {isLoading && <p className="p-6 text-slate-500">Caricamento...</p>}
-        {isError && <p className="p-6 text-red-600">Errore nel caricamento delle transazioni.</p>}
-
-        {transactionsData && transactionsData.data.length === 0 && (
-          <p className="p-6 text-sm text-slate-500">Nessuna transazione trovata.</p>
+      <section aria-label="Elenco movimenti" className="overflow-hidden rounded-[14px] border border-line bg-card">
+        {isLoading ? (
+          <LoadingBlock className="m-4 h-64" />
+        ) : isError ? (
+          <div className="p-4">
+            <ErrorBlock>Errore nel caricamento delle transazioni.</ErrorBlock>
+          </div>
+        ) : rows.length === 0 ? (
+          <div className="p-4">
+            <EmptyState
+              title="Nessun movimento"
+              action={chips.length > 0 ? <Button onClick={() => setParams(new URLSearchParams())}>Azzera filtri</Button> : undefined}
+            >
+              {chips.length > 0 ? 'Nessun movimento corrisponde ai filtri attivi.' : 'Aggiungi una transazione o importa un CSV.'}
+            </EmptyState>
+          </div>
+        ) : (
+          <TransactionTable
+            groups={groupByDay(rows)}
+            dayTotals={dayTotals}
+            lookups={lookups}
+            onEdit={setEditing}
+            onDelete={(t) => {
+              setDeleteError(null)
+              setDeleting(t)
+            }}
+          />
         )}
-
-        {transactionsData && transactionsData.data.length > 0 && (
-          <ul className="divide-y divide-slate-100">
-            {transactionsData.data.map((t) => {
-              const category = categories?.find((c) => c.id === t.category_id)
-              const account = accounts?.find((a) => a.id === t.account_id)
-              const necessity = effectiveNecessity(t, category, categories)
-              return (
-                <li key={t.id} className="flex items-center justify-between px-6 py-4">
-                  <div>
-                    <p className="text-sm font-medium text-slate-800">
-                      {t.description || category?.name || 'Senza descrizione'}
-                    </p>
-                    <p className="text-xs text-slate-400">
-                      {t.date} · {account?.name ?? 'Conto eliminato'}
-                      {category && ` · ${category.name}`}
-                    </p>
-                    {necessity && (
-                      <span
-                        className={`mt-1 inline-block rounded px-1.5 py-0.5 text-[11px] ${
-                          necessity.isOverride
-                            ? 'bg-slate-800 text-white'
-                            : 'bg-slate-100 text-slate-500'
-                        }`}
-                        title={
-                          necessity.isOverride
-                            ? 'Livello impostato su questa transazione'
-                            : 'Livello ereditato dalla categoria'
-                        }
-                      >
-                        {NECESSITY_LABELS[necessity.level]}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <p
-                      className={`text-sm font-semibold ${
-                        Number(t.amount) < 0 ? 'text-red-600' : 'text-green-600'
-                      }`}
-                    >
-                      {formatAmount(t.amount, t.currency)}
-                    </p>
-                    <button
-                      onClick={() => handleDelete(t.id)}
-                      aria-label="Elimina"
-                      title="Elimina"
-                      className="rounded p-1.5 text-red-600 hover:bg-red-50"
-                    >
-                      <TrashIcon />
-                    </button>
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
+        {totalItems > 0 && (
+          <Pagination
+            page={Math.min(filters.page, totalPages)}
+            totalPages={totalPages}
+            totalItems={totalItems}
+            pageSize={filters.size}
+            pageSizes={PAGE_SIZES}
+            onPage={(page) => update({ page: String(page) })}
+            onPageSize={(size) => update({ size: String(size) })}
+          />
         )}
+      </section>
 
-        {transactionsData && transactionsData.meta.total_pages > 1 && (
-          <p className="border-t border-slate-100 px-6 py-3 text-xs text-slate-400">
-            Pagina {transactionsData.meta.page} di {transactionsData.meta.total_pages} ·{' '}
-            {transactionsData.meta.total_items} transazioni totali
-          </p>
+      <TransactionFormDialog open={creating} onClose={() => update({ new: null }, { keepPage: true })} />
+      <TransactionFormDialog open={!!editing} onClose={() => setEditing(null)} transaction={editing} />
+      <ConfirmDialog
+        open={!!deleting}
+        title="Eliminare questo movimento?"
+        confirmLabel="Elimina"
+        pending={deleteTransaction.isPending}
+        error={deleteError}
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleting(null)}
+      >
+        <b>{deleting?.description || 'Movimento senza descrizione'}</b>
+        {deleting && ` · ${formatAmount(deleting.amount, deleting.currency)} ${deleting.currency}`}
+        {deleting?.counterpart_transaction_id && (
+          <p className="mt-2">È un giroconto: verrà eliminato anche il movimento collegato sull'altro conto.</p>
         )}
-      </div>
-    </div>
+      </ConfirmDialog>
+    </>
   )
 }

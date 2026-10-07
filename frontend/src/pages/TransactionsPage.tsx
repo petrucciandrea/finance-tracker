@@ -19,7 +19,7 @@ import { useAllTransactions, useDeleteTransaction, useTransactionsList } from '@
 import { apiErrorMessage } from '@/lib/apiError'
 import { categoryPath, indexById, isMiscCategory, NECESSITY_LABELS, transactionNecessity } from '@/lib/categories'
 import { formatAmount, formatDayHeader } from '@/lib/format'
-import { amountKind, totals } from '@/lib/transactions'
+import { accountLabel, amountKind, totals } from '@/lib/transactions'
 import {
   PAGE_SIZES,
   PERIOD_LABELS,
@@ -187,7 +187,7 @@ function TransactionTable({
                     <NecessityCell t={t} lookups={lookups} />
                   </td>
                   <td className="border-t border-line px-3 py-2.5 text-[13px] text-ink-2">
-                    {lookups.accounts.get(t.account_id)?.name ?? 'Conto eliminato'}
+                    {accountLabel(t, lookups.accounts)}
                   </td>
                   <td className="border-t border-line px-3 py-2.5 text-right">
                     <Amount
@@ -226,6 +226,7 @@ function TransactionTable({
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1.5">
                       <CategoryCell t={t} lookups={lookups} onAssign={() => onEdit(t)} />
+                      {t.counterpart_account_id && <span className="text-[12px] text-ink-3">{accountLabel(t, lookups.accounts)}</span>}
                     </div>
                   </div>
                   <Amount
@@ -297,6 +298,7 @@ export function TransactionsPage() {
     category_id: filters.category || undefined,
     currency: filters.currency || undefined,
     type: filters.type || undefined,
+    merge_transfer_legs: true,
   }
 
   // The API filters and paginates by itself, except for text search and

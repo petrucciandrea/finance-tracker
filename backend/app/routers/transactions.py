@@ -11,7 +11,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.deps import get_current_user, get_db
 from app.models import Account, AssetTransaction, Category, SavingsAllocation, Transaction, User
@@ -28,6 +28,7 @@ from app.schemas import (
     TransactionSummaryParams,
     TransactionSummaryResponse,
     TransactionUpdate,
+    TransferCreate,
 )
 from app.schemas import (
     Transaction as TransactionSchema,
@@ -35,6 +36,7 @@ from app.schemas import (
 from app.services import csv_import as csv_import_service
 from app.services.exchange_rates import ExchangeRateUnavailable, get_rate
 from app.services.ownership import get_owned_account
+from app.services.transfers import create_linked_transfer
 
 router = APIRouter(prefix="/api/v1/transactions", tags=["transactions"])
 
@@ -266,10 +268,17 @@ def list_transactions(
         query = query.filter(Transaction.currency == params.currency)
     if params.type:
         query = query.filter(Transaction.type == params.type.value)
+    if params.merge_transfer_legs and not params.account_id:
+        # Drop the incoming leg (the positive one) of each linked pair. Done
+        # in SQL rather than by the client so pagination counts stay right.
+        query = query.filter(
+            ~(Transaction.counterpart_transaction_id.isnot(None) & (Transaction.amount > 0))
+        )
 
     total_items = query.count()
     rows = (
-        query.order_by(Transaction.date.desc())
+        query.options(selectinload(Transaction.counterpart))
+        .order_by(Transaction.date.desc())
         .offset((params.page - 1) * params.page_size)
         .limit(params.page_size)
         .all()
@@ -336,6 +345,37 @@ def create_transaction(
     db.commit()
     db.refresh(transaction)
     return transaction
+
+
+@router.post(
+    "/transfers", response_model=list[TransactionSchema], status_code=status.HTTP_201_CREATED
+)
+def create_transfer(
+    payload: TransferCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[Transaction]:
+    """
+    A manual giroconto: both legs, linked, in one commit. A plain
+    `type: transfer` POST still exists for single-sided movements, but it
+    only touches one account — moving money between two needs this.
+    """
+    from_account = get_owned_account(db, payload.from_account_id, current_user)
+    to_account = get_owned_account(db, payload.to_account_id, current_user)
+
+    outgoing, incoming = create_linked_transfer(
+        db,
+        current_user,
+        from_account=from_account,
+        to_account=to_account,
+        amount=payload.amount,
+        on_date=payload.date,
+        description=payload.description or "Giroconto",
+    )
+    db.commit()
+    db.refresh(outgoing)
+    db.refresh(incoming)
+    return [outgoing, incoming]
 
 
 @router.get("/summary", response_model=TransactionSummaryResponse)
@@ -458,6 +498,12 @@ def update_transaction(
         # Enum members (necessity_level_override) are stored as their string
         # value, like `type` on create.
         setattr(transaction, field, value.value if hasattr(value, "value") else value)
+
+    # A giroconto is listed as one row, so its description is edited once:
+    # keep the hidden leg in step, or it resurfaces stale under the
+    # destination account's filter.
+    if "description" in update_data and transaction.counterpart is not None:
+        transaction.counterpart.description = transaction.description
 
     if needs_recompute:
         try:

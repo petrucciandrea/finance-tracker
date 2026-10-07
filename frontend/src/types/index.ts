@@ -147,6 +147,8 @@ export interface Transaction {
   // The other leg of a giroconto, when there is one. Null on every opening
   // balance and portfolio cash leg — read it as "may have".
   counterpart_transaction_id: string | null
+  // The other leg's account, so a merged giroconto can read "A → B".
+  counterpart_account_id: string | null
   created_at: string
   deleted_at: string | null
 }
@@ -160,6 +162,16 @@ export interface TransactionCreatePayload {
   description?: string | null
   type: TransactionType
   necessity_level_override?: NecessityLevel | null
+}
+
+// A giroconto: the backend writes both legs (negative out, positive in) and
+// links them, so `amount` is the positive magnitude.
+export interface TransferCreatePayload {
+  from_account_id: string
+  to_account_id: string
+  amount: string
+  date: string
+  description?: string | null
 }
 
 export interface TransactionUpdatePayload {
@@ -179,6 +191,8 @@ export interface TransactionListParams {
   account_id?: string
   currency?: string
   type?: TransactionType
+  // One row per linked giroconto (its outgoing leg); ignored with account_id.
+  merge_transfer_legs?: boolean
 }
 
 export interface PaginationMeta {

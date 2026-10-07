@@ -1,9 +1,27 @@
 import type { AmountKind } from '@/components/ui/Amount'
 import { toNumber } from '@/lib/format'
-import type { Transaction } from '@/types'
+import type { Account, Transaction } from '@/types'
 
 export function amountKind(transaction: Pick<Transaction, 'type'>): AmountKind {
   return transaction.type
+}
+
+/**
+ * The account column for a row. A linked giroconto is listed once, so it
+ * names both sides; which side `account_id` is depends on the leg shown
+ * (the incoming one under a destination-account filter).
+ */
+export function accountLabel(
+  transaction: Pick<Transaction, 'account_id' | 'amount' | 'counterpart_account_id'>,
+  accounts: Map<string, Account>,
+): string {
+  const name = (id: string) => accounts.get(id)?.name ?? 'Conto eliminato'
+  if (!transaction.counterpart_account_id) return name(transaction.account_id)
+  const outgoing = Number(transaction.amount) < 0
+  const [from, to] = outgoing
+    ? [transaction.account_id, transaction.counterpart_account_id]
+    : [transaction.counterpart_account_id, transaction.account_id]
+  return `${name(from)} → ${name(to)}`
 }
 
 export interface TransactionTotals {

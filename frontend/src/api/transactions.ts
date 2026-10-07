@@ -8,6 +8,7 @@ import type {
   TransactionSummaryParams,
   TransactionSummaryResponse,
   TransactionUpdatePayload,
+  TransferCreatePayload,
 } from '@/types'
 
 export async function listTransactions(params: TransactionListParams = {}): Promise<TransactionListResponse> {
@@ -17,6 +18,12 @@ export async function listTransactions(params: TransactionListParams = {}): Prom
 
 export async function createTransaction(payload: TransactionCreatePayload): Promise<Transaction> {
   const { data } = await apiClient.post<Transaction>('/transactions', payload)
+  return data
+}
+
+// Returns both legs: [outgoing, incoming].
+export async function createTransfer(payload: TransferCreatePayload): Promise<Transaction[]> {
+  const { data } = await apiClient.post<Transaction[]>('/transactions/transfers', payload)
   return data
 }
 

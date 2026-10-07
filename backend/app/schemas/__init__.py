@@ -265,6 +265,19 @@ class TransactionCreate(BaseModel):
     necessity_level_override: NecessityLevel | None = None
 
 
+class TransferCreate(BaseModel):
+    """
+    A giroconto between two of the user's own accounts. Written as two
+    linked legs, so the amount is a positive magnitude — the sign of each
+    leg follows from which side it's on.
+    """
+    from_account_id: UUID
+    to_account_id: UUID
+    amount: Decimal = Field(gt=0, max_digits=18, decimal_places=8)
+    date: date_
+    description: str | None = Field(default=None, max_length=500)
+
+
 class TransactionUpdate(BaseModel):
     category_id: UUID | None = None
     amount: Decimal | None = Field(default=None, max_digits=18, decimal_places=8)
@@ -289,6 +302,7 @@ class Transaction(ORMBase):
     # The other leg of a giroconto, when there is one. Null on every
     # opening balance and portfolio cash leg — read it as "may have".
     counterpart_transaction_id: UUID | None = None
+    counterpart_account_id: UUID | None = None
     created_at: datetime
     deleted_at: datetime | None = None
 
@@ -302,6 +316,9 @@ class TransactionListParams(BaseModel):
     account_id: UUID | None = None
     currency: str | None = None
     type: TransactionType | None = None
+    # Show a linked giroconto once, as its outgoing leg. Ignored when
+    # filtering by account: there the leg on that account is the one to show.
+    merge_transfer_legs: bool = False
 
 
 class TransactionListResponse(BaseModel):

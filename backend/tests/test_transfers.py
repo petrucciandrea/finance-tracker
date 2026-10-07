@@ -422,3 +422,195 @@ def test_an_unlinked_transfer_deletes_on_its_own(
 
     assert response.status_code == 204
     assert _balances(client, headers)["Conto"] == Decimal("0")
+
+
+TRANSFERS_URL = "/api/v1/transactions/transfers"
+
+
+def test_manual_transfer_creates_two_linked_legs_and_moves_balances(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    main = _account(client, headers, "Conto", balance="1000.00")
+    savings = _account(client, headers, "Risparmi")
+
+    response = client.post(
+        TRANSFERS_URL,
+        json={
+            "from_account_id": main["id"],
+            "to_account_id": savings["id"],
+            "amount": "300.00",
+            "date": "2026-09-20",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 201, response.text
+    outgoing, incoming = response.json()
+    assert outgoing["account_id"] == main["id"]
+    assert Decimal(outgoing["amount"]) == Decimal("-300.00")
+    assert incoming["account_id"] == savings["id"]
+    assert Decimal(incoming["amount"]) == Decimal("300.00")
+    assert outgoing["counterpart_transaction_id"] == incoming["id"]
+    assert incoming["counterpart_transaction_id"] == outgoing["id"]
+    assert outgoing["description"] == "Giroconto"
+
+    balances = _balances(client, headers)
+    assert balances["Conto"] == Decimal("700.00")
+    assert balances["Risparmi"] == Decimal("300.00")
+
+
+def test_manual_transfer_rejects_same_account(client: TestClient, registered_user: dict) -> None:
+    headers = registered_user["auth_headers"]
+    main = _account(client, headers, "Conto")
+
+    response = client.post(
+        TRANSFERS_URL,
+        json={
+            "from_account_id": main["id"],
+            "to_account_id": main["id"],
+            "amount": "10.00",
+            "date": "2026-09-20",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+
+
+def test_manual_transfer_rejects_cross_currency(client: TestClient, registered_user: dict) -> None:
+    headers = registered_user["auth_headers"]
+    main = _account(client, headers, "Conto")
+    usd = _account(client, headers, "Dollari", currency="USD")
+
+    response = client.post(
+        TRANSFERS_URL,
+        json={
+            "from_account_id": main["id"],
+            "to_account_id": usd["id"],
+            "amount": "10.00",
+            "date": "2026-09-20",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+    listed = client.get("/api/v1/transactions", headers=headers).json()
+    assert listed["data"] == []
+
+
+def test_manual_transfer_rejects_a_non_positive_amount(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    main = _account(client, headers, "Conto")
+    savings = _account(client, headers, "Risparmi")
+
+    response = client.post(
+        TRANSFERS_URL,
+        json={
+            "from_account_id": main["id"],
+            "to_account_id": savings["id"],
+            "amount": "-10.00",
+            "date": "2026-09-20",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+
+
+def _manual_transfer(client: TestClient, headers: dict, from_id: str, to_id: str) -> list[dict]:
+    response = client.post(
+        TRANSFERS_URL,
+        json={
+            "from_account_id": from_id,
+            "to_account_id": to_id,
+            "amount": "50.00",
+            "date": "2026-09-20",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_merged_list_shows_a_giroconto_once(client: TestClient, registered_user: dict) -> None:
+    headers = registered_user["auth_headers"]
+    main = _account(client, headers, "Conto")
+    savings = _account(client, headers, "Risparmi")
+    outgoing, _ = _manual_transfer(client, headers, main["id"], savings["id"])
+
+    response = client.get(
+        "/api/v1/transactions", params={"merge_transfer_legs": True}, headers=headers
+    )
+
+    body = response.json()
+    assert body["meta"]["total_items"] == 1
+    (row,) = body["data"]
+    assert row["id"] == outgoing["id"]
+    assert row["account_id"] == main["id"]
+    assert row["counterpart_account_id"] == savings["id"]
+
+
+def test_merged_list_keeps_unpaired_transfers(client: TestClient, registered_user: dict) -> None:
+    headers = registered_user["auth_headers"]
+    # An opening balance is a positive, unpaired transfer: only the incoming
+    # leg of a *pair* is dropped.
+    _account(client, headers, "Conto", balance="500.00")
+
+    response = client.get(
+        "/api/v1/transactions", params={"merge_transfer_legs": True}, headers=headers
+    )
+
+    (row,) = response.json()["data"]
+    assert row["counterpart_account_id"] is None
+
+
+def test_merged_list_filtered_by_destination_shows_the_incoming_leg(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    main = _account(client, headers, "Conto")
+    savings = _account(client, headers, "Risparmi")
+    _, incoming = _manual_transfer(client, headers, main["id"], savings["id"])
+
+    response = client.get(
+        "/api/v1/transactions",
+        params={"merge_transfer_legs": True, "account_id": savings["id"]},
+        headers=headers,
+    )
+
+    (row,) = response.json()["data"]
+    assert row["id"] == incoming["id"]
+    assert row["counterpart_account_id"] == main["id"]
+
+
+def test_unmerged_list_still_returns_both_legs(client: TestClient, registered_user: dict) -> None:
+    headers = registered_user["auth_headers"]
+    main = _account(client, headers, "Conto")
+    savings = _account(client, headers, "Risparmi")
+    _manual_transfer(client, headers, main["id"], savings["id"])
+
+    response = client.get("/api/v1/transactions", headers=headers)
+
+    assert response.json()["meta"]["total_items"] == 2
+
+
+def test_editing_a_legs_description_updates_its_counterpart(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    main = _account(client, headers, "Conto")
+    savings = _account(client, headers, "Risparmi")
+    outgoing, incoming = _manual_transfer(client, headers, main["id"], savings["id"])
+
+    response = client.patch(
+        f"/api/v1/transactions/{outgoing['id']}",
+        json={"description": "Fondo vacanze"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    other = client.get(f"/api/v1/transactions/{incoming['id']}", headers=headers).json()
+    assert other["description"] == "Fondo vacanze"

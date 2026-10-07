@@ -8,6 +8,7 @@ import type {
   TransactionListParams,
   TransactionSummaryParams,
   TransactionUpdatePayload,
+  TransferCreatePayload,
 } from '@/types'
 
 // Exported so useAccounts.ts can invalidate it too — creating an account
@@ -76,6 +77,14 @@ export function useCreateTransaction() {
     mutationFn: (payload: TransactionCreatePayload) => transactionsApi.createTransaction(payload),
     // Both the list and any summary views depend on this data — broad
     // invalidation is simplest and correct at this app's scale.
+    onSuccess: () => invalidateTransactionsAndDerived(queryClient),
+  })
+}
+
+export function useCreateTransfer() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: TransferCreatePayload) => transactionsApi.createTransfer(payload),
     onSuccess: () => invalidateTransactionsAndDerived(queryClient),
   })
 }

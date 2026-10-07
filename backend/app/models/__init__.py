@@ -209,6 +209,20 @@ class Transaction(Base, TimestampMixin, SoftDeleteMixin):
 
     account: Mapped["Account"] = relationship(back_populates="transactions")
     category: Mapped["Category | None"] = relationship(back_populates="transactions")
+    # View-only: the pair is written by setting the FK columns after both
+    # legs have ids. A writable relationship would make the unit of work see
+    # two rows that depend on each other and refuse to order the inserts.
+    counterpart: Mapped["Transaction | None"] = relationship(
+        remote_side="Transaction.id",
+        foreign_keys=[counterpart_transaction_id],
+        viewonly=True,
+    )
+
+    @property
+    def counterpart_account_id(self) -> uuid.UUID | None:
+        # Lets a list collapse a giroconto into one "A → B" row without
+        # shipping the hidden leg.
+        return self.counterpart.account_id if self.counterpart is not None else None
 
     __table_args__ = (
         CheckConstraint("type in ('expense','income','transfer')", name="ck_transactions_type"),

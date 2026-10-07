@@ -19,7 +19,7 @@ import { indexById } from '@/lib/categories'
 import { endOfMonth, monthRange } from '@/lib/dates'
 import { formatAmount, formatLongDate, formatMonthName, formatPercent, formatQuantity, formatShortDate, toISODate } from '@/lib/format'
 import { ACCOUNT_TYPE_LABELS, ASSET_TYPE_LABELS, INVESTMENT_ACCOUNT_TYPES, unrealizedPnlBase } from '@/lib/portfolio'
-import { amountKind, totals } from '@/lib/transactions'
+import { accountLabel, amountKind, totals } from '@/lib/transactions'
 import type { NetWorthSummary } from '@/types'
 
 function AccountsCard({ netWorth }: { netWorth: NetWorthSummary }) {
@@ -185,7 +185,7 @@ function PortfolioCard({ netWorth }: { netWorth: NetWorthSummary }) {
 }
 
 function RecentTransactions({ baseCurrency }: { baseCurrency: string }) {
-  const { data, isLoading } = useTransactionsList({ page: 1, page_size: 7 })
+  const { data, isLoading } = useTransactionsList({ page: 1, page_size: 7, merge_transfer_legs: true })
   const { data: categories } = useCategories()
   const { data: accounts } = useAccounts()
   const categoriesById = indexById(categories)
@@ -217,7 +217,7 @@ function RecentTransactions({ baseCurrency }: { baseCurrency: string }) {
                   <span className="rounded-full bg-card-2 px-[7px] py-px text-[11px] font-bold text-ink-2">
                     {t.type === 'transfer' ? 'Trasferimento' : (categoriesById.get(t.category_id ?? '')?.name ?? 'Categoria eliminata')}
                   </span>
-                  <span className="truncate">{accountsById.get(t.account_id)?.name}</span>
+                  <span className="truncate">{accountLabel(t, accountsById)}</span>
                 </div>
               </div>
               <Amount

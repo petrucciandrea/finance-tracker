@@ -10,7 +10,7 @@ import { Field } from '@/components/ui/Field'
 import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { useAccounts } from '@/hooks/useAccounts'
 import { useCategories } from '@/hooks/useCategories'
-import { useCreateTransaction, useUpdateTransaction } from '@/hooks/useTransactions'
+import { useCreateTransaction, useCreateTransfer, useUpdateTransaction } from '@/hooks/useTransactions'
 import { apiErrorMessage } from '@/lib/apiError'
 import { NECESSITY_LABELS } from '@/lib/categories'
 import { toISODate } from '@/lib/format'
@@ -22,9 +22,12 @@ const TYPE_OPTIONS: { value: TransactionType; label: string }[] = [
   { value: 'transfer', label: 'Trasferimento' },
 ]
 
-const schema = z.object({
+const baseSchema = z.object({
   type: z.enum(['expense', 'income', 'transfer']),
   account_id: z.string().min(1, 'Seleziona un conto'),
+  // New transfers only: the giroconto's other side. An existing leg can't
+  // change accounts, so edit mode never asks for it.
+  to_account_id: z.string().optional(),
   category_id: z.string().optional(),
   amount: z
     .string()
@@ -38,7 +41,18 @@ const schema = z.object({
   necessity_level_override: z.enum(['primary', 'useful', 'discretionary']).or(z.literal('')).optional(),
 })
 
-type FormValues = z.infer<typeof schema>
+type FormValues = z.infer<typeof baseSchema>
+
+function makeSchema(editing: boolean) {
+  return baseSchema.superRefine((values, ctx) => {
+    if (editing || values.type !== 'transfer') return
+    if (!values.to_account_id) {
+      ctx.addIssue({ code: 'custom', path: ['to_account_id'], message: 'Seleziona il conto di destinazione' })
+    } else if (values.to_account_id === values.account_id) {
+      ctx.addIssue({ code: 'custom', path: ['to_account_id'], message: 'Scegli un conto diverso da quello di partenza' })
+    }
+  })
+}
 
 interface Props {
   open: boolean
@@ -53,6 +67,7 @@ function initialValues(transaction?: Transaction | null): FormValues {
     return {
       type: transaction.type,
       account_id: transaction.account_id,
+      to_account_id: '',
       category_id: transaction.category_id ?? '',
       amount: String(Math.abs(Number(transaction.amount))),
       currency: transaction.currency,
@@ -61,7 +76,7 @@ function initialValues(transaction?: Transaction | null): FormValues {
       necessity_level_override: transaction.necessity_level_override ?? '',
     }
   }
-  return { type: 'expense', account_id: '', category_id: '', amount: '', currency: '', date: toISODate(new Date()), description: '', necessity_level_override: '' }
+  return { type: 'expense', account_id: '', to_account_id: '', category_id: '', amount: '', currency: '', date: toISODate(new Date()), description: '', necessity_level_override: '' }
 }
 
 function TransactionForm({ transaction, onDone }: { transaction?: Transaction | null; onDone: () => void }) {
@@ -69,6 +84,7 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
   const { data: accounts } = useAccounts()
   const { data: categories } = useCategories()
   const createTransaction = useCreateTransaction()
+  const createTransfer = useCreateTransfer()
   const updateTransaction = useUpdateTransaction()
   const [serverError, setServerError] = useState<string | null>(null)
 
@@ -77,18 +93,29 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
     handleSubmit,
     control,
     setValue,
+    getValues,
     formState: { errors, isSubmitting },
-  } = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: initialValues(transaction) })
+  } = useForm<FormValues>({ resolver: zodResolver(makeSchema(editing)), defaultValues: initialValues(transaction) })
 
   const type = useWatch({ control, name: 'type' })
+  const fromAccountId = useWatch({ control, name: 'account_id' })
   const activeAccounts = (accounts ?? []).filter((a) => !a.deleted_at)
+  const isNewTransfer = !editing && type === 'transfer'
+  // Giroconti are same-currency only (the backend 422s otherwise), so only
+  // offer destinations that can actually receive the money.
+  const fromAccount = activeAccounts.find((a) => a.id === fromAccountId)
+  const destinationAccounts = activeAccounts.filter((a) => a.id !== fromAccountId && (!fromAccount || a.currency === fromAccount.currency))
 
   async function onSubmit(values: FormValues) {
     setServerError(null)
     // The form takes a positive number; the sign follows the type (expenses
     // negative), so nobody has to type a minus.
     const magnitude = Math.abs(Number(values.amount.replace(',', '.')))
-    const amount = values.type === 'expense' ? `-${magnitude}` : String(magnitude)
+    // An existing transfer keeps its own sign: the outgoing leg of a
+    // giroconto (or a portfolio buy) is negative, and flipping it would read
+    // as an amount edit — a 409 on a linked leg.
+    const negative = transaction?.type === 'transfer' ? Number(transaction.amount) < 0 : values.type === 'expense'
+    const amount = negative ? `-${magnitude}` : String(magnitude)
     const override = values.type === 'expense' && values.necessity_level_override ? values.necessity_level_override : null
     try {
       if (transaction) {
@@ -103,6 +130,14 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
             description: values.description || null,
             necessity_level_override: override,
           },
+        })
+      } else if (values.type === 'transfer') {
+        await createTransfer.mutateAsync({
+          from_account_id: values.account_id,
+          to_account_id: values.to_account_id ?? '',
+          amount: String(magnitude),
+          date: values.date,
+          description: values.description || null,
         })
       } else {
         await createTransaction.mutateAsync({
@@ -140,7 +175,7 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
       )}
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Conto" htmlFor="tx-account" error={errors.account_id?.message}>
+        <Field label={isNewTransfer ? 'Da conto' : 'Conto'} htmlFor="tx-account" error={errors.account_id?.message}>
           <select
             id="tx-account"
             disabled={editing}
@@ -153,6 +188,9 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
               // Default the currency to the account's own; still editable.
               const account = activeAccounts.find((a) => a.id === event.target.value)
               if (account) setValue('currency', account.currency)
+              // Drop a destination that no longer fits the new source.
+              const destination = activeAccounts.find((a) => a.id === getValues('to_account_id'))
+              if (destination && (destination.id === account?.id || destination.currency !== account?.currency)) setValue('to_account_id', '')
             }}
           >
             <option value="">Seleziona un conto</option>
@@ -163,6 +201,25 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
             ))}
           </select>
         </Field>
+
+        {isNewTransfer && (
+          <Field label="A conto" htmlFor="tx-to-account" error={errors.to_account_id?.message} hint={fromAccount ? `Solo conti in ${fromAccount.currency}.` : undefined}>
+            <select
+              id="tx-to-account"
+              aria-invalid={!!errors.to_account_id}
+              aria-describedby="tx-to-account-msg"
+              className="field"
+              {...register('to_account_id')}
+            >
+              <option value="">Seleziona un conto</option>
+              {destinationAccounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name} · {a.currency}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
 
         <Field label="Data" htmlFor="tx-date" error={errors.date?.message}>
           <input id="tx-date" type="date" className="field" aria-invalid={!!errors.date} {...register('date')} />
@@ -181,7 +238,7 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
         </Field>
 
         <Field label="Valuta" htmlFor="tx-currency" error={errors.currency?.message}>
-          <input id="tx-currency" maxLength={3} disabled={editing} aria-invalid={!!errors.currency} className="field uppercase" {...register('currency')} />
+          <input id="tx-currency" maxLength={3} disabled={editing} readOnly={isNewTransfer} aria-invalid={!!errors.currency} className="field uppercase" {...register('currency')} />
         </Field>
 
         {type !== 'transfer' && (
@@ -213,7 +270,7 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
       <div className="flex flex-wrap justify-end gap-2">
         <Button onClick={onDone}>Annulla</Button>
         <Button type="submit" variant="primary" disabled={isSubmitting}>
-          {isSubmitting ? 'Salvataggio…' : editing ? 'Salva modifiche' : 'Crea transazione'}
+          {isSubmitting ? 'Salvataggio…' : editing ? 'Salva modifiche' : isNewTransfer ? 'Crea giroconto' : 'Crea transazione'}
         </Button>
       </div>
     </form>

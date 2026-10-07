@@ -1,89 +1,122 @@
 import { useState } from 'react'
-import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Area, ComposedChart, CartesianGrid, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Card } from '@/components/ui/Card'
+import { EmptyState, LoadingBlock } from '@/components/ui/EmptyState'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
+import { useAssetTransactionsList } from '@/hooks/useAssetTransactions'
 import { usePortfolioHistory } from '@/hooks/usePortfolio'
+import { formatAmount, formatCompact, formatFullDate, formatShortDate } from '@/lib/format'
+import { PERIOD_OPTIONS } from '@/lib/portfolio'
 import type { PortfolioHistoryPeriod } from '@/types'
 
-const PERIOD_LABELS: Record<PortfolioHistoryPeriod, string> = {
-  '1m': '1M',
-  '3m': '3M',
-  '6m': '6M',
-  '1y': '1A',
-  all: 'Tutto',
+interface Point {
+  date: string
+  value: number
+  invested: number
 }
 
-function formatCurrency(amount: number, currency: string): string {
-  return amount.toLocaleString('it-IT', { style: 'currency', currency, maximumFractionDigits: 0 })
+const AXIS_TICK = { fontSize: 12, fill: 'var(--color-ink-3)' }
+
+function ChartTooltip({ active, payload, currency }: { active?: boolean; payload?: { payload: Point }[]; currency: string }) {
+  if (!active || !payload?.length) return null
+  const p = payload[0].payload
+  const gain = p.value - p.invested
+  return (
+    <div className="rounded-[10px] border border-line bg-card px-3 py-2 text-[12px] tabular-nums shadow-[0_4px_14px_rgba(0,0,0,0.10)]">
+      <div className="font-semibold text-ink-3">{formatFullDate(p.date)}</div>
+      <div className="mt-1 flex justify-between gap-4">
+        <span className="text-ink-2">Valore</span>
+        <b>
+          {formatAmount(p.value, currency)} <span className="ccy">{currency}</span>
+        </b>
+      </div>
+      <div className="flex justify-between gap-4">
+        <span className="text-ink-2">Capitale investito</span>
+        <b>
+          {formatAmount(p.invested, currency)} <span className="ccy">{currency}</span>
+        </b>
+      </div>
+      <div className={`mt-0.5 font-extrabold ${gain >= 0 ? 'text-pos' : 'text-neg'}`}>
+        {gain >= 0 ? '▲' : '▼'} {formatAmount(gain, currency, { sign: 'always' })} non realizzato
+      </div>
+    </div>
+  )
 }
 
+/**
+ * Market value of the positions against net invested capital, both in the
+ * base currency on one axis. Invested capital is cumulative buys minus
+ * sells (amount_base_currency at each trade's own rate), so the gap
+ * between the lines is the gain — no second scale needed.
+ */
 export function PortfolioValueChart({ baseCurrency }: { baseCurrency: string }) {
   const [period, setPeriod] = useState<PortfolioHistoryPeriod>('6m')
   const { data, isLoading } = usePortfolioHistory(period)
+  const { data: trades } = useAssetTransactionsList()
 
-  const chartData =
-    data?.points.map((p) => ({
-      date: p.date,
-      netWorth: Number(p.total_net_worth),
-      holdings: Number(p.total_holdings_value_base_currency),
-    })) ?? []
+  const sortedTrades = [...(trades ?? [])].filter((t) => !t.deleted_at).sort((a, b) => a.date.localeCompare(b.date))
+  const points: Point[] = (data?.points ?? []).map((p) => {
+    let invested = 0
+    for (const t of sortedTrades) {
+      if (t.date > p.date) break
+      invested += (t.type === 'buy' ? 1 : -1) * Number(t.amount_base_currency)
+    }
+    return { date: p.date, value: Number(p.total_holdings_value_base_currency), invested }
+  })
 
   return (
-    <div className="rounded-lg bg-white p-6 shadow-sm">
-      <div className="mb-4 flex items-center justify-between">
-        <p className="text-sm font-medium text-slate-700">Andamento del portafoglio</p>
-        <div className="flex gap-1">
-          {(Object.keys(PERIOD_LABELS) as PortfolioHistoryPeriod[]).map((p) => (
-            <button
-              key={p}
-              onClick={() => setPeriod(p)}
-              className={`rounded px-2 py-1 text-xs font-medium ${
-                period === p ? 'bg-slate-800 text-white' : 'text-slate-500 hover:bg-slate-100'
-              }`}
-            >
-              {PERIOD_LABELS[p]}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="h-64 w-full">
-        {isLoading && <p className="text-sm text-slate-500">Caricamento...</p>}
-        {!isLoading && chartData.length === 0 && (
-          <p className="text-sm text-slate-500">Nessun dato per questo periodo.</p>
-        )}
-        {!isLoading && chartData.length > 0 && (
+    <Card
+      title="Valore e capitale investito"
+      className="flex-[999_1_560px]"
+      action={<SegmentedControl label="Periodo" options={PERIOD_OPTIONS} value={period} onChange={setPeriod} size="sm" />}
+    >
+      <ul className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[12px] text-ink-2">
+        <li className="inline-flex items-center gap-1.5">
+          <span aria-hidden="true" className="h-0.5 w-3.5 bg-accent" />
+          Valore di mercato
+        </li>
+        <li className="inline-flex items-center gap-1.5">
+          <span aria-hidden="true" className="w-3.5 border-t-2 border-dashed border-ink-3" />
+          Capitale investito (acquisti − vendite, al cambio del giorno)
+        </li>
+      </ul>
+      <div className="mt-3 h-[240px]">
+        {isLoading ? (
+          <LoadingBlock className="h-full" />
+        ) : points.length < 2 ? (
+          <EmptyState title="Ancora pochi dati">Il grafico compare dopo almeno due giorni di storico.</EmptyState>
+        ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 0 }}>
-              <defs>
-                <linearGradient id="netWorthFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#059669" stopOpacity={0.25} />
-                  <stop offset="100%" stopColor="#059669" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <XAxis
-                dataKey="date"
-                tick={{ fontSize: 11, fill: '#94a3b8' }}
-                tickFormatter={(d: string) => d.slice(5)}
-                minTickGap={30}
-              />
-              <YAxis
-                tick={{ fontSize: 11, fill: '#94a3b8' }}
-                tickFormatter={(v: number) => formatCurrency(v, baseCurrency)}
-                width={70}
-              />
-              <Tooltip formatter={(value) => formatCurrency(Number(value), baseCurrency)} />
+            <ComposedChart data={points} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} accessibilityLayer>
+              <CartesianGrid vertical={false} stroke="var(--color-line)" />
+              <XAxis dataKey="date" tick={AXIS_TICK} tickLine={false} axisLine={false} tickFormatter={(d: string) => formatShortDate(d)} minTickGap={36} />
+              <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={44} tickFormatter={(v: number) => formatCompact(v)} />
+              <Tooltip content={<ChartTooltip currency={baseCurrency} />} cursor={{ stroke: 'var(--color-ink-3)', strokeDasharray: '3 3' }} />
               <Area
                 type="monotone"
-                dataKey="netWorth"
-                name="Patrimonio netto"
-                stroke="#059669"
-                fill="url(#netWorthFill)"
+                dataKey="value"
+                name="Valore di mercato"
+                stroke="var(--color-accent)"
                 strokeWidth={2}
+                fill="var(--color-accent)"
+                fillOpacity={0.1}
+                isAnimationActive={false}
+                activeDot={{ r: 5, stroke: 'var(--color-card)', strokeWidth: 3, fill: 'var(--color-accent)' }}
+              />
+              <Line
+                type="stepAfter"
+                dataKey="invested"
+                name="Capitale investito"
+                stroke="var(--color-ink-3)"
+                strokeWidth={2}
+                strokeDasharray="5 4"
+                dot={false}
                 isAnimationActive={false}
               />
-            </AreaChart>
+            </ComposedChart>
           </ResponsiveContainer>
         )}
       </div>
-    </div>
+    </Card>
   )
 }

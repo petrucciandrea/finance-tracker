@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { buttonClass } from '@/lib/buttonClass'
 import { useAccounts } from '@/hooks/useAccounts'
 import {
   useAssetTransactionImportPreview,
@@ -55,18 +56,18 @@ export function AssetTransactionImport({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <div className="space-y-4 rounded-lg bg-white p-6 shadow-sm">
+    <div className="space-y-4 rounded-[14px] border border-line bg-card px-4 py-4 sm:px-5">
       {!preview && (
         <>
           <div>
-            <label htmlFor="import-account" className="block text-sm font-medium text-slate-700">
+            <label htmlFor="import-account" className="mb-1.5 block text-[14px] font-bold text-ink">
               Conto di destinazione
             </label>
             <select
               id="import-account"
               value={accountId}
               onChange={(e) => setAccountId(e.target.value)}
-              className="mt-1 w-full max-w-sm rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+              className="field max-w-sm"
             >
               <option value="">Seleziona un conto</option>
               {eligibleAccounts.map((a) => (
@@ -78,10 +79,10 @@ export function AssetTransactionImport({ onDone }: { onDone: () => void }) {
           </div>
 
           <div>
-            <label htmlFor="import-file" className="block text-sm font-medium text-slate-700">
+            <label htmlFor="import-file" className="mb-1.5 block text-[14px] font-bold text-ink">
               File CSV
             </label>
-            <p className="mb-1 text-xs text-slate-400">
+            <p className="mb-1.5 text-[13px] text-ink-3">
               Colonne attese: symbol, asset_type (stock/etf/crypto), type (buy/sell), quantity,
               price, fee (opzionale), date, notes (opzionale)
             </p>
@@ -90,25 +91,25 @@ export function AssetTransactionImport({ onDone }: { onDone: () => void }) {
               type="file"
               accept=".csv"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              className="mt-1 block text-sm text-slate-600"
+              className="field py-2 file:mr-3 file:cursor-pointer file:rounded-lg file:border-0 file:bg-card-2 file:px-3 file:py-1.5 file:font-bold file:text-ink"
             />
           </div>
 
           {importPreview.isError && (
-            <p className="text-sm text-red-600">Errore durante la lettura del file. Riprova.</p>
+            <p role="alert" className="rounded-[10px] bg-neg-soft px-3 py-2 text-[13px] font-bold text-neg">Errore durante la lettura del file. Riprova.</p>
           )}
 
           <div className="flex gap-3">
             <button
               onClick={handleUpload}
               disabled={!accountId || !file || importPreview.isPending}
-              className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+              className={buttonClass('primary')}
             >
               {importPreview.isPending ? 'Analisi in corso...' : 'Carica e analizza'}
             </button>
             <button
               onClick={onDone}
-              className="rounded-md px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
+              className={buttonClass('secondary')}
             >
               Annulla
             </button>
@@ -118,25 +119,25 @@ export function AssetTransactionImport({ onDone }: { onDone: () => void }) {
 
       {preview && (
         <div className="space-y-4">
-          <div className="flex flex-wrap gap-4 text-sm">
-            <span className="text-slate-600">
+          <div className="flex flex-wrap gap-4 text-[13px] tabular-nums">
+            <span className="text-ink-2">
               <strong>{preview.total_rows}</strong> righe totali
             </span>
-            <span className="text-green-700">
+            <span className="text-pos">
               <strong>{preview.parsable_rows}</strong> valide
             </span>
-            <span className="text-amber-700">
+            <span className="text-warn">
               <strong>{preview.duplicate_rows}</strong> possibili duplicati
             </span>
-            <span className="text-slate-600">
+            <span className="text-ink-2">
               <strong>{selectedRows.size}</strong> selezionate per l'import
             </span>
           </div>
 
-          <div className="relative overflow-x-auto rounded-lg border border-slate-100">
-            <table className="min-w-full divide-y divide-slate-100 text-sm">
+          <div className="relative overflow-x-auto rounded-[10px] border border-line">
+            <table className="min-w-full text-[13px] tabular-nums [&_td]:border-t [&_td]:border-line">
               <thead>
-                <tr className="text-left text-xs font-medium uppercase text-slate-400">
+                <tr className="bg-card-2 text-left text-[12px] font-bold text-ink-3">
                   <th className="px-3 py-2"></th>
                   <th className="px-3 py-2">Asset</th>
                   <th className="px-3 py-2">Operazione</th>
@@ -146,9 +147,9 @@ export function AssetTransactionImport({ onDone }: { onDone: () => void }) {
                   <th className="px-3 py-2">Stato</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody>
                 {preview.rows.map((row) => (
-                  <tr key={row.row_number} className={row.is_parsable ? '' : 'bg-red-50'}>
+                  <tr key={row.row_number} className={row.is_parsable ? '' : 'bg-neg-soft/40'}>
                     <td className="px-3 py-2">
                       <input
                         type="checkbox"
@@ -166,15 +167,15 @@ export function AssetTransactionImport({ onDone }: { onDone: () => void }) {
                     <td className="px-3 py-2">{row.is_parsable ? row.date : '—'}</td>
                     <td className="px-3 py-2">
                       {!row.is_parsable && (
-                        <span className="text-xs font-medium text-red-600" title={row.error ?? ''}>
+                        <span className="rounded-full bg-neg-soft px-2 py-0.5 text-[12px] font-extrabold text-neg" title={row.error ?? ''}>
                           Riga non valida
                         </span>
                       )}
                       {row.is_parsable && row.is_duplicate && (
-                        <span className="text-xs font-medium text-amber-600">Possibile duplicato</span>
+                        <span className="rounded-full bg-warn-soft px-2 py-0.5 text-[12px] font-extrabold text-warn">Possibile duplicato</span>
                       )}
                       {row.is_parsable && !row.is_duplicate && (
-                        <span className="text-xs font-medium text-green-600">OK</span>
+                        <span className="rounded-full bg-pos-soft px-2 py-0.5 text-[12px] font-extrabold text-pos">OK</span>
                       )}
                     </td>
                   </tr>
@@ -187,7 +188,7 @@ export function AssetTransactionImport({ onDone }: { onDone: () => void }) {
             <button
               onClick={handleConfirm}
               disabled={selectedRows.size === 0 || confirmImport.isPending}
-              className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+              className={buttonClass('primary')}
             >
               {confirmImport.isPending
                 ? 'Importazione...'
@@ -195,7 +196,7 @@ export function AssetTransactionImport({ onDone }: { onDone: () => void }) {
             </button>
             <button
               onClick={onDone}
-              className="rounded-md px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
+              className={buttonClass('secondary')}
             >
               Annulla
             </button>

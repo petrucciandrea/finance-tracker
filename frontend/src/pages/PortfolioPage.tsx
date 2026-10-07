@@ -1,141 +1,204 @@
 import { useState } from 'react'
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
+import { AllocationBar } from '@/components/portfolio/AllocationBar'
 import { AssetTransactionForm } from '@/components/portfolio/AssetTransactionForm'
 import { AssetTransactionImport } from '@/components/portfolio/AssetTransactionImport'
 import { HoldingsTable } from '@/components/portfolio/HoldingsTable'
 import { PnlByAssetChart } from '@/components/portfolio/PnlByAssetChart'
 import { PortfolioValueChart } from '@/components/portfolio/PortfolioValueChart'
-import { useHoldings, useNetWorth } from '@/hooks/usePortfolio'
+import { Delta } from '@/components/ui/Amount'
+import { Button } from '@/components/ui/Button'
+import { Card } from '@/components/ui/Card'
+import { EmptyState, ErrorBlock, LoadingBlock } from '@/components/ui/EmptyState'
+import { UploadIcon } from '@/components/ui/Icon'
+import { KpiStrip, type Kpi } from '@/components/ui/KpiStrip'
+import { PageHeader } from '@/components/ui/PageHeader'
+import { useAccounts } from '@/hooks/useAccounts'
+import { useAssetTransactionsList } from '@/hooks/useAssetTransactions'
+import { useAuth } from '@/hooks/useAuth'
+import { useNetWorth } from '@/hooks/usePortfolio'
+import { formatAmount, formatFullDate, formatPercent, formatQuantity, formatShortDate } from '@/lib/format'
+import { costBasisBase, INVESTMENT_ACCOUNT_TYPES, realizedPnlBase, unrealizedPnlBase } from '@/lib/portfolio'
 
-type PanelMode = 'none' | 'form' | 'import'
+type Panel = 'none' | 'form' | 'import'
 
-const ALLOCATION_COLORS = [
-  '#1e293b', // slate-800 (cash)
-  '#059669',
-  '#0ea5e9',
-  '#d97706',
-  '#7c3aed',
-  '#db2777',
-  '#65a30d',
-]
+// Size of the currency move used to illustrate FX exposure.
+const FX_SHOCK = 5
 
-function formatCurrency(amount: string, currency: string): string {
-  return Number(amount).toLocaleString('it-IT', { style: 'currency', currency })
+function CurrencyExposure({ exposure, baseCurrency }: { exposure: Map<string, number>; baseCurrency: string }) {
+  const total = [...exposure.values()].reduce((s, v) => s + v, 0)
+  const rows = [...exposure.entries()].filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
+  const foreign = rows.find(([ccy]) => ccy !== baseCurrency)
+  if (!total) return null
+  return (
+    <div className="mt-4 border-t border-line pt-3">
+      <h3 className="text-[13px] font-extrabold text-ink-2">Esposizione valutaria</h3>
+      <ul className="mt-2 flex flex-col gap-1.5 tabular-nums">
+        {rows.map(([ccy, value]) => (
+          <li key={ccy} className="grid grid-cols-[44px_1fr_auto] items-center gap-2 text-[13px]">
+            <span className="font-extrabold">{ccy}</span>
+            <span className="h-2 rounded-full bg-track" aria-hidden="true">
+              <span className="block h-full rounded-full bg-bar" style={{ width: `${(value / total) * 100}%` }} />
+            </span>
+            <span className="text-ink-2">
+              {formatPercent((value / total) * 100)} · {formatAmount(value, baseCurrency, { digits: 0 })} {baseCurrency}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {foreign && (
+        <p className="mt-2 text-[12px] text-ink-3">
+          Un −{FX_SHOCK}% del {foreign[0]} vale circa −{formatAmount((foreign[1] * FX_SHOCK) / 100, baseCurrency, { digits: 0 })} {baseCurrency} sul
+          portafoglio.
+        </p>
+      )}
+    </div>
+  )
+}
+
+function RecentTrades({ baseCurrency }: { baseCurrency: string }) {
+  const { data, isLoading } = useAssetTransactionsList()
+  const recent = [...(data ?? [])].filter((t) => !t.deleted_at).sort((a, b) => b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at)).slice(0, 8)
+  return (
+    <Card title="Operazioni recenti" className="flex-[1_1_380px]">
+      {isLoading ? (
+        <LoadingBlock className="mt-3 h-40" />
+      ) : recent.length === 0 ? (
+        <div className="mt-3">
+          <EmptyState title="Nessuna operazione" />
+        </div>
+      ) : (
+        <ul className="mt-1.5">
+          {recent.map((t) => (
+            <li key={t.id} className="grid grid-cols-[46px_1fr_auto] items-center gap-2.5 border-b border-line py-2.5 tabular-nums last:border-b-0">
+              <span className="text-[12px] font-semibold text-ink-3">{formatShortDate(t.date)}</span>
+              <div className="min-w-0">
+                <div className="font-bold">
+                  {t.type === 'buy' ? 'Acquisto' : 'Vendita'} {t.asset.symbol}
+                </div>
+                <div className="truncate text-[12px] text-ink-3">
+                  {formatQuantity(t.quantity)} × {formatAmount(t.price, t.asset.currency)} {t.asset.currency}
+                </div>
+              </div>
+              <span className={`font-extrabold whitespace-nowrap ${t.type === 'sell' ? 'text-pos' : 'text-ink'}`}>
+                {formatAmount(t.type === 'buy' ? -Number(t.amount_base_currency) : t.amount_base_currency, baseCurrency, { sign: t.type === 'sell' ? 'always' : 'auto' })}{' '}
+                <span className="ccy">{baseCurrency}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  )
 }
 
 export function PortfolioPage() {
-  const { data: holdings, isLoading, isError } = useHoldings()
-  const { data: netWorth } = useNetWorth()
-  const [panel, setPanel] = useState<PanelMode>('none')
+  const { user } = useAuth()
+  const base = user?.base_currency ?? ''
+  const [today] = useState(() => new Date())
+  const [panel, setPanel] = useState<Panel>('none')
+  const netWorth = useNetWorth()
+  const { data: accounts } = useAccounts()
 
-  function togglePanel(mode: PanelMode) {
-    setPanel((current) => (current === mode ? 'none' : mode))
+  const holdings = netWorth.data?.holdings ?? []
+  const value = holdings.reduce((s, h) => s + Number(h.market_value_base_currency), 0)
+  const cost = holdings.reduce((s, h) => s + costBasisBase(h), 0)
+  const unrealized = holdings.reduce((s, h) => s + unrealizedPnlBase(h), 0)
+  const realized = holdings.reduce((s, h) => s + realizedPnlBase(h), 0)
+  const investmentAccounts = (accounts ?? []).filter((a) => INVESTMENT_ACCOUNT_TYPES.includes(a.type))
+  const investmentIds = new Set(investmentAccounts.map((a) => a.id))
+  const cashBalances = (netWorth.data?.accounts ?? []).filter((a) => investmentIds.has(a.account_id))
+  const cash = cashBalances.reduce((s, a) => s + Number(a.balance_base_currency), 0)
+
+  const byType: Record<string, number> = { cash }
+  const exposure = new Map<string, number>()
+  for (const h of holdings) {
+    byType[h.asset.asset_type] = (byType[h.asset.asset_type] ?? 0) + Number(h.market_value_base_currency)
+    exposure.set(h.asset.currency, (exposure.get(h.asset.currency) ?? 0) + Number(h.market_value_base_currency))
   }
+  for (const a of cashBalances) exposure.set(a.currency, (exposure.get(a.currency) ?? 0) + Number(a.balance_base_currency))
 
-  const allocationData = netWorth
-    ? [
-        { name: 'Liquidità', value: Number(netWorth.total_cash_balance) },
-        ...(netWorth.holdings ?? []).map((h) => ({
-          name: h.asset.symbol,
-          value: Number(h.market_value_base_currency),
-        })),
-      ].filter((slice) => slice.value > 0)
-    : []
+  const kpis: Kpi[] = [
+    {
+      label: 'Valore di mercato',
+      value: (
+        <>
+          {formatAmount(value, base)} <span className="ccy">{base}</span>
+        </>
+      ),
+      sub: `${holdings.length} ${holdings.length === 1 ? 'posizione' : 'posizioni'}`,
+    },
+    { label: 'Capitale investito', value: formatAmount(cost, base), sub: 'costo di carico al cambio di oggi' },
+    {
+      label: 'Non realizzato',
+      value: <Delta value={unrealized} currency={base} />,
+      sub: cost ? `${formatPercent((unrealized / cost) * 100, { sign: 'always' })} sul capitale` : undefined,
+      subTone: unrealized >= 0 ? 'pos' : 'neg',
+    },
+    {
+      label: 'Realizzato',
+      value: formatAmount(realized, base, { sign: realized ? 'always' : 'auto' }),
+      tone: realized > 0 ? 'pos' : realized < 0 ? 'neg' : 'default',
+      sub: 'sulle posizioni ancora aperte',
+    },
+    {
+      label: 'Liquidità da investire',
+      value: formatAmount(cash, base),
+      sub: investmentAccounts.map((a) => a.name).join(', ') || 'nessun conto investimento',
+    },
+  ]
+
+  const toggle = (next: Panel) => setPanel((current) => (current === next ? 'none' : next))
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-slate-800">Portfolio</h1>
-        <div className="flex gap-2">
-          <button
-            onClick={() => togglePanel('import')}
-            className="rounded-md px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
-          >
-            {panel === 'import' ? 'Annulla' : 'Importa CSV'}
-          </button>
-          <button
-            onClick={() => togglePanel('form')}
-            className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-          >
-            {panel === 'form' ? 'Annulla' : 'Nuova transazione'}
-          </button>
-        </div>
-      </div>
+    <>
+      <PageHeader
+        title="Portafoglio"
+        subtitle={`Prezzi al ${formatFullDate(holdings[0]?.price_date ?? today)} · valori in ${base} salvo indicazione`}
+        actions={
+          <>
+            <Button aria-expanded={panel === 'import'} onClick={() => toggle('import')} className={panel === 'import' ? 'border-accent bg-accent-soft text-accent' : ''}>
+              <UploadIcon />
+              Importa CSV
+            </Button>
+            <Button variant="primary" aria-expanded={panel === 'form'} onClick={() => toggle('form')}>
+              + Nuova operazione
+            </Button>
+          </>
+        }
+      />
 
-      {netWorth && (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <div className="rounded-lg bg-white p-6 shadow-sm">
-            <p className="text-xs font-medium uppercase text-slate-400">Patrimonio netto</p>
-            <p className="mt-1 text-2xl font-semibold text-slate-800">
-              {formatCurrency(netWorth.total_net_worth, netWorth.base_currency)}
-            </p>
-          </div>
-          <div className="rounded-lg bg-white p-6 shadow-sm">
-            <p className="text-xs font-medium uppercase text-slate-400">Liquidità</p>
-            <p className="mt-1 text-2xl font-semibold text-slate-800">
-              {formatCurrency(netWorth.total_cash_balance, netWorth.base_currency)}
-            </p>
-          </div>
-          <div className="rounded-lg bg-white p-6 shadow-sm">
-            <p className="text-xs font-medium uppercase text-slate-400">Investimenti</p>
-            <p className="mt-1 text-2xl font-semibold text-slate-800">
-              {formatCurrency(netWorth.total_holdings_value, netWorth.base_currency)}
-            </p>
-          </div>
-        </div>
+      {panel === 'form' && (
+        <section aria-label="Nuova operazione">
+          <AssetTransactionForm onDone={() => setPanel('none')} />
+        </section>
+      )}
+      {panel === 'import' && (
+        <section aria-label="Importa operazioni da CSV">
+          <AssetTransactionImport onDone={() => setPanel('none')} />
+        </section>
       )}
 
-      {panel === 'form' && <AssetTransactionForm onDone={() => setPanel('none')} />}
-      {panel === 'import' && <AssetTransactionImport onDone={() => setPanel('none')} />}
+      {netWorth.isError && <ErrorBlock>Errore nel caricamento del portafoglio.</ErrorBlock>}
+      <KpiStrip label="Indicatori del portafoglio" items={kpis} />
 
-      {netWorth && <PortfolioValueChart baseCurrency={netWorth.base_currency} />}
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {allocationData.length > 0 && (
-          <div className="rounded-lg bg-white p-6 shadow-sm">
-            <p className="mb-4 text-sm font-medium text-slate-700">Allocazione</p>
-            <div className="h-56 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={allocationData}
-                    dataKey="value"
-                    nameKey="name"
-                    innerRadius={50}
-                    outerRadius={80}
-                    // A single slice covering 100% renders as a broken sliver
-                    // with a non-zero paddingAngle (Recharts subtracts the gap
-                    // from the one slice it has nothing to pad against) — only
-                    // pad when there's more than one slice to actually gap.
-                    paddingAngle={allocationData.length > 1 ? 2 : 0}
-                    // The mount-in sweep animation can get interrupted by a
-                    // refetch re-rendering the chart moments later (holdings
-                    // and net worth both refetch right after a mutation),
-                    // leaving the arc frozen mid-sweep or blank — this is a
-                    // decorative summary chart, not worth the animation risk.
-                    isAnimationActive={false}
-                  >
-                    {allocationData.map((slice, index) => (
-                      <Cell key={slice.name} fill={ALLOCATION_COLORS[index % ALLOCATION_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    formatter={(value) =>
-                      netWorth ? formatCurrency(String(value), netWorth.base_currency) : value
-                    }
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
+      <div className="flex flex-wrap gap-4">
+        <PortfolioValueChart baseCurrency={base} />
+        <Card title="Allocazione" className="flex-[1_1_320px]">
+          <div className="mt-3">
+            {value + cash > 0 ? <AllocationBar values={byType} currency={base} /> : <EmptyState title="Nessun investimento" />}
           </div>
-        )}
-
-        <PnlByAssetChart holdings={holdings ?? []} />
+          <CurrencyExposure exposure={exposure} baseCurrency={base} />
+        </Card>
       </div>
 
-      {isLoading && <p className="text-slate-500">Caricamento...</p>}
-      {isError && <p className="text-red-600">Errore nel caricamento del portfolio.</p>}
-      {holdings && <HoldingsTable holdings={holdings} />}
-    </div>
+      <Card title="Posizioni" meta={<span className="text-[13px] text-ink-3">Prezzi nella valuta del titolo, valori in {base}</span>}>
+        <div className="mt-2">{netWorth.isLoading ? <LoadingBlock className="h-40" /> : <HoldingsTable holdings={holdings} baseCurrency={base} />}</div>
+      </Card>
+
+      <div className="flex flex-wrap gap-4">
+        <PnlByAssetChart holdings={holdings} baseCurrency={base} />
+        <RecentTrades baseCurrency={base} />
+      </div>
+    </>
   )
 }

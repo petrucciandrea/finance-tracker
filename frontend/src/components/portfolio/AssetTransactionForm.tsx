@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { buttonClass } from '@/lib/buttonClass'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -124,17 +125,17 @@ export function AssetTransactionForm({ onDone }: { onDone: () => void }) {
   return (
     <form
       onSubmit={handleSubmit(onSubmit)}
-      className="grid grid-cols-1 gap-4 rounded-lg bg-white p-6 shadow-sm sm:grid-cols-4"
+      className="grid grid-cols-1 gap-4 rounded-[14px] border border-line bg-card px-4 py-4 sm:grid-cols-4 sm:px-5"
       noValidate
     >
       <div>
-        <label htmlFor="account_id" className="block text-sm font-medium text-slate-700">
+        <label htmlFor="account_id" className="mb-1.5 block text-[14px] font-bold text-ink">
           Conto
         </label>
         <select
           id="account_id"
           {...register('account_id')}
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+          className="field"
         >
           <option value="">Seleziona...</option>
           {eligibleAccounts.map((a) => (
@@ -143,17 +144,17 @@ export function AssetTransactionForm({ onDone }: { onDone: () => void }) {
             </option>
           ))}
         </select>
-        {errors.account_id && <p className="mt-1 text-sm text-red-600">{errors.account_id.message}</p>}
+        {errors.account_id && <p role="alert" className="mt-1.5 text-[13px] font-bold text-neg">{errors.account_id.message}</p>}
       </div>
 
       <div>
-        <label htmlFor="asset_type" className="block text-sm font-medium text-slate-700">
+        <label htmlFor="asset_type" className="mb-1.5 block text-[14px] font-bold text-ink">
           Tipo asset
         </label>
         <select
           id="asset_type"
           {...register('asset_type')}
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+          className="field"
         >
           {Object.entries(ASSET_TYPE_LABELS).map(([value, label]) => (
             <option key={value} value={value}>
@@ -164,123 +165,123 @@ export function AssetTransactionForm({ onDone }: { onDone: () => void }) {
       </div>
 
       <div className="relative">
-        <label htmlFor="symbol" className="block text-sm font-medium text-slate-700">
+        <label htmlFor="symbol" className="mb-1.5 block text-[14px] font-bold text-ink">
           Simbolo
         </label>
         <input
           id="symbol"
           autoComplete="off"
           {...register('symbol')}
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm uppercase focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+          className="field uppercase"
         />
         {selectedAssetType === 'crypto' ? (
           searchResults &&
           searchResults.length > 0 && (
-            <ul className="absolute z-10 mt-1 max-h-40 w-full overflow-auto rounded-md border border-slate-200 bg-white text-sm shadow-md">
+            <ul className="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded-[10px] border border-line bg-card text-[14px] shadow-[0_12px_32px_rgba(0,0,0,0.18)]">
               {searchResults.map((result) => (
                 <li key={result.symbol}>
                   <button
                     type="button"
                     onClick={() => setValue('symbol', result.symbol)}
-                    className="block w-full px-3 py-2 text-left hover:bg-slate-50"
+                    className="block min-h-11 w-full cursor-pointer px-3 py-2 text-left hover:bg-card-2"
                   >
-                    <span className="font-medium">{result.symbol}</span>{' '}
-                    <span className="text-slate-400">{result.name}</span>
+                    <span className="font-bold">{result.symbol}</span>{' '}
+                    <span className="text-ink-3">{result.name}</span>
                   </button>
                 </li>
               ))}
             </ul>
           )
         ) : (
-          <p className="mt-1 text-xs text-slate-400">Inserisci il ticker esatto (es. AAPL)</p>
+          <p className="mt-1.5 text-[13px] text-ink-3">Inserisci il ticker esatto (es. AAPL)</p>
         )}
-        {errors.symbol && <p className="mt-1 text-sm text-red-600">{errors.symbol.message}</p>}
+        {errors.symbol && <p role="alert" className="mt-1.5 text-[13px] font-bold text-neg">{errors.symbol.message}</p>}
       </div>
 
       <div>
-        <label htmlFor="type" className="block text-sm font-medium text-slate-700">
+        <label htmlFor="type" className="mb-1.5 block text-[14px] font-bold text-ink">
           Operazione
         </label>
         <select
           id="type"
           {...register('type')}
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+          className="field"
         >
           <option value="buy">Acquisto</option>
           <option value="sell">Vendita</option>
         </select>
         {selectedType === 'sell' && (
-          <p className="mt-1 text-xs text-slate-400">Attualmente in possesso: {heldQuantity}</p>
+          <p className="mt-1.5 text-[13px] text-ink-3">Attualmente in possesso: {heldQuantity}</p>
         )}
       </div>
 
       <div>
-        <label htmlFor="quantity" className="block text-sm font-medium text-slate-700">
+        <label htmlFor="quantity" className="mb-1.5 block text-[14px] font-bold text-ink">
           Quantità
         </label>
         <input
           id="quantity"
           {...register('quantity')}
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+          className="field"
         />
-        {errors.quantity && <p className="mt-1 text-sm text-red-600">{errors.quantity.message}</p>}
+        {errors.quantity && <p role="alert" className="mt-1.5 text-[13px] font-bold text-neg">{errors.quantity.message}</p>}
       </div>
 
       <div>
-        <label htmlFor="price" className="block text-sm font-medium text-slate-700">
+        <label htmlFor="price" className="mb-1.5 block text-[14px] font-bold text-ink">
           Prezzo unitario
         </label>
         <input
           id="price"
           {...register('price')}
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+          className="field"
         />
-        {errors.price && <p className="mt-1 text-sm text-red-600">{errors.price.message}</p>}
+        {errors.price && <p role="alert" className="mt-1.5 text-[13px] font-bold text-neg">{errors.price.message}</p>}
       </div>
 
       <div>
-        <label htmlFor="fee" className="block text-sm font-medium text-slate-700">
+        <label htmlFor="fee" className="mb-1.5 block text-[14px] font-bold text-ink">
           Commissioni (opzionale)
         </label>
         <input
           id="fee"
           placeholder="0"
           {...register('fee')}
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+          className="field"
         />
-        {errors.fee && <p className="mt-1 text-sm text-red-600">{errors.fee.message}</p>}
+        {errors.fee && <p role="alert" className="mt-1.5 text-[13px] font-bold text-neg">{errors.fee.message}</p>}
       </div>
 
       <div>
-        <label htmlFor="date" className="block text-sm font-medium text-slate-700">
+        <label htmlFor="date" className="mb-1.5 block text-[14px] font-bold text-ink">
           Data
         </label>
         <input
           id="date"
           type="date"
           {...register('date')}
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+          className="field"
         />
-        {errors.date && <p className="mt-1 text-sm text-red-600">{errors.date.message}</p>}
+        {errors.date && <p role="alert" className="mt-1.5 text-[13px] font-bold text-neg">{errors.date.message}</p>}
       </div>
 
       <div className="sm:col-span-4">
-        <label htmlFor="notes" className="block text-sm font-medium text-slate-700">
+        <label htmlFor="notes" className="mb-1.5 block text-[14px] font-bold text-ink">
           Note (opzionale)
         </label>
         <input
           id="notes"
           {...register('notes')}
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+          className="field"
         />
       </div>
 
       <div className="sm:col-span-4">
-        {formError && <p className="mb-2 text-sm text-red-600">{formError}</p>}
+        {formError && <p role="alert" className="mb-2 rounded-[10px] bg-neg-soft px-3 py-2 text-[13px] font-bold text-neg">{formError}</p>}
         <button
           type="submit"
           disabled={isSubmitting}
-          className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+          className={buttonClass('primary')}
         >
           {isSubmitting ? 'Registrazione...' : 'Registra transazione'}
         </button>

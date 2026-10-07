@@ -675,3 +675,60 @@ def test_asset_import_confirm_skips_row_that_would_overdraw(
 
     holdings_response = client.get("/api/v1/portfolio/holdings", headers=headers)
     assert holdings_response.json() == []
+
+
+def test_buy_files_its_cash_leg_under_the_given_transfer_category(
+    client: TestClient, registered_user: dict, investment_account: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    category = client.post(
+        "/api/v1/categories", json={"name": "Investimenti", "type": "transfer"}, headers=headers
+    ).json()
+
+    response = client.post(
+        "/api/v1/portfolio/transactions",
+        json={
+            "account_id": investment_account["id"],
+            "symbol": "AAPL",
+            "asset_type": "stock",
+            "type": "buy",
+            "quantity": "10",
+            "price": "140.00",
+            "date": "2026-09-01",
+            "category_id": category["id"],
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 201, response.text
+    (cash,) = client.get(
+        "/api/v1/transactions", params={"account_id": investment_account["id"]}, headers=headers
+    ).json()["data"]
+    assert cash["category_id"] == category["id"]
+
+
+def test_buy_rejects_a_non_transfer_category(
+    client: TestClient, registered_user: dict, investment_account: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    category = client.post(
+        "/api/v1/categories", json={"name": "Spesa", "type": "expense"}, headers=headers
+    ).json()
+
+    response = client.post(
+        "/api/v1/portfolio/transactions",
+        json={
+            "account_id": investment_account["id"],
+            "symbol": "AAPL",
+            "asset_type": "stock",
+            "type": "buy",
+            "quantity": "10",
+            "price": "140.00",
+            "date": "2026-09-01",
+            "category_id": category["id"],
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+    assert client.get("/api/v1/portfolio/transactions", headers=headers).json() == []

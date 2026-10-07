@@ -48,7 +48,7 @@ from app.services.net_worth import (
     holdings_with_value,
     user_asset_transactions_query,
 )
-from app.services.ownership import get_owned_account
+from app.services.ownership import get_owned_account, get_owned_leaf_category
 
 router = APIRouter(prefix="/api/v1/portfolio", tags=["portfolio"])
 
@@ -75,6 +75,7 @@ def _create_linked_cash_transaction(
     rate: Decimal,
     on_date: date_,
     source: str,
+    category_id: UUID | None = None,
 ) -> Transaction:
     """
     Every buy/sell moves cash in or out of the account it's logged on — this
@@ -88,7 +89,9 @@ def _create_linked_cash_transaction(
     signed_amount = _signed_cash_amount(asset_transaction_type, total)
     cash_transaction = Transaction(
         account_id=account.id,
-        category_id=None,
+        # Optional transfer category (e.g. "Investimenti"), already validated
+        # by the caller. Never "Varie": this isn't a spend.
+        category_id=category_id,
         amount=signed_amount,
         currency=asset.currency,
         amount_base_currency=signed_amount * rate,
@@ -211,6 +214,12 @@ def create_asset_transaction(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Asset transactions can only be logged on investment or crypto wallet accounts",
         )
+    # Checked before the asset lookup, which may already write a row.
+    category_id = (
+        get_owned_leaf_category(db, payload.category_id, current_user, "transfer").id
+        if payload.category_id
+        else None
+    )
 
     try:
         asset = asset_prices_service.find_or_create_asset(
@@ -249,6 +258,7 @@ def create_asset_transaction(
         rate=rate,
         on_date=payload.date,
         source="manual",
+        category_id=category_id,
     )
 
     transaction = AssetTransaction(

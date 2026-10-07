@@ -614,3 +614,99 @@ def test_editing_a_legs_description_updates_its_counterpart(
     assert response.status_code == 200, response.text
     other = client.get(f"/api/v1/transactions/{incoming['id']}", headers=headers).json()
     assert other["description"] == "Fondo vacanze"
+
+
+def _transfer_category(client: TestClient, headers: dict, name: str = "Risparmio") -> dict:
+    response = client.post(
+        "/api/v1/categories", json={"name": name, "type": "transfer"}, headers=headers
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_manual_transfer_puts_its_category_on_both_legs(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    main = _account(client, headers, "Conto")
+    savings = _account(client, headers, "Risparmi")
+    category = _transfer_category(client, headers)
+
+    response = client.post(
+        TRANSFERS_URL,
+        json={
+            "from_account_id": main["id"],
+            "to_account_id": savings["id"],
+            "category_id": category["id"],
+            "amount": "50.00",
+            "date": "2026-09-20",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 201, response.text
+    assert [leg["category_id"] for leg in response.json()] == [category["id"]] * 2
+
+
+def test_manual_transfer_without_category_is_not_put_in_varie(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    main = _account(client, headers, "Conto")
+    savings = _account(client, headers, "Risparmi")
+
+    legs = _manual_transfer(client, headers, main["id"], savings["id"])
+
+    assert [leg["category_id"] for leg in legs] == [None, None]
+
+
+def test_manual_transfer_rejects_an_expense_category(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    main = _account(client, headers, "Conto")
+    savings = _account(client, headers, "Risparmi")
+    expense = client.post(
+        "/api/v1/categories", json={"name": "Spesa", "type": "expense"}, headers=headers
+    ).json()
+
+    response = client.post(
+        TRANSFERS_URL,
+        json={
+            "from_account_id": main["id"],
+            "to_account_id": savings["id"],
+            "category_id": expense["id"],
+            "amount": "50.00",
+            "date": "2026-09-20",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+    assert client.get("/api/v1/transactions", headers=headers).json()["data"] == []
+
+
+def test_editing_a_legs_category_updates_its_counterpart(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    main = _account(client, headers, "Conto")
+    savings = _account(client, headers, "Risparmi")
+    category = _transfer_category(client, headers)
+    outgoing, incoming = _manual_transfer(client, headers, main["id"], savings["id"])
+
+    response = client.patch(
+        f"/api/v1/transactions/{outgoing['id']}",
+        json={"category_id": category["id"]},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    other = client.get(f"/api/v1/transactions/{incoming['id']}", headers=headers).json()
+    assert other["category_id"] == category["id"]
+
+    # Clearing it clears both too — and a transfer is never pushed into Varie.
+    client.patch(
+        f"/api/v1/transactions/{outgoing['id']}", json={"category_id": None}, headers=headers
+    )
+    other = client.get(f"/api/v1/transactions/{incoming['id']}", headers=headers).json()
+    assert other["category_id"] is None

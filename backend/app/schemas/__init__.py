@@ -273,6 +273,8 @@ class TransferCreate(BaseModel):
     """
     from_account_id: UUID
     to_account_id: UUID
+    # A `transfer`-type category, or none — never "Varie".
+    category_id: UUID | None = None
     amount: Decimal = Field(gt=0, max_digits=18, decimal_places=8)
     date: date_
     description: str | None = Field(default=None, max_length=500)
@@ -464,6 +466,9 @@ class AssetTransactionCreate(BaseModel):
     fee: Decimal = Field(default=Decimal("0"), ge=0, max_digits=18, decimal_places=8)
     date: date_
     notes: str | None = Field(default=None, max_length=500)
+    # Filed on the cash-side `transfer` row; a transfer-type category or none.
+    # Edited afterwards from that row, so the update schema doesn't carry it.
+    category_id: UUID | None = None
 
 
 class AssetTransactionUpdate(BaseModel):

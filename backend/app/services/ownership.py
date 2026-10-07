@@ -6,11 +6,11 @@ the time the planning engine added one. The body is load-bearing — it is
 what applies both the ownership filter and the soft-delete filter in one
 place — so having four of it meant four places to forget one of the two.
 
-Only `Account` is shared here. The other `_get_owned_*` helpers stay
-private to their routers: each is used by a single router and several
-carry rules specific to it (a category must be a leaf of a matching type,
-a transaction is reached through its account), so hoisting them would
-trade duplication for indirection without removing a real risk.
+`Account` is shared here, and so is the leaf-category lookup now that a
+portfolio buy/sell can file its cash leg under a transfer category too.
+The other `_get_owned_*` helpers stay private to their routers: each is
+used by a single router, so hoisting them would trade duplication for
+indirection without removing a real risk.
 """
 
 from uuid import UUID
@@ -18,7 +18,7 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.models import Account, User
+from app.models import Account, Category, User
 
 
 def get_owned_account(db: Session, account_id: UUID, user: User) -> Account:
@@ -39,3 +39,52 @@ def get_owned_account(db: Session, account_id: UUID, user: User) -> Account:
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
     return account
+
+
+def get_owned_leaf_category(
+    db: Session, category_id: UUID, user: User, expected_type: str
+) -> Category:
+    """
+    A transaction can only be filed under a category that: belongs to the
+    user, has no active subcategories of its own (pick one of them instead,
+    so spend doesn't land on an ambiguous parent bucket), and shares the
+    transaction's own type — an expense category on a transfer (or vice
+    versa) would be meaningless, now that categories exist for all three
+    transaction types (expense/income/transfer).
+    """
+    category = (
+        db.query(Category)
+        .filter(
+            Category.id == category_id,
+            Category.user_id == user.id,
+            Category.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if category is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+
+    if category.type != expected_type:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Category type '{category.type}' does not match "
+                f"transaction type '{expected_type}'"
+            ),
+        )
+
+    has_active_children = (
+        db.query(Category)
+        .filter(Category.parent_id == category.id, Category.deleted_at.is_(None))
+        .first()
+        is not None
+    )
+    if has_active_children:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "This category has subcategories — "
+                "assign the transaction to a subcategory instead"
+            ),
+        )
+    return category

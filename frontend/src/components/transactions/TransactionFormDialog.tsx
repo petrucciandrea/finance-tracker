@@ -135,6 +135,7 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
         await createTransfer.mutateAsync({
           from_account_id: values.account_id,
           to_account_id: values.to_account_id ?? '',
+          category_id: values.category_id || null,
           amount: String(magnitude),
           date: values.date,
           description: values.description || null,
@@ -241,11 +242,18 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
           <input id="tx-currency" maxLength={3} disabled={editing} readOnly={isNewTransfer} aria-invalid={!!errors.currency} className="field uppercase" {...register('currency')} />
         </Field>
 
-        {type !== 'transfer' && (
-          <Field label="Categoria" htmlFor="tx-category" hint="Se la lasci vuota finisce in “Varie”.">
-            <CategorySelect id="tx-category" aria-describedby="tx-category-msg" categories={categories} type={type} emptyLabel="Nessuna (Varie)" {...register('category_id')} />
-          </Field>
-        )}
+        {/* Optional on a transfer, and no "Varie" fallback: it only organises
+            giroconti, it never counts as spend. */}
+        <Field label="Categoria" htmlFor="tx-category" hint={type === 'transfer' ? 'Facoltativa: resta fuori da totali e piano.' : 'Se la lasci vuota finisce in “Varie”.'}>
+          <CategorySelect
+            id="tx-category"
+            aria-describedby="tx-category-msg"
+            categories={categories}
+            type={type}
+            emptyLabel={type === 'transfer' ? 'Nessuna' : 'Nessuna (Varie)'}
+            {...register('category_id')}
+          />
+        </Field>
 
         {type === 'expense' && (
           <Field label="Livello di necessità" htmlFor="tx-necessity" hint="Solo per le eccezioni, es. una cena di lavoro sotto “Ristoranti”.">

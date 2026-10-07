@@ -4,7 +4,9 @@ import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { isAxiosError } from 'axios'
+import { CategorySelect } from '@/components/transactions/CategorySelect'
 import { useAccounts } from '@/hooks/useAccounts'
+import { useCategories } from '@/hooks/useCategories'
 import { useCreateAssetTransaction } from '@/hooks/useAssetTransactions'
 import { useHoldings, useSearchAssets } from '@/hooks/usePortfolio'
 import type { ApiErrorResponse, AssetType } from '@/types'
@@ -36,6 +38,7 @@ const assetTransactionSchema = z.object({
     .refine((v) => !v || (!Number.isNaN(Number(v)) && Number(v) >= 0), 'Inserisci un numero valido'),
   date: z.string().min(1, 'Data obbligatoria'),
   notes: z.string().optional(),
+  category_id: z.string().optional(),
 })
 
 type AssetTransactionFormValues = z.infer<typeof assetTransactionSchema>
@@ -43,6 +46,7 @@ type AssetTransactionFormValues = z.infer<typeof assetTransactionSchema>
 export function AssetTransactionForm({ onDone }: { onDone: () => void }) {
   const { data: accounts } = useAccounts()
   const { data: holdings } = useHoldings()
+  const { data: categories } = useCategories()
   const [formError, setFormError] = useState<string | null>(null)
   const createAssetTransaction = useCreateAssetTransaction()
 
@@ -103,12 +107,15 @@ export function AssetTransactionForm({ onDone }: { onDone: () => void }) {
         fee: values.fee || '0',
         date: values.date,
         notes: values.notes || null,
+        category_id: values.category_id || null,
       })
       reset({
         asset_type: values.asset_type,
         type: 'buy',
         date: new Date().toISOString().slice(0, 10),
         account_id: values.account_id,
+        // Kept like the account: a run of buys usually shares one category.
+        category_id: values.category_id,
       })
       onDone()
     } catch (error) {
@@ -265,7 +272,21 @@ export function AssetTransactionForm({ onDone }: { onDone: () => void }) {
         {errors.date && <p role="alert" className="mt-1.5 text-[13px] font-bold text-neg">{errors.date.message}</p>}
       </div>
 
-      <div className="sm:col-span-4">
+      <div>
+        <label htmlFor="category_id" className="mb-1.5 block text-[14px] font-bold text-ink">
+          Categoria (opzionale)
+        </label>
+        <CategorySelect
+          id="category_id"
+          categories={categories}
+          type="transfer"
+          emptyLabel="Nessuna"
+          {...register('category_id')}
+        />
+        <p className="mt-1.5 text-[13px] text-ink-3">Va sul movimento di cassa; resta fuori da totali e piano.</p>
+      </div>
+
+      <div className="sm:col-span-3">
         <label htmlFor="notes" className="mb-1.5 block text-[14px] font-bold text-ink">
           Note (opzionale)
         </label>

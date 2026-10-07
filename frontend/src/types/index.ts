@@ -169,6 +169,8 @@ export interface TransactionCreatePayload {
 export interface TransferCreatePayload {
   from_account_id: string
   to_account_id: string
+  // A transfer-type category, or none (transfers never fall into "Varie").
+  category_id?: string | null
   amount: string
   date: string
   description?: string | null
@@ -324,6 +326,8 @@ export interface AssetTransactionCreatePayload {
   fee?: string
   date: string
   notes?: string | null
+  // Filed on the cash-side transfer row; transfer-type categories only.
+  category_id?: string | null
 }
 
 export interface AssetTransactionUpdatePayload {

@@ -35,7 +35,7 @@ from app.schemas import (
 )
 from app.services import csv_import as csv_import_service
 from app.services.exchange_rates import ExchangeRateUnavailable, get_rate
-from app.services.ownership import get_owned_account
+from app.services.ownership import get_owned_account, get_owned_leaf_category
 from app.services.transfers import create_linked_transfer
 
 router = APIRouter(prefix="/api/v1/transactions", tags=["transactions"])
@@ -72,55 +72,6 @@ def _get_or_create_misc_category(db: Session, user: User, category_type: str) ->
     # populates category.id without committing yet — the caller commits it
     # alongside the transaction that needed it
     db.flush()
-    return category
-
-
-def _get_owned_leaf_category(
-    db: Session, category_id: UUID, user: User, expected_type: str
-) -> Category:
-    """
-    A transaction can only be filed under a category that: belongs to the
-    user, has no active subcategories of its own (pick one of them instead,
-    so spend doesn't land on an ambiguous parent bucket), and shares the
-    transaction's own type — an expense category on a transfer (or vice
-    versa) would be meaningless, now that categories exist for all three
-    transaction types (expense/income/transfer).
-    """
-    category = (
-        db.query(Category)
-        .filter(
-            Category.id == category_id,
-            Category.user_id == user.id,
-            Category.deleted_at.is_(None),
-        )
-        .first()
-    )
-    if category is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
-
-    if category.type != expected_type:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                f"Category type '{category.type}' does not match "
-                f"transaction type '{expected_type}'"
-            ),
-        )
-
-    has_active_children = (
-        db.query(Category)
-        .filter(Category.parent_id == category.id, Category.deleted_at.is_(None))
-        .first()
-        is not None
-    )
-    if has_active_children:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                "This category has subcategories — "
-                "assign the transaction to a subcategory instead"
-            ),
-        )
     return category
 
 
@@ -308,7 +259,7 @@ def create_transaction(
 
     category_id = payload.category_id
     if category_id:
-        category_id = _get_owned_leaf_category(
+        category_id = get_owned_leaf_category(
             db, category_id, current_user, payload.type.value
         ).id
     elif payload.type in ("expense", "income"):
@@ -362,6 +313,11 @@ def create_transfer(
     """
     from_account = get_owned_account(db, payload.from_account_id, current_user)
     to_account = get_owned_account(db, payload.to_account_id, current_user)
+    category_id = (
+        get_owned_leaf_category(db, payload.category_id, current_user, "transfer").id
+        if payload.category_id
+        else None
+    )
 
     outgoing, incoming = create_linked_transfer(
         db,
@@ -371,6 +327,7 @@ def create_transfer(
         amount=payload.amount,
         on_date=payload.date,
         description=payload.description or "Giroconto",
+        category_id=category_id,
     )
     db.commit()
     db.refresh(outgoing)
@@ -484,7 +441,7 @@ def update_transaction(
                 misc_category = _get_or_create_misc_category(db, current_user, transaction.type)
                 update_data["category_id"] = misc_category.id
         else:
-            update_data["category_id"] = _get_owned_leaf_category(
+            update_data["category_id"] = get_owned_leaf_category(
                 db, update_data["category_id"], current_user, transaction.type
             ).id
 
@@ -499,11 +456,14 @@ def update_transaction(
         # value, like `type` on create.
         setattr(transaction, field, value.value if hasattr(value, "value") else value)
 
-    # A giroconto is listed as one row, so its description is edited once:
-    # keep the hidden leg in step, or it resurfaces stale under the
-    # destination account's filter.
-    if "description" in update_data and transaction.counterpart is not None:
-        transaction.counterpart.description = transaction.description
+    # A giroconto is listed as one row, so its description and category are
+    # edited once: keep the hidden leg in step, or it resurfaces stale under
+    # the destination account's filter (and in a category filter).
+    if transaction.counterpart is not None:
+        if "description" in update_data:
+            transaction.counterpart.description = transaction.description
+        if "category_id" in update_data:
+            transaction.counterpart.category_id = transaction.category_id
 
     if needs_recompute:
         try:

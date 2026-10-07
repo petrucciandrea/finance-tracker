@@ -47,10 +47,14 @@ interface Lookups {
 }
 
 function CategoryCell({ t, lookups, onAssign }: { t: Transaction; lookups: Lookups; onAssign: () => void }) {
-  if (t.type === 'transfer') {
-    return <span className="rounded-full bg-card-2 px-2 py-0.5 text-[12px] font-bold text-ink-3">⇄ Trasferimento</span>
-  }
   const category = lookups.categories.get(t.category_id ?? '')
+  if (t.type === 'transfer') {
+    return (
+      <span className="rounded-full bg-card-2 px-2 py-0.5 text-[12px] font-bold whitespace-nowrap text-ink-3">
+        ⇄ {category ? categoryPath(category, lookups.categories) : 'Trasferimento'}
+      </span>
+    )
+  }
   if (!category || isMiscCategory(category)) {
     return (
       <button

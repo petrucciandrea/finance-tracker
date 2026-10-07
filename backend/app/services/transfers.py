@@ -17,6 +17,7 @@ there's a way to test the alternative.
 
 from datetime import date as date_
 from decimal import Decimal
+from uuid import UUID
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -34,11 +35,15 @@ def create_linked_transfer(
     amount: Decimal,
     on_date: date_,
     description: str,
+    category_id: UUID | None = None,
 ) -> tuple[Transaction, Transaction]:
     """
     Write both legs of a giroconto and link them. Flushes but does not
     commit — the caller owns the transaction, so a batch of transfers
     either all lands or none does.
+
+    `category_id` must already be validated as one of the user's transfer
+    categories; both legs carry it, since the pair is listed as one row.
     """
     if amount <= 0:
         raise HTTPException(
@@ -74,9 +79,9 @@ def create_linked_transfer(
     def _leg(account: Account, signed: Decimal) -> Transaction:
         return Transaction(
             account_id=account.id,
-            # A transfer between your own accounts isn't a categorizable
-            # spend, so it's exempt from the "no category -> Varie" rule.
-            category_id=None,
+            # Optional, and never defaulted to "Varie": a transfer between
+            # your own accounts isn't a spend, the category only organises it.
+            category_id=category_id,
             amount=signed,
             currency=account.currency,
             amount_base_currency=signed * rate,

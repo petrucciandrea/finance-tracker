@@ -215,7 +215,9 @@ function RecentTransactions({ baseCurrency }: { baseCurrency: string }) {
                 <div className="truncate font-bold">{t.description || '—'}</div>
                 <div className="mt-0.5 flex items-center gap-1.5 overflow-hidden text-[12px] whitespace-nowrap text-ink-3">
                   <span className="rounded-full bg-card-2 px-[7px] py-px text-[11px] font-bold text-ink-2">
-                    {t.type === 'transfer' ? 'Trasferimento' : (categoriesById.get(t.category_id ?? '')?.name ?? 'Categoria eliminata')}
+                    {t.type === 'transfer'
+                      ? `⇄ ${categoriesById.get(t.category_id ?? '')?.name ?? 'Trasferimento'}`
+                      : (categoriesById.get(t.category_id ?? '')?.name ?? 'Categoria eliminata')}
                   </span>
                   <span className="truncate">{accountLabel(t, accountsById)}</span>
                 </div>

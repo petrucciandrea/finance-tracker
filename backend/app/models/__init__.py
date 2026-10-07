@@ -518,5 +518,9 @@ class ExchangeRate(Base):
     )
 
 from app.models.asset_transaction import AssetTransaction  # noqa: F401,E402
-from app.models.physical_asset import PhysicalAsset, PhysicalAssetValuation  # noqa: F401,E402
+from app.models.physical_asset import (  # noqa: F401,E402
+    PhysicalAsset,
+    PhysicalAssetMovement,
+    PhysicalAssetValuation,
+)
 from app.models.refresh_token import RefreshToken  # noqa: F401,E402

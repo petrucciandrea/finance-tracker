@@ -1,5 +1,6 @@
 import { apiClient } from './client'
 import type {
+  MetalMovementPayload,
   PhysicalAssetCreatePayload,
   PhysicalAssetSellPayload,
   PhysicalAssetUpdatePayload,
@@ -45,5 +46,15 @@ export async function createValuation(id: string, payload: PhysicalAssetValuatio
 
 export async function deleteValuation(id: string, valuationId: string): Promise<PhysicalAssetWithValue> {
   const { data } = await apiClient.delete<PhysicalAssetWithValue>(`${BASE}/${id}/valuations/${valuationId}`)
+  return data
+}
+
+export async function createMovement(id: string, payload: MetalMovementPayload): Promise<PhysicalAssetWithValue> {
+  const { data } = await apiClient.post<PhysicalAssetWithValue>(`${BASE}/${id}/movements`, payload)
+  return data
+}
+
+export async function deleteMovement(id: string, movementId: string): Promise<PhysicalAssetWithValue> {
+  const { data } = await apiClient.delete<PhysicalAssetWithValue>(`${BASE}/${id}/movements/${movementId}`)
   return data
 }

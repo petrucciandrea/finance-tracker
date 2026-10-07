@@ -6,6 +6,10 @@ Paying for one or selling one can optionally move money on an account. That
 movement is a one-sided `transfer` (`services/transfers.py:create_cash_leg`),
 kept in sync with the asset the same way a portfolio buy/sell keeps its
 cash leg: the asset owns it, and editing the purchase edits the leg.
+
+A vehicle is bought and sold whole (`/sell`, `/unsell`). A metal position is
+bought into and sold from by the gram (`/movements`); creating one records
+its first buy.
 """
 
 from datetime import UTC, datetime
@@ -18,8 +22,18 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.deps import get_current_user, get_db
-from app.models import Currency, PhysicalAsset, PhysicalAssetValuation, Transaction, User
+from app.models import (
+    Account,
+    Currency,
+    PhysicalAsset,
+    PhysicalAssetMovement,
+    PhysicalAssetValuation,
+    Transaction,
+    User,
+)
 from app.schemas import (
+    MetalMovementCreate,
+    MetalMovementType,
     PhysicalAssetCreate,
     PhysicalAssetKind,
     PhysicalAssetSell,
@@ -29,7 +43,12 @@ from app.schemas import (
 )
 from app.services.exchange_rates import ExchangeRateUnavailable, get_rate
 from app.services.ownership import get_owned_account, get_owned_leaf_category
-from app.services.physical_assets import physical_assets_with_value, value_physical_assets
+from app.services.physical_assets import (
+    OversoldError,
+    metal_position,
+    physical_assets_with_value,
+    value_physical_assets,
+)
 from app.services.transfers import create_cash_leg
 
 router = APIRouter(prefix="/api/v1/physical-assets", tags=["physical-assets"])
@@ -45,6 +64,9 @@ _FOREIGN_FIELDS = {
     PhysicalAssetKind.vehicle.value: _METAL_FIELDS,
     PhysicalAssetKind.metal.value: _VEHICLE_FIELDS,
 }
+# A metal's purchase lives in its movements: on create the purchase_* fields
+# describe the first buy, but a later edit goes through the movements.
+_METAL_MOVEMENT_FIELDS = ("purchase_date", "purchase_price")
 
 
 def _unprocessable(detail: str) -> HTTPException:
@@ -53,6 +75,12 @@ def _unprocessable(detail: str) -> HTTPException:
 
 def _check_kind_fields(kind: str, data: dict, *, creating: bool) -> None:
     foreign = [f for f in _FOREIGN_FIELDS[kind] if data.get(f) is not None]
+    if not creating and kind == PhysicalAssetKind.metal.value:
+        moved = [f for f in _METAL_MOVEMENT_FIELDS if f in data]
+        if moved:
+            raise _unprocessable(
+                f"Edit a metal's {', '.join(moved)} through its movements instead"
+            )
     if foreign:
         raise _unprocessable(f"Fields not applicable to a {kind}: {', '.join(foreign)}")
     required = _REQUIRED_FIELDS[kind]
@@ -88,12 +116,48 @@ def _rate(db: Session, currency: str, user: User, on_date: date_) -> Decimal:
         raise _unprocessable(str(exc)) from exc
 
 
+def _cash_account(
+    db: Session,
+    user: User,
+    account_id: UUID | None,
+    category_id: UUID | None,
+    currency: str,
+) -> tuple[Account | None, UUID | None]:
+    """The optional account a purchase is paid from / a sale paid into."""
+    if account_id is None:
+        if category_id is not None:
+            raise _unprocessable("A category only applies to a movement on an account")
+        return None, None
+    account = get_owned_account(db, account_id, user)
+    # Converting here would mean a rate lookup inside a multi-row write,
+    # and the leg's amount would no longer match the price the user typed.
+    if account.currency != currency:
+        raise _unprocessable("The account must be in the asset's currency")
+    category = (
+        get_owned_leaf_category(db, category_id, user, "transfer").id if category_id else None
+    )
+    return account, category
+
+
 def _retire_leg(db: Session, transaction_id: UUID | None) -> None:
     if transaction_id is None:
         return
     leg = db.get(Transaction, transaction_id)
     if leg is not None and leg.deleted_at is None:
         leg.deleted_at = datetime.now(UTC)
+
+
+def _require_vehicle(asset: PhysicalAsset, detail: str) -> None:
+    if asset.kind != PhysicalAssetKind.vehicle.value:
+        raise _unprocessable(detail)
+
+
+def _check_ledger(movements: list) -> None:
+    """Refuse a write that would make the position sell grams it never held."""
+    try:
+        metal_position(movements)
+    except OversoldError as exc:
+        raise _unprocessable(str(exc)) from exc
 
 
 def _valued(db: Session, user: User, asset: PhysicalAsset) -> PhysicalAssetWithValue:
@@ -125,21 +189,10 @@ def create_physical_asset(
     if db.get(Currency, payload.currency) is None:
         raise _unprocessable(f"Unsupported currency {payload.currency!r}")
 
-    account = None
-    if payload.account_id is not None:
-        account = get_owned_account(db, payload.account_id, current_user)
-        if payload.purchase_price is None:
-            raise _unprocessable("A purchase paid from an account needs a purchase price")
-        # Converting here would mean a rate lookup inside a multi-row write,
-        # and the leg's amount would no longer match the price the user typed.
-        if account.currency != payload.currency:
-            raise _unprocessable("The paying account must be in the asset's currency")
-    elif payload.category_id is not None:
-        raise _unprocessable("A category only applies to a purchase paid from an account")
-    category_id = (
-        get_owned_leaf_category(db, payload.category_id, current_user, "transfer").id
-        if payload.category_id
-        else None
+    if payload.account_id is not None and payload.purchase_price is None:
+        raise _unprocessable("A purchase paid from an account needs a purchase price")
+    account, category_id = _cash_account(
+        db, current_user, payload.account_id, payload.category_id, payload.currency
     )
 
     # Resolved before the first db.add(): a cache miss must not land between
@@ -147,6 +200,11 @@ def create_physical_asset(
     rate = (
         _rate(db, payload.currency, current_user, payload.purchase_date)
         if payload.purchase_price is not None
+        else None
+    )
+    price_base = (
+        payload.purchase_price * rate
+        if payload.purchase_price is not None and rate is not None
         else None
     )
 
@@ -163,28 +221,37 @@ def create_physical_asset(
             category_id=category_id,
         )
 
+    is_vehicle = payload.kind == PhysicalAssetKind.vehicle
     asset = PhysicalAsset(
         user_id=current_user.id,
         kind=payload.kind.value,
         name=payload.name,
         notes=payload.notes,
         currency=payload.currency,
-        purchase_date=payload.purchase_date,
-        purchase_price=payload.purchase_price,
-        purchase_price_base_currency=(
-            payload.purchase_price * rate
-            if payload.purchase_price is not None and rate is not None
-            else None
-        ),
-        purchase_transaction_id=leg.id if leg else None,
+        purchase_date=payload.purchase_date if is_vehicle else None,
+        purchase_price=payload.purchase_price if is_vehicle else None,
+        purchase_price_base_currency=price_base if is_vehicle else None,
+        purchase_transaction_id=leg.id if leg and is_vehicle else None,
         vehicle_type=payload.vehicle_type.value if payload.vehicle_type else None,
         depreciation_rate=payload.depreciation_rate,
         metal=payload.metal.value if payload.metal else None,
         metal_form=payload.metal_form.value if payload.metal_form else None,
-        weight_grams=payload.weight_grams,
         purity=payload.purity,
     )
     db.add(asset)
+    if not is_vehicle:
+        db.flush()  # populates asset.id for the movement FK
+        db.add(
+            PhysicalAssetMovement(
+                physical_asset_id=asset.id,
+                type=MetalMovementType.buy.value,
+                date=payload.purchase_date,
+                weight_grams=payload.weight_grams,
+                price=payload.purchase_price,
+                price_base_currency=price_base,
+                transaction_id=leg.id if leg else None,
+            )
+        )
     db.commit()
     return _valued(db, current_user, asset)
 
@@ -205,10 +272,10 @@ def update_physical_asset(
 
     new_date = update_data.get("purchase_date", asset.purchase_date)
     new_price = update_data.get("purchase_price", asset.purchase_price)
-    if asset.sold_at is not None and new_date > asset.sold_at:
+    if new_date is not None and asset.sold_at is not None and new_date > asset.sold_at:
         raise _unprocessable("The purchase date cannot be after the sale date")
     first_valuation = asset.valuations[0].date if asset.valuations else None
-    if first_valuation is not None and new_date > first_valuation:
+    if first_valuation is not None and new_date is not None and new_date > first_valuation:
         raise _unprocessable("The purchase date cannot be after an existing valuation")
     if asset.purchase_transaction_id is not None and new_price is None:
         raise _unprocessable("A purchase paid from an account needs a purchase price")
@@ -217,7 +284,7 @@ def update_physical_asset(
     reprice = "purchase_price" in update_data or "purchase_date" in update_data
     rate = (
         _rate(db, asset.currency, current_user, new_date)
-        if reprice and new_price is not None
+        if reprice and new_price is not None and new_date is not None
         else None
     )
 
@@ -233,7 +300,7 @@ def update_physical_asset(
             if asset.purchase_transaction_id
             else None
         )
-        if leg is not None and new_price is not None and rate is not None:
+        if leg is not None and new_price is not None and rate is not None and new_date:
             leg.amount = -new_price
             leg.amount_base_currency = -new_price * rate
             leg.exchange_rate = rate
@@ -258,6 +325,9 @@ def delete_physical_asset(
     # deleting a portfolio buy. Selling is how you keep the money trail.
     _retire_leg(db, asset.purchase_transaction_id)
     _retire_leg(db, asset.sale_transaction_id)
+    for movement in asset.movements:
+        movement.deleted_at = now
+        _retire_leg(db, movement.transaction_id)
     db.commit()
 
 
@@ -269,25 +339,18 @@ def sell_physical_asset(
     current_user: User = Depends(get_current_user),
 ) -> PhysicalAssetWithValue:
     asset = _get_owned_physical_asset(db, asset_id, current_user)
+    _require_vehicle(asset, "A metal is sold by the gram through its movements")
     if asset.sold_at is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Already sold")
+    assert asset.purchase_date is not None  # a vehicle always has one (DB CHECK)
     if payload.sold_at < asset.purchase_date:
         raise _unprocessable("The sale date cannot be before the purchase date")
     last_valuation = asset.valuations[-1].date if asset.valuations else None
     if last_valuation is not None and payload.sold_at <= last_valuation:
         raise _unprocessable("The sale date must be after the latest valuation")
 
-    account = None
-    if payload.account_id is not None:
-        account = get_owned_account(db, payload.account_id, current_user)
-        if account.currency != asset.currency:
-            raise _unprocessable("The receiving account must be in the asset's currency")
-    elif payload.category_id is not None:
-        raise _unprocessable("A category only applies to proceeds paid into an account")
-    category_id = (
-        get_owned_leaf_category(db, payload.category_id, current_user, "transfer").id
-        if payload.category_id
-        else None
+    account, category_id = _cash_account(
+        db, current_user, payload.account_id, payload.category_id, asset.currency
     )
     rate = _rate(db, asset.currency, current_user, payload.sold_at)
 
@@ -319,6 +382,7 @@ def unsell_physical_asset(
     current_user: User = Depends(get_current_user),
 ) -> PhysicalAssetWithValue:
     asset = _get_owned_physical_asset(db, asset_id, current_user)
+    _require_vehicle(asset, "Delete the metal's sell movement instead")
     if asset.sold_at is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Not sold")
     _retire_leg(db, asset.sale_transaction_id)
@@ -344,8 +408,8 @@ def create_valuation(
     asset = _get_owned_physical_asset(db, asset_id, current_user)
     # A metal's value is its spot price; an appraisal would have nothing to
     # re-anchor, and silently ignoring it would be worse than refusing.
-    if asset.kind != PhysicalAssetKind.vehicle.value:
-        raise _unprocessable("Only vehicles take manual valuations")
+    _require_vehicle(asset, "Only vehicles take manual valuations")
+    assert asset.purchase_date is not None  # a vehicle always has one (DB CHECK)
     if payload.date < asset.purchase_date:
         raise _unprocessable("A valuation cannot predate the purchase")
     if asset.sold_at is not None and payload.date >= asset.sold_at:
@@ -380,5 +444,93 @@ def delete_valuation(
     if valuation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Valuation not found")
     valuation.deleted_at = datetime.now(UTC)
+    db.commit()
+    return _valued(db, current_user, asset)
+
+
+@router.post(
+    "/{asset_id}/movements",
+    response_model=PhysicalAssetWithValue,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_movement(
+    asset_id: UUID,
+    payload: MetalMovementCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PhysicalAssetWithValue:
+    asset = _get_owned_physical_asset(db, asset_id, current_user)
+    if asset.kind != PhysicalAssetKind.metal.value:
+        raise _unprocessable("Only a metal position is bought and sold by the gram")
+    is_sale = payload.type == MetalMovementType.sell
+    if is_sale and payload.price is None:
+        raise _unprocessable("A sale needs a price")
+    if payload.account_id is not None and payload.price is None:
+        raise _unprocessable("A purchase paid from an account needs a price")
+
+    movement = PhysicalAssetMovement(
+        physical_asset_id=asset.id,
+        type=payload.type.value,
+        date=payload.date,
+        weight_grams=payload.weight_grams,
+        price=payload.price,
+        notes=payload.notes,
+    )
+    _check_ledger([*asset.movements, movement])
+
+    account, category_id = _cash_account(
+        db, current_user, payload.account_id, payload.category_id, asset.currency
+    )
+    # Resolved before the first db.add(), as on create.
+    rate = (
+        _rate(db, asset.currency, current_user, payload.date)
+        if payload.price is not None
+        else None
+    )
+    if payload.price is not None and rate is not None:
+        movement.price_base_currency = payload.price * rate
+        if account is not None:
+            grams = f"{payload.weight_grams.normalize():f}".replace(".", ",")
+            verb = "Vendita" if is_sale else "Acquisto"
+            leg = create_cash_leg(
+                db,
+                account=account,
+                amount=payload.price if is_sale else -payload.price,
+                currency=asset.currency,
+                rate=rate,
+                on_date=payload.date,
+                description=f"{verb} {grams} g {asset.name}",
+                category_id=category_id,
+            )
+            movement.transaction_id = leg.id
+
+    db.add(movement)
+    db.commit()
+    return _valued(db, current_user, asset)
+
+
+@router.delete(
+    "/{asset_id}/movements/{movement_id}", response_model=PhysicalAssetWithValue
+)
+def delete_movement(
+    asset_id: UUID,
+    movement_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PhysicalAssetWithValue:
+    asset = _get_owned_physical_asset(db, asset_id, current_user)
+    movement = next((m for m in asset.movements if m.id == movement_id), None)
+    if movement is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Movement not found")
+    remaining = [m for m in asset.movements if m.id != movement_id]
+    # A position with no movements has no date to sit on in the history, and
+    # nothing to show: that's a deleted asset, so say so.
+    if not remaining:
+        raise _unprocessable("This is the only movement — delete the asset instead")
+    # Removing a buy can leave a later sale selling grams that were never held.
+    _check_ledger(remaining)
+
+    movement.deleted_at = datetime.now(UTC)
+    _retire_leg(db, movement.transaction_id)
     db.commit()
     return _valued(db, current_user, asset)

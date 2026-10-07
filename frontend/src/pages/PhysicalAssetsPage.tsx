@@ -1,6 +1,6 @@
 import { useState, type ComponentType, type SVGProps } from 'react'
 import { PhysicalAssetForm } from '@/components/physical-assets/PhysicalAssetForm'
-import { SellDialog, ValuationsDialog } from '@/components/physical-assets/PhysicalAssetDialogs'
+import { MovementsDialog, SellDialog, ValuationsDialog } from '@/components/physical-assets/PhysicalAssetDialogs'
 import { Delta } from '@/components/ui/Amount'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
@@ -16,7 +16,7 @@ import { useDeletePhysicalAsset, usePhysicalAssets, useUnsellPhysicalAsset } fro
 import { apiErrorMessage } from '@/lib/apiError'
 import { formatAmount, formatFullDate, formatPercent, formatQuantity, toNumber } from '@/lib/format'
 import { METAL_FORM_LABELS, METAL_LABELS, purityToMillesimi, VEHICLE_TYPE_LABELS } from '@/lib/physicalAssets'
-import type { PhysicalAssetKind, PhysicalAssetWithValue, PreciousMetal } from '@/types'
+import type { MetalMovementType, PhysicalAssetKind, PhysicalAssetWithValue, PreciousMetal } from '@/types'
 
 function CarIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -47,6 +47,9 @@ function AssetRow({
   const value = sold ? asset.sale_price_base_currency : asset.current_value_base_currency
   const cost = toNumber(asset.purchase_price_base_currency)
   const pnl = asset.pnl_base_currency === null ? null : toNumber(asset.pnl_base_currency)
+  // A metal sold by the gram has realized gains alongside the unrealized
+  // ones on what's left; a vehicle's sale gain is already `pnl`.
+  const realized = asset.kind === 'metal' ? toNumber(asset.realized_pnl_base_currency) : 0
   return (
     <li className={`flex items-center gap-3 border-t border-line py-3 tabular-nums ${sold ? 'opacity-70' : ''}`}>
       <span className="grid h-10 w-10 flex-none place-items-center rounded-[10px] bg-card-2 text-ink-2 max-sm:hidden">
@@ -61,7 +64,9 @@ function AssetRow({
       </div>
       <div className="flex-none text-right">
         <div className="text-[16px] font-extrabold whitespace-nowrap">
-          {value === null ? (
+          {value === null && sold ? (
+            <span className="text-ink-3">—</span>
+          ) : value === null ? (
             <span className="text-ink-3" title="Quotazione non disponibile al momento">
               n.d.
             </span>
@@ -75,6 +80,11 @@ function AssetRow({
           <div className="text-[12px] whitespace-nowrap">
             <Delta value={pnl} currency={base} percent={cost ? (pnl / cost) * 100 : null} />
             {sold ? ' realizzato' : ''}
+          </div>
+        )}
+        {realized !== 0 && (
+          <div className="text-[12px] whitespace-nowrap">
+            <Delta value={realized} currency={base} /> realizzato
           </div>
         )}
       </div>
@@ -114,6 +124,7 @@ export function PhysicalAssetsPage() {
   const [form, setForm] = useState<FormState>(null)
   const [selling, setSelling] = useState<PhysicalAssetWithValue | null>(null)
   const [valuing, setValuing] = useState<PhysicalAssetWithValue | null>(null)
+  const [moving, setMoving] = useState<{ asset: PhysicalAssetWithValue; type: MetalMovementType } | null>(null)
   const [deleting, setDeleting] = useState<PhysicalAssetWithValue | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
 
@@ -164,7 +175,22 @@ export function PhysicalAssetsPage() {
 
   function actionsFor(asset: PhysicalAssetWithValue): RowMenuItem[] {
     const items: RowMenuItem[] = [{ label: 'Modifica', onSelect: () => setForm({ asset, kind: asset.kind }) }]
-    if (asset.kind === 'vehicle') items.push({ label: 'Valutazioni', onSelect: () => setValuing(asset) })
+    const remove: RowMenuItem = {
+      label: 'Elimina',
+      tone: 'danger',
+      onSelect: () => {
+        setActionError(null)
+        setDeleting(asset)
+      },
+    }
+    if (asset.kind === 'metal') {
+      // Sold by the gram: a sale is a movement, and undoing it is deleting it.
+      items.push({ label: 'Acquista o vendi', onSelect: () => setMoving({ asset, type: 'buy' }) })
+      if (toNumber(asset.weight_grams) > 0) items.push({ label: 'Vendi', onSelect: () => setMoving({ asset, type: 'sell' }) })
+      items.push(remove)
+      return items
+    }
+    items.push({ label: 'Valutazioni', onSelect: () => setValuing(asset) })
     items.push(
       asset.sold_at === null
         ? { label: 'Vendi', onSelect: () => setSelling(asset) }
@@ -179,14 +205,7 @@ export function PhysicalAssetsPage() {
               }
             },
           },
-      {
-        label: 'Elimina',
-        tone: 'danger',
-        onSelect: () => {
-          setActionError(null)
-          setDeleting(asset)
-        },
-      },
+      remove,
     )
     return items
   }
@@ -306,6 +325,12 @@ export function PhysicalAssetsPage() {
       </Dialog>
       <SellDialog asset={selling} onClose={() => setSelling(null)} />
       <ValuationsDialog asset={valuing} onClose={() => setValuing(null)} />
+      <MovementsDialog
+        key={moving ? `${moving.asset.id}-${moving.type}` : 'none'}
+        asset={moving?.asset ?? null}
+        initialType={moving?.type ?? 'buy'}
+        onClose={() => setMoving(null)}
+      />
       <ConfirmDialog
         open={deleting !== null}
         title={deleting ? `Eliminare ${deleting.name}?` : ''}
@@ -315,7 +340,7 @@ export function PhysicalAssetsPage() {
         pending={deleteAsset.isPending}
         error={actionError}
       >
-        Spariscono anche le valutazioni e gli eventuali giroconti di acquisto e vendita. Se l'hai venduto, usa «Vendi» per
+        Spariscono anche valutazioni, movimenti e gli eventuali giroconti di acquisto e vendita. Se l'hai venduto, usa «Vendi» per
         conservarne la storia.
       </ConfirmDialog>
     </>

@@ -4,6 +4,7 @@ import { PLANNING_KEY } from '@/hooks/usePlanning'
 import { invalidatePortfolio } from '@/hooks/usePortfolio'
 import { TRANSACTIONS_KEY } from '@/hooks/useTransactions'
 import type {
+  MetalMovementPayload,
   PhysicalAssetCreatePayload,
   PhysicalAssetSellPayload,
   PhysicalAssetUpdatePayload,
@@ -85,6 +86,22 @@ export function useDeleteValuation() {
   return useMutation({
     mutationFn: ({ id, valuationId }: { id: string; valuationId: string }) =>
       physicalAssetsApi.deleteValuation(id, valuationId),
+    onSuccess,
+  })
+}
+
+export function useCreateMovement() {
+  const onSuccess = useInvalidate()
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: MetalMovementPayload }) => physicalAssetsApi.createMovement(id, payload),
+    onSuccess,
+  })
+}
+
+export function useDeleteMovement() {
+  const onSuccess = useInvalidate()
+  return useMutation({
+    mutationFn: ({ id, movementId }: { id: string; movementId: string }) => physicalAssetsApi.deleteMovement(id, movementId),
     onSuccess,
   })
 }

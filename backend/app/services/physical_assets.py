@@ -9,25 +9,32 @@ deliberately conservative:
   before the date asked about. A valuation re-anchors the curve rather than
   overriding one point, so the estimate keeps sliding after an appraisal
   instead of freezing at it.
-- A metal object is worth its fine content (weight × purity) at today's
-  spot price. That includes jewellery: craftsmanship and brand have no
-  dependable resale market — a "compro oro" pays melt value — so counting
-  them would inflate net worth with money nobody would actually pay.
+- A metal position is worth its fine content (grams held × purity) at
+  today's spot price. That includes jewellery: craftsmanship and brand have
+  no dependable resale market — a "compro oro" pays melt value — so
+  counting them would inflate net worth with money nobody would actually
+  pay. The grams held come from its buy/sell movements, costed at weighted
+  average like a portfolio holding.
 
 Spot prices are COMEX/NYMEX futures from Yahoo Finance, in USD per troy
 ounce, cached through the same `assets`/`asset_prices` rows as portfolio
 holdings (the migration seeds one `metal` asset per metal).
 """
 
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import date as date_
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy.orm import Query, Session
 
-from app.models import Asset, PhysicalAsset, Transaction, User
+from app.models import Asset, PhysicalAsset, PhysicalAssetMovement, Transaction, User
 from app.schemas import (
     MetalForm,
+    MetalMovement,
+    MetalMovementType,
     PhysicalAssetKind,
     PhysicalAssetWithValue,
     PreciousMetal,
@@ -66,10 +73,21 @@ def metal_asset(db: Session, metal: str) -> Asset | None:
 
 
 def is_held_on(asset: PhysicalAsset, on_date: date_) -> bool:
+    """Vehicles only — a metal position's holding is `grams_held_on`."""
     # The sale date itself is excluded: on that day the money is already in
     # the account (or in the user's pocket), so counting the object too
     # would double it.
-    return asset.purchase_date <= on_date and (asset.sold_at is None or on_date < asset.sold_at)
+    return (
+        asset.purchase_date is not None
+        and asset.purchase_date <= on_date
+        and (asset.sold_at is None or on_date < asset.sold_at)
+    )
+
+
+def acquired_on(asset: PhysicalAsset) -> date_ | None:
+    if asset.kind == "vehicle":
+        return asset.purchase_date
+    return min((m.date for m in asset.movements), default=None)
 
 
 def vehicle_value(asset: PhysicalAsset, on_date: date_) -> Decimal:
@@ -81,17 +99,103 @@ def vehicle_value(asset: PhysicalAsset, on_date: date_) -> Decimal:
             break
         anchor_date, anchor_value = valuation.date, Decimal(str(valuation.value))
 
+    assert anchor_date is not None  # a vehicle always has one (DB CHECK)
     years = Decimal(max((on_date - anchor_date).days, 0)) / DAYS_PER_YEAR
     retained = (Decimal("1") - Decimal(str(asset.depreciation_rate))) ** years
     return _money(anchor_value * retained)
 
 
-def fine_weight_grams(asset: PhysicalAsset) -> Decimal:
-    return Decimal(str(asset.weight_grams)) * Decimal(str(asset.purity))
+class MovementLike(Protocol):
+    type: str
+    date: date_
+    weight_grams: Decimal
+    price_base_currency: Decimal | None
 
 
-def metal_value_usd(asset: PhysicalAsset, spot_per_ounce_usd: Decimal) -> Decimal:
-    return fine_weight_grams(asset) * spot_per_ounce_usd / TROY_OUNCE_GRAMS
+class OversoldError(ValueError):
+    def __init__(self, on_date: date_, held: Decimal, wanted: Decimal) -> None:
+        super().__init__(
+            f"Cannot sell {wanted.normalize():f} g on {on_date.isoformat()}"
+            f" — only {held.normalize():f} g held then"
+        )
+
+
+@dataclass
+class MetalPosition:
+    held_grams: Decimal
+    # Cost of the grams held, in base currency; None when any of them came
+    # without a price (a gift) — an average over a made-up zero would lie.
+    cost_base: Decimal | None
+    realized_pnl_base: Decimal | None
+    last_sell: date_ | None
+
+
+def _chronological(movements: Iterable[MovementLike]) -> list[MovementLike]:
+    # Day granularity: on a tied date buys go first, the only order that
+    # can't spuriously sell from a position that's still empty — the same
+    # rule as compute_holding_positions. Same-type ties don't affect the
+    # average cost, so no further tiebreaker is needed.
+    return sorted(movements, key=lambda m: (m.date, 0 if m.type == "buy" else 1))
+
+
+def metal_position(movements: Iterable[MovementLike]) -> MetalPosition:
+    """
+    Walk the movements at weighted-average cost. Raises OversoldError if a
+    sale ever exceeds what was held on its date — the router runs this on
+    the would-be ledger before every write, so a stored ledger never does.
+    """
+    held = Decimal("0")
+    cost: Decimal | None = Decimal("0")
+    realized: Decimal | None = Decimal("0")
+    last_sell = None
+
+    for movement in _chronological(movements):
+        grams = Decimal(str(movement.weight_grams))
+        price = (
+            Decimal(str(movement.price_base_currency))
+            if movement.price_base_currency is not None
+            else None
+        )
+        if movement.type == "buy":
+            if held == 0:
+                cost = Decimal("0")  # an emptied position starts its cost afresh
+            held += grams
+            cost = cost + price if cost is not None and price is not None else None
+            continue
+
+        if grams > held:
+            raise OversoldError(movement.date, held, grams)
+        if cost is not None and price is not None and realized is not None:
+            sold_cost = cost * grams / held
+            cost -= sold_cost
+            realized += price - sold_cost
+        else:
+            realized = None
+        held -= grams
+        last_sell = movement.date
+
+    return MetalPosition(
+        held_grams=held,
+        cost_base=cost if held > 0 else None,
+        realized_pnl_base=realized,
+        last_sell=last_sell,
+    )
+
+
+def grams_held_on(asset: PhysicalAsset, on_date: date_) -> Decimal:
+    # A sale on `on_date` already counts, matching `is_held_on`.
+    return sum(
+        (
+            Decimal(str(m.weight_grams)) * (1 if m.type == "buy" else -1)
+            for m in asset.movements
+            if m.date <= on_date
+        ),
+        Decimal("0"),
+    )
+
+
+def metal_value_usd(fine_grams: Decimal, spot_per_ounce_usd: Decimal) -> Decimal:
+    return fine_grams * spot_per_ounce_usd / TROY_OUNCE_GRAMS
 
 
 def physical_assets_with_value(
@@ -106,11 +210,13 @@ def physical_assets_with_value(
     fails leaves the affected values at None instead of failing the whole
     request — a Yahoo outage shouldn't take the net-worth page down.
     """
-    query = user_physical_assets_query(db, user)
+    assets = user_physical_assets_query(db, user).order_by(PhysicalAsset.created_at).all()
+    valued = value_physical_assets(db, user, assets)
+    # Filtered after valuing: an emptied metal position is "sold" only
+    # once its movements have been walked.
     if not include_sold:
-        query = query.filter(PhysicalAsset.sold_at.is_(None))
-    assets = query.order_by(PhysicalAsset.purchase_date, PhysicalAsset.created_at).all()
-    return value_physical_assets(db, user, assets)
+        valued = [a for a in valued if a.sold_at is None]
+    return sorted(valued, key=lambda a: a.purchase_date)
 
 
 def value_physical_assets(
@@ -142,32 +248,45 @@ def value_physical_assets(
 
     result = []
     for asset in assets:
-        held = is_held_on(asset, today)
         value_base: Decimal | None = None
+        pnl: Decimal | None = None
         fine_grams: Decimal | None = None
         spot_per_gram_base: Decimal | None = None
+        position: MetalPosition | None = None
 
         if asset.kind == "vehicle":
             rate = rate_to_base(asset.currency)
-            if held and rate is not None:
+            if is_held_on(asset, today) and rate is not None:
                 value_base = _money(vehicle_value(asset, today) * rate)
+            realized_or_current = asset.sale_price_base_currency if asset.sold_at else value_base
+            cost = asset.purchase_price_base_currency
+            if cost is not None and realized_or_current is not None:
+                pnl = _money(Decimal(str(realized_or_current)) - Decimal(str(cost)))
         else:
-            fine_grams = fine_weight_grams(asset)
+            position = metal_position(asset.movements)
+            fine_grams = position.held_grams * Decimal(str(asset.purity))
             # Never None for a metal (DB CHECK); the guard is for the type checker.
             spot = spot_per_ounce(asset.metal) if asset.metal else None
             usd_rate = rate_to_base(METAL_QUOTE_CURRENCY)
             if spot is not None and usd_rate is not None:
                 spot_per_gram_base = _money(spot / TROY_OUNCE_GRAMS * usd_rate)
-                if held:
-                    value_base = _money(metal_value_usd(asset, spot) * usd_rate)
+                if position.held_grams > 0:
+                    value_base = _money(metal_value_usd(fine_grams, spot) * usd_rate)
+            if value_base is not None and position.cost_base is not None:
+                pnl = _money(value_base - position.cost_base)
 
-        cost = asset.purchase_price_base_currency
-        realized_or_current = asset.sale_price_base_currency if asset.sold_at else value_base
-        pnl = (
-            _money(Decimal(str(realized_or_current)) - Decimal(str(cost)))
-            if cost is not None and realized_or_current is not None
-            else None
-        )
+        if position is None:
+            cost_shown = asset.purchase_price_base_currency
+            sold_at = asset.sold_at
+            realized = None
+        else:
+            cost_shown = _money(position.cost_base) if position.cost_base is not None else None
+            sold_at = position.last_sell if position.held_grams == 0 else None
+            realized = (
+                _money(position.realized_pnl_base)
+                if position.realized_pnl_base is not None
+                else None
+            )
 
         result.append(
             PhysicalAssetWithValue(
@@ -176,11 +295,11 @@ def value_physical_assets(
                 name=asset.name,
                 notes=asset.notes,
                 currency=asset.currency,
-                purchase_date=asset.purchase_date,
+                purchase_date=acquired_on(asset) or asset.created_at.date(),
                 purchase_price=asset.purchase_price,
-                purchase_price_base_currency=asset.purchase_price_base_currency,
+                purchase_price_base_currency=cost_shown,
                 purchase_account_id=_leg_account_id(asset.purchase_transaction),
-                sold_at=asset.sold_at,
+                sold_at=sold_at,
                 sale_price=asset.sale_price,
                 sale_price_base_currency=asset.sale_price_base_currency,
                 sale_account_id=_leg_account_id(asset.sale_transaction),
@@ -191,20 +310,35 @@ def value_physical_assets(
                 ],
                 metal=PreciousMetal(asset.metal) if asset.metal else None,
                 metal_form=MetalForm(asset.metal_form) if asset.metal_form else None,
-                weight_grams=asset.weight_grams,
+                weight_grams=position.held_grams if position else None,
                 purity=asset.purity,
+                movements=[_movement_schema(m) for m in asset.movements],
                 fine_weight_grams=fine_grams,
                 spot_price_per_gram_base_currency=spot_per_gram_base,
                 current_value_base_currency=value_base,
                 value_date=today,
                 pnl_base_currency=pnl,
+                realized_pnl_base_currency=realized,
                 created_at=asset.created_at,
             )
         )
     return result
 
 
+def _movement_schema(movement: PhysicalAssetMovement) -> MetalMovement:
+    return MetalMovement(
+        id=movement.id,
+        type=MetalMovementType(movement.type),
+        date=movement.date,
+        weight_grams=movement.weight_grams,
+        price=movement.price,
+        price_base_currency=movement.price_base_currency,
+        account_id=_leg_account_id(movement.transaction),
+        notes=movement.notes,
+    )
+
+
 def _leg_account_id(leg: Transaction | None) -> UUID | None:
-    # A leg retired by an "unsell" (or deleted from the transactions page)
-    # no longer says where the money went.
+    # A retired leg (an "unsell", a deleted movement, or deleted from the
+    # transactions page) no longer says where the money went.
     return leg.account_id if leg is not None and leg.deleted_at is None else None

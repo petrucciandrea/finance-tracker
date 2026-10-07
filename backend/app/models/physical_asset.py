@@ -10,6 +10,12 @@ weighed at today's spot price for its fine content.
 Both kinds share one table: the net-worth view, the history chart and the
 cash legs treat them identically, and only the valuation differs. The
 CHECK constraints keep each kind's columns from leaking into the other.
+
+A metal row is a *position* rather than a single object: metal is fungible
+and gets bought and sold by the gram, so its weight, cost and sale live in
+`physical_asset_movements` (a small buy/sell ledger, like
+`asset_transactions` for holdings) and the purchase/sale columns below stay
+NULL. A vehicle can't be sold in part, so it keeps them on the row.
 """
 
 import uuid
@@ -27,6 +33,21 @@ if TYPE_CHECKING:
     from app.models import Transaction
 
 
+KIND_FIELDS_CHECK = (
+    "(kind = 'vehicle' AND vehicle_type IN ('car','motorcycle','other')"
+    " AND depreciation_rate IS NOT NULL"
+    " AND purchase_date IS NOT NULL AND purchase_price IS NOT NULL"
+    " AND metal IS NULL AND metal_form IS NULL AND purity IS NULL)"
+    " OR "
+    "(kind = 'metal' AND metal IN ('gold','silver','platinum')"
+    " AND metal_form IN ('bullion','coin','jewelry') AND purity IS NOT NULL"
+    " AND vehicle_type IS NULL AND depreciation_rate IS NULL"
+    " AND purchase_date IS NULL AND purchase_price IS NULL"
+    " AND purchase_price_base_currency IS NULL AND purchase_transaction_id IS NULL"
+    " AND sold_at IS NULL AND sale_transaction_id IS NULL)"
+)
+
+
 class PhysicalAsset(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "physical_assets"
 
@@ -39,9 +60,9 @@ class PhysicalAsset(Base, TimestampMixin, SoftDeleteMixin):
     notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
     currency: Mapped[str] = mapped_column(String(3), ForeignKey("currencies.code"), nullable=False)
 
-    purchase_date: Mapped[date] = mapped_column(Date, nullable=False)
-    # Nullable for metals only: an inherited ring has no cost, and making one
-    # up would invent a P&L. A vehicle's price is its depreciation anchor.
+    # Vehicle only (CHECK): a metal's dates, prices and cash legs are per
+    # movement. A vehicle's price is its depreciation anchor.
+    purchase_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     purchase_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     # Frozen at write time, same rule as Transaction.amount_base_currency.
     purchase_price_base_currency: Mapped[Decimal | None] = mapped_column(
@@ -67,7 +88,6 @@ class PhysicalAsset(Base, TimestampMixin, SoftDeleteMixin):
     # metal only
     metal: Mapped[str | None] = mapped_column(String(10), nullable=True)
     metal_form: Mapped[str | None] = mapped_column(String(10), nullable=True)
-    weight_grams: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
     purity: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
 
     purchase_transaction: Mapped["Transaction | None"] = relationship(
@@ -88,30 +108,25 @@ class PhysicalAsset(Base, TimestampMixin, SoftDeleteMixin):
         viewonly=True,
         lazy="selectin",
     )
+    movements: Mapped[list["PhysicalAssetMovement"]] = relationship(
+        primaryjoin=lambda: and_(
+            PhysicalAsset.id == PhysicalAssetMovement.physical_asset_id,
+            PhysicalAssetMovement.deleted_at.is_(None),
+        ),
+        order_by=lambda: (PhysicalAssetMovement.date, PhysicalAssetMovement.created_at),
+        viewonly=True,
+        lazy="selectin",
+    )
 
     __table_args__ = (
         CheckConstraint("kind in ('vehicle','metal')", name="ck_physical_assets_kind"),
-        CheckConstraint(
-            "(kind = 'vehicle' AND vehicle_type IN ('car','motorcycle','other')"
-            " AND depreciation_rate IS NOT NULL AND purchase_price IS NOT NULL"
-            " AND metal IS NULL AND metal_form IS NULL"
-            " AND weight_grams IS NULL AND purity IS NULL)"
-            " OR "
-            "(kind = 'metal' AND metal IN ('gold','silver','platinum')"
-            " AND metal_form IN ('bullion','coin','jewelry')"
-            " AND weight_grams IS NOT NULL AND purity IS NOT NULL"
-            " AND vehicle_type IS NULL AND depreciation_rate IS NULL)",
-            name="ck_physical_assets_kind_fields",
-        ),
+        CheckConstraint(KIND_FIELDS_CHECK, name="ck_physical_assets_kind_fields"),
         CheckConstraint(
             "depreciation_rate IS NULL OR (depreciation_rate >= 0 AND depreciation_rate < 1)",
             name="ck_physical_assets_depreciation_rate",
         ),
         CheckConstraint(
             "purity IS NULL OR (purity > 0 AND purity <= 1)", name="ck_physical_assets_purity"
-        ),
-        CheckConstraint(
-            "weight_grams IS NULL OR weight_grams > 0", name="ck_physical_assets_weight"
         ),
         CheckConstraint(
             "(sold_at IS NULL) = (sale_price IS NULL)", name="ck_physical_assets_sale"
@@ -145,5 +160,46 @@ class PhysicalAssetValuation(Base, TimestampMixin, SoftDeleteMixin):
             "date",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
+
+
+class PhysicalAssetMovement(Base, TimestampMixin, SoftDeleteMixin):
+    """
+    A purchase or (possibly partial) sale of a metal position, in grams of
+    the object's gross weight at the position's purity.
+    """
+
+    __tablename__ = "physical_asset_movements"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    physical_asset_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("physical_assets.id"), nullable=False, index=True
+    )
+    type: Mapped[str] = mapped_column(String(4), nullable=False)  # buy/sell
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    weight_grams: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    # Total for the movement, in the asset's currency. Nullable on a buy
+    # only: an inherited ring has no cost, and making one up would invent a
+    # P&L. A sale always has a price.
+    price: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    # Frozen at write time, same rule as Transaction.amount_base_currency.
+    price_base_currency: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    # The optional `transfer` row that paid for / collected it.
+    transaction_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("transactions.id"), nullable=True
+    )
+    notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    transaction: Mapped["Transaction | None"] = relationship()
+
+    __table_args__ = (
+        CheckConstraint("type in ('buy','sell')", name="ck_physical_asset_movements_type"),
+        CheckConstraint("weight_grams > 0", name="ck_physical_asset_movements_weight"),
+        CheckConstraint(
+            "price IS NULL OR price >= 0", name="ck_physical_asset_movements_price"
+        ),
+        CheckConstraint(
+            "type = 'buy' OR price IS NOT NULL", name="ck_physical_asset_movements_sale_price"
         ),
     )

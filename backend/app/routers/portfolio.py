@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.deps import get_current_user, get_db
-from app.models import Account, Asset, AssetTransaction, PhysicalAsset, Transaction, User
+from app.models import Account, Asset, AssetTransaction, Transaction, User
 from app.schemas import (
     AssetSearchResult,
     AssetTransactionCreate,
@@ -546,16 +546,12 @@ def portfolio_history(
     )
 
     # Sold ones too: they were part of net worth until the day they left.
-    physical_assets = (
-        physical_assets_service.user_physical_assets_query(db, current_user)
-        .order_by(PhysicalAsset.purchase_date)
-        .all()
-    )
+    physical_assets = physical_assets_service.user_physical_assets_query(db, current_user).all()
 
     earliest_dates = (
         [tx.date for tx in asset_transactions]
         + [tx.date for tx in cash_transactions]
-        + [a.purchase_date for a in physical_assets]
+        + [d for a in physical_assets if (d := physical_assets_service.acquired_on(a))]
     )
     earliest = min(earliest_dates) if earliest_dates else today
 
@@ -657,19 +653,20 @@ def portfolio_history(
 
         physical_base = Decimal("0")
         for physical_asset in physical_assets:
-            if not physical_assets_service.is_held_on(physical_asset, sample_date):
-                continue
             if physical_asset.kind == "vehicle":
-                physical_base += physical_assets_service.vehicle_value(
-                    physical_asset, sample_date
-                ) * rate_on(physical_asset.currency, sample_date)
+                if physical_assets_service.is_held_on(physical_asset, sample_date):
+                    physical_base += physical_assets_service.vehicle_value(
+                        physical_asset, sample_date
+                    ) * rate_on(physical_asset.currency, sample_date)
                 continue
+            grams = physical_assets_service.grams_held_on(physical_asset, sample_date)
             metal_asset = metal_assets.get(physical_asset.metal or "")
             spot = price_on(metal_asset.id, sample_date) if metal_asset else None
-            if metal_asset is None or spot is None:
+            if grams <= 0 or metal_asset is None or spot is None:
                 continue
+            fine_grams = grams * Decimal(str(physical_asset.purity))
             physical_base += physical_assets_service.metal_value_usd(
-                physical_asset, spot
+                fine_grams, spot
             ) * rate_on(metal_asset.currency, sample_date)
 
         points.append(

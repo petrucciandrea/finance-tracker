@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 
 from app.services.physical_assets import TROY_OUNCE_GRAMS, vehicle_value
 
@@ -395,3 +396,180 @@ def test_history_includes_physical_assets_from_their_purchase(
     assert Decimal(last["total_net_worth"]) == Decimal(
         last["total_physical_assets_value_base_currency"]
     )
+
+
+# ---------------------------------------------------------------------------
+# Metal positions: buys and partial sales by the gram
+# ---------------------------------------------------------------------------
+
+def _move(client: TestClient, headers: dict, asset_id: str, **payload) -> Response:
+    return client.post(f"{URL}/{asset_id}/movements", json=payload, headers=headers)
+
+
+def test_a_partial_sale_keeps_the_rest_at_average_cost(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    # 100 g at 50 EUR/g
+    gold = _create(client, headers, _metal(purchase_price="5000.00"))
+
+    response = _move(
+        client, headers, gold["id"],
+        type="sell", date="2025-06-01", weight_grams="40", price="3000.00",
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+
+    assert Decimal(body["weight_grams"]) == Decimal("60")
+    assert Decimal(body["fine_weight_grams"]) == Decimal("45")  # 60 × 0.75
+    assert Decimal(body["current_value_base_currency"]) == Decimal("4050.00")  # 45 g × 90
+    # 40 g of a 50 EUR/g position cost 2000; sold for 3000.
+    assert Decimal(body["realized_pnl_base_currency"]) == Decimal("1000.00")
+    assert Decimal(body["purchase_price_base_currency"]) == Decimal("3000.00")
+    assert Decimal(body["pnl_base_currency"]) == Decimal("1050.00")
+    assert body["sold_at"] is None
+    assert [m["type"] for m in body["movements"]] == ["buy", "sell"]
+
+
+def test_buying_more_averages_the_cost(client: TestClient, registered_user: dict) -> None:
+    headers = registered_user["auth_headers"]
+    gold = _create(client, headers, _metal(purchase_price="5000.00"))  # 100 g, 50/g
+    _move(client, headers, gold["id"], type="buy", date="2025-03-01", weight_grams="100",
+          price="7000.00")  # 100 g, 70/g
+    body = _move(client, headers, gold["id"], type="sell", date="2025-04-01",
+                 weight_grams="50", price="4000.00").json()
+
+    # Average 60/g: 50 g sold cost 3000, 150 g left cost 9000.
+    assert Decimal(body["realized_pnl_base_currency"]) == Decimal("1000.00")
+    assert Decimal(body["purchase_price_base_currency"]) == Decimal("9000.00")
+    assert Decimal(body["weight_grams"]) == Decimal("150")
+
+
+def test_cannot_sell_more_than_held_on_that_date(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    gold = _create(client, headers, _metal())  # 100 g on 2025-01-10
+
+    too_much = _move(client, headers, gold["id"], type="sell", date="2025-06-01",
+                     weight_grams="100.0001", price="1.00")
+    assert too_much.status_code == 422
+    before_buying = _move(client, headers, gold["id"], type="sell", date="2025-01-09",
+                          weight_grams="1", price="1.00")
+    assert before_buying.status_code == 422
+    no_price = _move(client, headers, gold["id"], type="sell", date="2025-06-01",
+                     weight_grams="1")
+    assert no_price.status_code == 422
+
+
+def test_deleting_a_buy_cannot_strand_a_later_sale(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    gold = _create(client, headers, _metal())  # 100 g
+    bought = _move(client, headers, gold["id"], type="buy", date="2025-02-01",
+                   weight_grams="50").json()
+    extra_buy = next(m for m in bought["movements"] if m["date"] == "2025-02-01")
+    _move(client, headers, gold["id"], type="sell", date="2025-03-01",
+          weight_grams="120", price="1000.00")
+
+    response = client.delete(f"{URL}/{gold['id']}/movements/{extra_buy['id']}", headers=headers)
+    assert response.status_code == 422  # the sale would exceed the 100 g left
+
+
+def test_the_only_movement_cannot_be_deleted(client: TestClient, registered_user: dict) -> None:
+    headers = registered_user["auth_headers"]
+    gold = _create(client, headers, _metal())
+    only = gold["movements"][0]["id"]
+    assert client.delete(f"{URL}/{gold['id']}/movements/{only}", headers=headers).status_code == 422
+
+
+def test_selling_everything_marks_the_position_sold(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    gold = _create(client, headers, _metal(purchase_price="5000.00"))
+    _move(client, headers, gold["id"], type="sell", date="2025-05-01", weight_grams="30",
+          price="2000.00")
+    body = _move(client, headers, gold["id"], type="sell", date="2025-06-01",
+                 weight_grams="70", price="4000.00").json()
+
+    assert body["sold_at"] == "2025-06-01"
+    assert body["current_value_base_currency"] is None
+    assert Decimal(body["realized_pnl_base_currency"]) == Decimal("1000.00")
+    assert client.get(URL, headers=headers).json() == []
+    assert len(client.get(f"{URL}?include_sold=true", headers=headers).json()) == 1
+
+
+def test_movements_on_an_account_write_and_retire_their_legs(
+    client: TestClient, registered_user: dict, checking_account: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    gold = _create(client, headers, _metal(purchase_price="5000.00",
+                                           account_id=checking_account["id"]))
+    assert gold["movements"][0]["account_id"] == checking_account["id"]
+
+    body = _move(client, headers, gold["id"], type="sell", date="2025-06-01",
+                 weight_grams="25.5", price="2000.00",
+                 account_id=checking_account["id"]).json()
+    assert _cash_balance(client, headers, checking_account["id"]) == Decimal("-3000")
+    descriptions = {
+        t["description"]
+        for t in client.get("/api/v1/transactions", headers=headers).json()["data"]
+    }
+    assert "Vendita 25,5 g Anello 18kt" in descriptions
+
+    sale = next(m for m in body["movements"] if m["type"] == "sell")
+    response = client.delete(f"{URL}/{gold['id']}/movements/{sale['id']}", headers=headers)
+    assert response.status_code == 200, response.text
+    assert _cash_balance(client, headers, checking_account["id"]) == Decimal("-5000")
+
+
+def test_metal_purchase_is_edited_through_movements(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    gold = _create(client, headers, _metal())
+    car = _create(client, headers, _vehicle())
+
+    patch = client.patch(f"{URL}/{gold['id']}", json={"purchase_price": "1.00"}, headers=headers)
+    assert patch.status_code == 422
+    rename = client.patch(
+        f"{URL}/{gold['id']}", json={"name": "Fede", "purity": "0.585"}, headers=headers
+    )
+    assert rename.status_code == 200, rename.text
+    assert Decimal(rename.json()["fine_weight_grams"]) == Decimal("58.5")
+
+    sell_whole = client.post(
+        f"{URL}/{gold['id']}/sell",
+        json={"sold_at": "2025-06-01", "sale_price": "1.00"},
+        headers=headers,
+    )
+    assert sell_whole.status_code == 422
+    on_vehicle = _move(client, headers, car["id"], type="sell", date=date.today().isoformat(),
+                       weight_grams="1", price="1.00")
+    assert on_vehicle.status_code == 422
+
+
+def test_history_follows_the_grams_held(
+    client: TestClient, registered_user: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "app.routers.portfolio.get_rate_history",
+        lambda db, from_currency, to_currency, start_date, end_date: {},
+    )
+    monkeypatch.setattr(
+        "app.routers.portfolio.asset_prices_service.get_price_history",
+        lambda db, asset, start_date, end_date: {start_date: SPOT_PER_OUNCE},
+    )
+    headers = registered_user["auth_headers"]
+    bought = date.today() - timedelta(days=20)
+    gold = _create(client, headers, _metal(purchase_date=bought.isoformat()))
+    _move(client, headers, gold["id"], type="sell",
+          date=(date.today() - timedelta(days=5)).isoformat(),
+          weight_grams="60", price="1.00")
+
+    points = client.get("/api/v1/portfolio/history?period=1m", headers=headers).json()["points"]
+    assert Decimal(points[0]["total_physical_assets_value_base_currency"]) == Decimal("6750")
+    # 40 g left × 0.75 × 90
+    assert Decimal(points[-1]["total_physical_assets_value_base_currency"]) == Decimal("2700")

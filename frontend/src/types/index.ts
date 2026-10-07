@@ -421,6 +421,29 @@ export type VehicleType = 'car' | 'motorcycle' | 'other'
 export type PreciousMetal = 'gold' | 'silver' | 'platinum'
 export type MetalForm = 'bullion' | 'coin' | 'jewelry'
 
+export type MetalMovementType = 'buy' | 'sell'
+
+export interface MetalMovement {
+  id: string
+  type: MetalMovementType
+  date: string
+  weight_grams: string
+  price: string | null
+  price_base_currency: string | null
+  account_id: string | null
+  notes: string | null
+}
+
+export interface MetalMovementPayload {
+  type: MetalMovementType
+  date: string
+  weight_grams: string
+  price?: string | null
+  account_id?: string | null
+  category_id?: string | null
+  notes?: string | null
+}
+
 export interface PhysicalAssetValuation {
   id: string
   date: string
@@ -447,14 +470,20 @@ export interface PhysicalAssetWithValue {
   valuations: PhysicalAssetValuation[]
   metal: PreciousMetal | null
   metal_form: MetalForm | null
+  // A metal is a position: grams held today, built from its movements. Its
+  // purchase_date is the first buy, purchase_price_base_currency the average
+  // cost of the grams held, sold_at the last sale once nothing is left.
   weight_grams: string | null
   purity: string | null
+  movements: MetalMovement[]
   fine_weight_grams: string | null
   spot_price_per_gram_base_currency: string | null
   // null when it can't be priced today, and once sold — never "0".
   current_value_base_currency: string | null
   value_date: string
   pnl_base_currency: string | null
+  // Metal only: gain on grams already sold, at average cost.
+  realized_pnl_base_currency: string | null
   created_at: string
 }
 
@@ -478,12 +507,12 @@ export interface PhysicalAssetCreatePayload {
 export interface PhysicalAssetUpdatePayload {
   name?: string
   notes?: string | null
+  // Vehicle only: a metal's purchases are its movements.
   purchase_date?: string
   purchase_price?: string | null
   vehicle_type?: VehicleType
   depreciation_rate?: string
   metal_form?: MetalForm
-  weight_grams?: string
   purity?: string
 }
 

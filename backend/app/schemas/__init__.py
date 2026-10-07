@@ -125,6 +125,11 @@ class PreciousMetal(str, Enum):
     platinum = "platinum"
 
 
+class MetalMovementType(str, Enum):
+    buy = "buy"
+    sell = "sell"
+
+
 class MetalForm(str, Enum):
     bullion = "bullion"
     coin = "coin"
@@ -584,6 +589,7 @@ class PhysicalAssetCreate(BaseModel):
     notes: str | None = Field(default=None, max_length=500)
     currency: str = Field(min_length=3, max_length=3)
     purchase_date: date_
+    # For a metal these three describe its first buy movement.
     purchase_price: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=2)
     # Optional: pay for it from this account (a negative `transfer` row).
     account_id: UUID | None = None
@@ -601,7 +607,8 @@ class PhysicalAssetCreate(BaseModel):
 class PhysicalAssetUpdate(BaseModel):
     # `kind`, `metal` and `currency` are immutable: changing any of them
     # turns the row into a different object, and would desync the frozen
-    # base-currency amounts and the cash legs.
+    # base-currency amounts and the cash legs. A metal's weight, price and
+    # dates are per movement, so purchase_* is vehicle-only here.
     name: str | None = Field(default=None, min_length=1, max_length=100)
     notes: str | None = Field(default=None, max_length=500)
     purchase_date: date_ | None = None
@@ -609,7 +616,6 @@ class PhysicalAssetUpdate(BaseModel):
     vehicle_type: VehicleType | None = None
     depreciation_rate: Decimal | None = Field(default=None, ge=0, lt=1, decimal_places=4)
     metal_form: MetalForm | None = None
-    weight_grams: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=4)
     purity: Decimal | None = Field(default=None, gt=0, le=1, decimal_places=4)
 
 
@@ -619,6 +625,28 @@ class PhysicalAssetSell(BaseModel):
     # Optional: the proceeds land on this account (a positive `transfer` row).
     account_id: UUID | None = None
     category_id: UUID | None = None
+
+
+class MetalMovementCreate(BaseModel):
+    type: MetalMovementType
+    date: date_
+    weight_grams: Decimal = Field(gt=0, max_digits=12, decimal_places=4)
+    # Total for the movement. Required on a sale; optional on a buy (a gift).
+    price: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=2)
+    account_id: UUID | None = None
+    category_id: UUID | None = None
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class MetalMovement(BaseModel):
+    id: UUID
+    type: MetalMovementType
+    date: date_
+    weight_grams: Decimal
+    price: Decimal | None
+    price_base_currency: Decimal | None
+    account_id: UUID | None
+    notes: str | None
 
 
 class PhysicalAssetValuationCreate(BaseModel):
@@ -655,8 +683,13 @@ class PhysicalAssetWithValue(BaseModel):
 
     metal: PreciousMetal | None
     metal_form: MetalForm | None
+    # A metal is a position: weight is what's held today, and the purchase
+    # fields describe it — first buy date, average cost of the grams held
+    # (None if any of them has no known cost). `sold_at` is the last sale
+    # once nothing is left.
     weight_grams: Decimal | None
     purity: Decimal | None
+    movements: list[MetalMovement]
     fine_weight_grams: Decimal | None  # weight_grams * purity
     spot_price_per_gram_base_currency: Decimal | None
 
@@ -664,8 +697,11 @@ class PhysicalAssetWithValue(BaseModel):
     # today) — never 0, which would read as "worthless". Also None once sold.
     current_value_base_currency: Decimal | None
     value_date: date_
-    # current (or sale) value minus purchase cost; None without a cost.
+    # current (or sale) value minus purchase cost; None without a cost. For a
+    # metal: unrealized, on the grams still held.
     pnl_base_currency: Decimal | None
+    # Metal only: cumulative gain on grams already sold, at average cost.
+    realized_pnl_base_currency: Decimal | None
     created_at: datetime
 
 

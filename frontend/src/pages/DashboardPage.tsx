@@ -311,7 +311,7 @@ export function DashboardPage() {
         subtitle={`${formatLongDate(today)} ${today.getFullYear()} · giorno ${today.getDate()} di ${endOfMonth(today).getDate()} · importi in ${base} salvo indicazione`}
         actions={
           <>
-            <form role="search" onSubmit={onSearch} className="flex min-w-0 flex-[1_1_220px] lg:max-w-[300px]">
+            <form role="search" onSubmit={onSearch} className="flex min-w-0 flex-[1_1_220px] lg:w-[280px] lg:flex-none">
               <label className="flex min-h-11 w-full items-center gap-2 rounded-[10px] border border-field bg-card px-3 text-ink-3 focus-within:border-accent">
                 <SearchIcon />
                 <span className="sr-only">Cerca movimenti</span>

@@ -11,7 +11,7 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
         <h1 className="text-[24px] font-extrabold tracking-[-0.02em] max-lg:sr-only">{title}</h1>
         {subtitle && <p className="text-[13px] font-semibold text-ink-3 tabular-nums">{subtitle}</p>}
       </div>
-      {actions && <div className="flex max-w-full min-w-0 flex-[0_1_auto] flex-wrap gap-2 max-sm:flex-auto">{actions}</div>}
+      {actions && <div className="flex max-w-full min-w-0 flex-[0_1_auto] flex-wrap gap-2 max-sm:flex-auto lg:flex-nowrap">{actions}</div>}
     </div>
   )
 }

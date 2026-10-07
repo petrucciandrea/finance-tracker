@@ -1,4 +1,4 @@
-import { useCallback, useId, useMemo, useRef, useState, type ComponentType, type SVGProps } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentType, type SVGProps } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { ThemeChooser } from '@/components/layout/ThemeChooser'
 import {
@@ -123,6 +123,14 @@ export function AppLayout() {
 
   const menuId = useId()
   const accountId = useId()
+
+  // BrowserRouter keeps the window's scroll across navigations, so a new
+  // page would open wherever the previous one was left (e.g. mid-dashboard
+  // after logging in from the scrolled-down mobile form). Query-string
+  // changes (filters, pagination) deliberately keep the position.
+  useEffect(() => {
+    window.scrollTo(0, 0)
+  }, [location.pathname])
 
   if (!user) return null // ProtectedRoute guarantees a user; this narrows the type.
 

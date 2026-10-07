@@ -257,7 +257,7 @@ function GoalSourcesDialog({ goal, onClose }: { goal: SavingsGoal | null; onClos
             <select id="goal-source" className="field min-w-0 flex-1" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
               <option value="">Collega un conto…</option>
               {(accounts ?? [])
-                .filter((a) => !linked.has(a.id))
+                .filter((a) => !linked.has(a.id) && !a.closed_at)
                 .map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.name} · {a.currency}

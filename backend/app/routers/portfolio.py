@@ -49,7 +49,11 @@ from app.services.net_worth import (
     holdings_with_value,
     user_asset_transactions_query,
 )
-from app.services.ownership import get_owned_account, get_owned_leaf_category
+from app.services.ownership import (
+    ensure_account_open_on,
+    get_owned_account,
+    get_owned_leaf_category,
+)
 from app.services.physical_assets import physical_assets_with_value
 from app.services.transfers import create_cash_leg
 
@@ -205,6 +209,7 @@ def create_asset_transaction(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Asset transactions can only be logged on investment or crypto wallet accounts",
         )
+    ensure_account_open_on(account, payload.date)
     # Checked before the asset lookup, which may already write a row.
     category_id = (
         get_owned_leaf_category(db, payload.category_id, current_user, "transfer").id
@@ -280,6 +285,8 @@ def update_asset_transaction(
 ) -> AssetTransaction:
     transaction = _get_owned_asset_transaction(db, transaction_id, current_user)
     update_data = payload.model_dump(exclude_unset=True)
+    if update_data.get("date") is not None:
+        ensure_account_open_on(transaction.account, update_data["date"])
 
     if transaction.type == "sell":
         new_quantity = Decimal(str(update_data.get("quantity", transaction.quantity)))
@@ -362,7 +369,9 @@ async def asset_transaction_import_preview(
         )
 
     content = await file.read()
-    preview = csv_import_service.parse_asset_csv(db, account_id, content)
+    preview = csv_import_service.parse_asset_csv(
+        db, account_id, content, closed_at=account.closed_at
+    )
 
     rows = [
         AssetTransactionImportRow(

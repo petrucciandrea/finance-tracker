@@ -235,6 +235,8 @@ class AccountCreate(BaseModel):
 class AccountUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     type: AccountType | None = None
+    # A date closes the account, an explicit null reopens it.
+    closed_at: date_ | None = None
 
 
 class Account(ORMBase):
@@ -243,6 +245,7 @@ class Account(ORMBase):
     type: AccountType
     currency: str
     created_at: datetime
+    closed_at: date_ | None = None
     deleted_at: datetime | None = None
 
 

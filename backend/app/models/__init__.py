@@ -100,6 +100,10 @@ class Account(Base, TimestampMixin, SoftDeleteMixin):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     type: Mapped[str] = mapped_column(String(20), nullable=False)  # AccountType enum value
     currency: Mapped[str] = mapped_column(String(3), ForeignKey("currencies.code"), nullable=False)
+    # A day, not a timestamp: it is compared against movement dates. Unlike
+    # `deleted_at` a closed account stays in balances and history — it just
+    # takes no movement dated after it.
+    closed_at: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="accounts")
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="account")

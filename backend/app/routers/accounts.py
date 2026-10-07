@@ -5,6 +5,10 @@ Mostly the template for `categories` and then the more involved
 `transactions` router — the one exception is `create_account`'s optional
 `starting_balance`, which needs the same currency-conversion path as a
 transaction (see below).
+
+Closing is a PATCH of `closed_at` (null reopens). A closed account is not a
+deleted one: it keeps its balance and history and stays in this list — it
+only refuses movements dated after the close.
 """
 
 from datetime import UTC
@@ -12,16 +16,94 @@ from datetime import date as date_
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.deps import get_current_user, get_db
-from app.models import Account, Currency, SavingsGoal, SavingsGoalSource, Transaction, User
+from app.models import (
+    Account,
+    AssetTransaction,
+    Currency,
+    SavingsGoal,
+    SavingsGoalSource,
+    Transaction,
+    User,
+)
 from app.schemas import Account as AccountSchema
 from app.schemas import AccountCreate, AccountUpdate
 from app.services.exchange_rates import ExchangeRateUnavailable, get_rate
 from app.services.ownership import get_owned_account
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["accounts"])
+
+
+def _reject_if_funds_a_goal(db: Session, account: Account, user: User) -> None:
+    funded_goal = (
+        db.query(SavingsGoal)
+        .join(SavingsGoalSource, SavingsGoalSource.goal_id == SavingsGoal.id)
+        .filter(
+            SavingsGoal.user_id == user.id,
+            SavingsGoal.deleted_at.is_(None),
+            SavingsGoalSource.account_id == account.id,
+            SavingsGoalSource.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if funded_goal is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"This account funds the savings goal «{funded_goal.name}» — "
+                "detach it from the goal first"
+            ),
+        )
+
+
+def _check_can_close(db: Session, account: Account, closed_at: date_, user: User) -> None:
+    """
+    Closing is refused when the date would contradict the ledger: a movement
+    after it would sit on an account that no longer existed, and every write
+    path refuses those (`ensure_account_open_on`), so it couldn't even be
+    re-dated afterwards. A goal is refused because the waterfall would keep
+    suggesting transfers into an account that takes none.
+
+    A non-zero balance is *not* refused: it stays in balances and net worth
+    as it is — hiding it would misstate the total — and the UI warns.
+    """
+    if closed_at > date_.today():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The closing date can't be in the future",
+        )
+
+    last_movement = max(
+        (
+            d
+            for d in (
+                db.query(func.max(Transaction.date))
+                .filter(Transaction.account_id == account.id, Transaction.deleted_at.is_(None))
+                .scalar(),
+                db.query(func.max(AssetTransaction.date))
+                .filter(
+                    AssetTransaction.account_id == account.id,
+                    AssetTransaction.deleted_at.is_(None),
+                )
+                .scalar(),
+            )
+            if d is not None
+        ),
+        default=None,
+    )
+    if last_movement is not None and last_movement > closed_at:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"The account has movements up to {last_movement.isoformat()} — "
+                "close it on or after that date"
+            ),
+        )
+
+    _reject_if_funds_a_goal(db, account, user)
 
 
 @router.get("", response_model=list[AccountSchema])
@@ -117,6 +199,8 @@ def update_account(
     account = get_owned_account(db, account_id, current_user)
 
     update_data = payload.model_dump(exclude_unset=True)
+    if update_data.get("closed_at") is not None:
+        _check_can_close(db, account, update_data["closed_at"], current_user)
     for field, value in update_data.items():
         # `type` arrives as an enum member; store its string value like on create.
         setattr(account, field, value.value if hasattr(value, "value") else value)
@@ -139,25 +223,7 @@ def delete_account(
     # A soft-deleted account vanishes from the balance map the waterfall
     # reads, so a savings goal funded by it would quietly report zero and
     # the cascade would suggest refilling it — into a deleted account.
-    funded_goal = (
-        db.query(SavingsGoal)
-        .join(SavingsGoalSource, SavingsGoalSource.goal_id == SavingsGoal.id)
-        .filter(
-            SavingsGoal.user_id == current_user.id,
-            SavingsGoal.deleted_at.is_(None),
-            SavingsGoalSource.account_id == account.id,
-            SavingsGoalSource.deleted_at.is_(None),
-        )
-        .first()
-    )
-    if funded_goal is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"This account funds the savings goal «{funded_goal.name}» — "
-                "detach it from the goal first"
-            ),
-        )
+    _reject_if_funds_a_goal(db, account, current_user)
 
     account.deleted_at = datetime.now(UTC)
     db.commit()

@@ -123,7 +123,12 @@ def update_plan(
     _validate_percentages(update_data)
 
     if update_data.get("default_source_account_id") is not None:
-        get_owned_account(db, update_data["default_source_account_id"], current_user)
+        source = get_owned_account(db, update_data["default_source_account_id"], current_user)
+        if source.closed_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"The account «{source.name}» is closed",
+            )
 
     for field, value in update_data.items():
         setattr(plan, field, value)

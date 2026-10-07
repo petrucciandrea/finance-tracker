@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Account, Transaction, User
 from app.services.exchange_rates import ExchangeRateUnavailable, get_rate
+from app.services.ownership import ensure_account_open_on
 
 
 def create_linked_transfer(
@@ -65,6 +66,8 @@ def create_linked_transfer(
                 f"({from_account.currency} -> {to_account.currency})"
             ),
         )
+    ensure_account_open_on(from_account, on_date)
+    ensure_account_open_on(to_account, on_date)
 
     # Resolved before any write. With both legs in one currency this is the
     # short-circuit path when that currency is the base one, and a single
@@ -128,6 +131,7 @@ def create_cash_leg(
     already resolved by the caller, and `category_id` already validated as a
     transfer category. Flushes so the caller can store the id; never commits.
     """
+    ensure_account_open_on(account, on_date)
     cash_transaction = Transaction(
         account_id=account.id,
         category_id=category_id,

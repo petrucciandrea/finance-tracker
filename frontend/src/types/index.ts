@@ -81,6 +81,8 @@ export interface Account {
   type: AccountType
   currency: string
   created_at: string
+  /** YYYY-MM-DD. A closed account keeps its balance and history but takes no movement dated after it. */
+  closed_at: string | null
   deleted_at: string | null
 }
 
@@ -94,6 +96,8 @@ export interface AccountCreatePayload {
 export interface AccountUpdatePayload {
   name?: string
   type?: AccountType
+  /** A date closes the account, null reopens it. */
+  closed_at?: string | null
 }
 
 // --- Categories ---

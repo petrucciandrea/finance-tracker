@@ -335,7 +335,13 @@ def add_source(
     current_user: User = Depends(get_current_user),
 ) -> SavingsGoalSource:
     goal = _get_owned_goal(db, goal_id, current_user)
-    get_owned_account(db, payload.account_id, current_user)
+    account = get_owned_account(db, payload.account_id, current_user)
+    # Closing refuses an account that funds a goal; this is the other door.
+    if account.closed_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"The account «{account.name}» is closed",
+        )
 
     # An account may fund at most one goal, or its balance would count
     # toward both and the cascade would think it had twice the money.

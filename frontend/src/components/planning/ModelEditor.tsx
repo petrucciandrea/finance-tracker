@@ -127,11 +127,15 @@ function Editor({ plan, onClose }: { plan: AllocationPlan; onClose: () => void }
             onChange={(e) => setValues({ ...values, default_source_account_id: e.target.value })}
           >
             <option value="">Nessuno</option>
-            {(accounts ?? []).map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name} · {a.currency}
-              </option>
-            ))}
+            {/* A closed account stays listed only while it's the saved choice, so the select doesn't silently show "Nessuno". */}
+            {(accounts ?? [])
+              .filter((a) => !a.closed_at || a.id === values.default_source_account_id)
+              .map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name} · {a.currency}
+                  {a.closed_at ? ' (chiuso)' : ''}
+                </option>
+              ))}
           </select>
         </Field>
       </div>

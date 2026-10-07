@@ -20,7 +20,7 @@ import { useAllTransactions } from '@/hooks/useTransactions'
 import { apiErrorMessage } from '@/lib/apiError'
 import { CURRENCIES, CURRENCY_NAMES } from '@/lib/currencies'
 import { monthRange } from '@/lib/dates'
-import { formatAmount, formatFullDate, formatMonthName, formatPercent, toNumber } from '@/lib/format'
+import { formatAmount, formatFullDate, formatMonthName, formatPercent, toISODate, toNumber } from '@/lib/format'
 import { ACCOUNT_TYPE_LABELS } from '@/lib/portfolio'
 import { totals } from '@/lib/transactions'
 import type { Account, AccountBalance, AccountType } from '@/types'
@@ -254,6 +254,61 @@ function EditAccountForm({ account, onClose }: { account: Account; onClose: () =
   )
 }
 
+function CloseAccountDialog({ account, balance, goal, onClose }: { account: Account | null; balance: AccountBalance | undefined; goal: string | undefined; onClose: () => void }) {
+  return (
+    <Dialog open={!!account} onClose={onClose} title={`Chiudere “${account?.name}”?`} description="Resta nello storico con i suoi movimenti; dopo la data di chiusura non ne accetta di nuovi.">
+      {account && <CloseAccountForm key={account.id} account={account} balance={balance} goal={goal} onClose={onClose} />}
+    </Dialog>
+  )
+}
+
+function CloseAccountForm({ account, balance, goal, onClose }: { account: Account; balance: AccountBalance | undefined; goal: string | undefined; onClose: () => void }) {
+  const updateAccount = useUpdateAccount()
+  const [today] = useState(() => toISODate(new Date()))
+  const [closedAt, setClosedAt] = useState(today)
+  const [error, setError] = useState<string | null>(null)
+  const leftover = balance ? toNumber(balance.balance) : 0
+
+  async function save() {
+    if (!closedAt) {
+      setError('Indica la data di chiusura')
+      return
+    }
+    if (closedAt > today) {
+      setError('La data di chiusura non può essere nel futuro')
+      return
+    }
+    setError(null)
+    try {
+      await updateAccount.mutateAsync({ id: account.id, payload: { closed_at: closedAt } })
+      onClose()
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Impossibile chiudere il conto.'))
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Field label="Data di chiusura" htmlFor="close-date">
+        <input id="close-date" type="date" className="field" max={today} value={closedAt} onChange={(e) => setClosedAt(e.target.value)} />
+      </Field>
+      {leftover !== 0 && (
+        <p role="note" className="rounded-[10px] bg-warn-soft px-3 py-2 text-[13px] font-bold text-warn tabular-nums">
+          Il saldo è {formatAmount(leftover, account.currency)} {account.currency}: resta nel patrimonio anche a conto chiuso. Se il denaro è stato spostato altrove, registra prima il giroconto.
+        </p>
+      )}
+      {goal && <p className="text-[13px] font-bold text-warn">Finanzia l'obiettivo “{goal}”: scollegalo dal piano prima di chiuderlo.</p>}
+      {error && <ErrorBlock>{error}</ErrorBlock>}
+      <div className="flex justify-end gap-2">
+        <Button onClick={onClose}>Annulla</Button>
+        <Button variant="primary" onClick={save} disabled={updateAccount.isPending}>
+          {updateAccount.isPending ? 'Attendi…' : 'Chiudi conto'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 export function AccountsPage() {
   const { user } = useAuth()
   const base = user?.base_currency ?? ''
@@ -263,7 +318,10 @@ export function AccountsPage() {
   const { data: goals } = useSavingsGoals()
   const month = useAllTransactions(monthRange(today))
   const deleteAccount = useDeleteAccount()
+  const reopenAccount = useUpdateAccount()
   const [formOpen, setFormOpen] = useState(false)
+  const [closing, setClosing] = useState<Account | null>(null)
+  const [reopenError, setReopenError] = useState<string | null>(null)
   const [editing, setEditing] = useState<Account | null>(null)
   const [deleting, setDeleting] = useState<Account | null>(null)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -276,9 +334,16 @@ export function AccountsPage() {
     for (const source of goal.sources) goalByAccount.set(source.account_id, goal.name)
   }
 
+  const openAccounts = (accounts ?? []).filter((a) => !a.closed_at)
+  // Most recently closed first: the one you just closed is the one you look for.
+  const closedAccounts = (accounts ?? []).filter((a) => a.closed_at).sort((a, b) => (b.closed_at ?? '').localeCompare(a.closed_at ?? ''))
+  const closedIds = new Set(closedAccounts.map((a) => a.id))
+
   const total = toNumber(netWorth.data?.total_cash_balance)
   const byCurrency = new Map<string, { native: number; base: number; count: number }>()
   for (const b of balances) {
+    // An emptied closed account adds nothing but a misleading "N conti".
+    if (closedIds.has(b.account_id) && toNumber(b.balance) === 0) continue
     const entry = byCurrency.get(b.currency) ?? { native: 0, base: 0, count: 0 }
     entry.native += toNumber(b.balance)
     entry.base += toNumber(b.balance_base_currency)
@@ -295,7 +360,7 @@ export function AccountsPage() {
           {formatAmount(total, base)} <span className="ccy">{base}</span>
         </>
       ),
-      sub: `${accounts?.length ?? 0} conti attivi`,
+      sub: `${openAccounts.length} conti attivi`,
     },
     ...[...byCurrency.entries()]
       .sort((a, b) => b[1].base - a[1].base)
@@ -328,7 +393,21 @@ export function AccountsPage() {
     }
   }
 
-  const groups = TYPE_ORDER.map((type) => ({ type, items: (accounts ?? []).filter((a) => a.type === type) })).filter((g) => g.items.length)
+  async function reopen(account: Account) {
+    setReopenError(null)
+    try {
+      await reopenAccount.mutateAsync({ id: account.id, payload: { closed_at: null } })
+    } catch (error) {
+      setReopenError(apiErrorMessage(error, 'Impossibile riaprire il conto.'))
+    }
+  }
+
+  function askDelete(account: Account) {
+    setDeleteError(null)
+    setDeleting(account)
+  }
+
+  const groups = TYPE_ORDER.map((type) => ({ type, items: openAccounts.filter((a) => a.type === type) })).filter((g) => g.items.length)
 
   return (
     <>
@@ -350,7 +429,7 @@ export function AccountsPage() {
             <LoadingBlock className="h-64" />
           ) : isError ? (
             <ErrorBlock>Errore nel caricamento dei conti.</ErrorBlock>
-          ) : groups.length === 0 ? (
+          ) : groups.length === 0 && closedAccounts.length === 0 ? (
             <Card>
               <EmptyState title="Ancora nessun conto" action={<Button variant="primary" onClick={() => setFormOpen(true)}>Crea il primo conto</Button>}>
                 Aggiungi un conto corrente, un deposito o un conto titoli per iniziare.
@@ -402,14 +481,8 @@ export function AccountsPage() {
                             label={`Azioni per ${account.name}`}
                             items={[
                               { label: 'Modifica nome e tipo', onSelect: () => setEditing(account) },
-                              {
-                                label: 'Elimina',
-                                tone: 'danger',
-                                onSelect: () => {
-                                  setDeleteError(null)
-                                  setDeleting(account)
-                                },
-                              },
+                              { label: 'Chiudi conto', onSelect: () => setClosing(account) },
+                              { label: 'Elimina', tone: 'danger', onSelect: () => askDelete(account) },
                             ]}
                           />
                         </li>
@@ -420,12 +493,60 @@ export function AccountsPage() {
               )
             })
           )}
+
+          {closedAccounts.length > 0 && (
+            <details className="group rounded-[14px] border border-line bg-card px-4 sm:px-5">
+              <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between py-2.5 text-[13px] font-extrabold text-ink-2">
+                <span>Conti chiusi · {closedAccounts.length}</span>
+                <span aria-hidden="true" className="text-ink-3 transition-transform group-open:rotate-90">
+                  ›
+                </span>
+              </summary>
+              {reopenError && <ErrorBlock>{reopenError}</ErrorBlock>}
+              <ul className="pb-2">
+                {closedAccounts.map((account) => {
+                  const balance = balanceById.get(account.id)
+                  const leftover = balance ? toNumber(balance.balance) : 0
+                  return (
+                    <li key={account.id} className="flex items-center gap-3 border-t border-line py-3 tabular-nums">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[15px] font-bold text-ink-2">
+                          <span className="min-w-0 break-words">{account.name}</span>
+                          <span className="rounded bg-card-2 px-1.5 text-[11px] font-bold text-ink-3">{account.currency}</span>
+                        </div>
+                        <div className="text-[12px] text-ink-3">
+                          {ACCOUNT_TYPE_LABELS[account.type]} · chiuso il {formatFullDate(account.closed_at!)}
+                        </div>
+                      </div>
+                      <div className={`flex-none text-right text-[14px] font-bold whitespace-nowrap ${leftover !== 0 ? 'text-warn' : 'text-ink-3'}`}>
+                        {balance ? formatAmount(balance.balance, account.currency) : '…'} <span className="ccy">{account.currency}</span>
+                      </div>
+                      <RowMenu
+                        label={`Azioni per ${account.name}`}
+                        items={[
+                          { label: 'Riapri', onSelect: () => reopen(account) },
+                          { label: 'Modifica nome e tipo', onSelect: () => setEditing(account) },
+                          { label: 'Elimina', tone: 'danger', onSelect: () => askDelete(account) },
+                        ]}
+                      />
+                    </li>
+                  )
+                })}
+              </ul>
+            </details>
+          )}
         </div>
 
         {formOpen && <NewAccountPanel balances={balances} baseCurrency={base} onClose={() => setFormOpen(false)} />}
       </div>
 
       <EditAccountDialog account={editing} onClose={() => setEditing(null)} />
+      <CloseAccountDialog
+        account={closing}
+        balance={closing ? balanceById.get(closing.id) : undefined}
+        goal={closing ? goalByAccount.get(closing.id) : undefined}
+        onClose={() => setClosing(null)}
+      />
       <ConfirmDialog
         open={!!deleting}
         title={`Eliminare “${deleting?.name}”?`}

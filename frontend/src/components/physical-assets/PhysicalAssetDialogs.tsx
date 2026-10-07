@@ -41,7 +41,7 @@ function SellForm({ asset, onClose }: { asset: PhysicalAssetWithValue; onClose: 
   const [accountId, setAccountId] = useState('')
   const [categoryId, setCategoryId] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const receiving = (accounts ?? []).filter((a) => a.currency === asset.currency)
+  const receiving = (accounts ?? []).filter((a) => a.currency === asset.currency && !a.closed_at)
 
   async function submit() {
     if (!isLocaleNumber(price) || Number(parseLocaleNumber(price)) < 0) {
@@ -247,7 +247,7 @@ function MovementsPanel({ asset, initialType }: { asset: PhysicalAssetWithValue;
   const [categoryId, setCategoryId] = useState('')
   const [notes, setNotes] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const sameCurrency = (accounts ?? []).filter((a) => a.currency === current.currency)
+  const sameCurrency = (accounts ?? []).filter((a) => a.currency === current.currency && !a.closed_at)
   const accountName = new Map((accounts ?? []).map((a) => [a.id, a.name]))
 
   async function add() {

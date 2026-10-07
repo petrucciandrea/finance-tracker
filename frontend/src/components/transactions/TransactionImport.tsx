@@ -164,7 +164,7 @@ export function TransactionImport({ onDone }: { onDone: () => void }) {
               <select id="import-account" value={accountId} onChange={(e) => setAccountId(e.target.value)} className="field">
                 <option value="">Seleziona un conto</option>
                 {accounts
-                  ?.filter((a) => !a.deleted_at)
+                  ?.filter((a) => !a.deleted_at && !a.closed_at)
                   .map((a) => (
                     <option key={a.id} value={a.id}>
                       {a.name} · {a.currency}

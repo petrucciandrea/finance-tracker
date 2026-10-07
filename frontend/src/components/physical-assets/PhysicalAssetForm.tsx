@@ -135,7 +135,7 @@ export function PhysicalAssetForm({
   const currency = useWatch({ control, name: 'currency' })
   const accountId = useWatch({ control, name: 'account_id' })
   const purityPreset = useWatch({ control, name: 'purity_preset' })
-  const payingAccounts = (accounts ?? []).filter((a) => a.currency === currency)
+  const payingAccounts = (accounts ?? []).filter((a) => a.currency === currency && !a.closed_at)
 
   async function onSubmit(v: FormValues) {
     setServerError(null)

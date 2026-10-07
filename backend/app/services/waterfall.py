@@ -130,6 +130,10 @@ def compute_waterfall(db: Session, user: User, on_date: date_) -> WaterfallPlan:
         if plan.default_source_account_id
         else None
     )
+    # Closed after being picked as the plan's source: suggesting transfers
+    # out of it would only produce actions the execute endpoint refuses.
+    if source_account is not None and source_account.closed_at is not None:
+        source_account = None
 
     steps: list[WaterfallStep] = []
     actions: list[WaterfallAction] = []

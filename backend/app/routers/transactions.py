@@ -35,7 +35,11 @@ from app.schemas import (
 )
 from app.services import csv_import as csv_import_service
 from app.services.exchange_rates import ExchangeRateUnavailable, get_rate
-from app.services.ownership import get_owned_account, get_owned_leaf_category
+from app.services.ownership import (
+    ensure_account_open_on,
+    get_owned_account,
+    get_owned_leaf_category,
+)
 from app.services.transfers import create_linked_transfer
 
 router = APIRouter(prefix="/api/v1/transactions", tags=["transactions"])
@@ -255,6 +259,7 @@ def create_transaction(
     current_user: User = Depends(get_current_user),
 ) -> Transaction:
     account = get_owned_account(db, payload.account_id, current_user)
+    ensure_account_open_on(account, payload.date)
     _validate_necessity_override(payload.type.value, payload.necessity_level_override)
 
     category_id = payload.category_id
@@ -431,6 +436,8 @@ def update_transaction(
     update_data = payload.model_dump(exclude_unset=True)
     _reject_if_linked_to_asset_transaction(db, transaction.id, changed_fields=set(update_data))
     _reject_amount_or_date_edit_on_a_linked_leg(transaction, set(update_data))
+    if update_data.get("date") is not None:
+        ensure_account_open_on(transaction.account, update_data["date"])
 
     if "category_id" in update_data:
         if update_data["category_id"] is None:
@@ -503,10 +510,10 @@ async def import_preview(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> TransactionImportPreview:
-    get_owned_account(db, account_id, current_user)
+    account = get_owned_account(db, account_id, current_user)
 
     content = await file.read()
-    preview = csv_import_service.parse_csv(db, account_id, content)
+    preview = csv_import_service.parse_csv(db, account_id, content, closed_at=account.closed_at)
 
     rows = [
         TransactionImportRow(

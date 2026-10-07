@@ -40,6 +40,8 @@ export function useUpdateAccount() {
       queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY })
       // Net worth carries the account name.
       queryClient.invalidateQueries({ queryKey: NET_WORTH_KEY })
+      // Closing the plan's source account drops it from the waterfall's actions.
+      queryClient.invalidateQueries({ queryKey: PLANNING_KEY })
     },
   })
 }

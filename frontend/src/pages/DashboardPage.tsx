@@ -17,7 +17,7 @@ import { useAllTransactions, useTransactionsList } from '@/hooks/useTransactions
 import { buttonClass } from '@/lib/buttonClass'
 import { indexById } from '@/lib/categories'
 import { endOfMonth, monthRange } from '@/lib/dates'
-import { formatAmount, formatLongDate, formatMonthName, formatPercent, formatQuantity, formatShortDate, toISODate } from '@/lib/format'
+import { formatAmount, formatLongDate, formatMonthName, formatPercent, formatQuantity, formatShortDate, toISODate, toNumber } from '@/lib/format'
 import { ACCOUNT_TYPE_LABELS, ASSET_TYPE_LABELS, INVESTMENT_ACCOUNT_TYPES, unrealizedPnlBase } from '@/lib/portfolio'
 import { accountLabel, amountKind, totals } from '@/lib/transactions'
 import type { NetWorthSummary } from '@/types'
@@ -26,6 +26,9 @@ function AccountsCard({ netWorth }: { netWorth: NetWorthSummary }) {
   const { data: accounts } = useAccounts()
   const byId = indexById(accounts)
   const base = netWorth.base_currency
+  // A closed account emptied as it should be is just noise here; one with
+  // money left in it still counts toward the total, so it stays visible.
+  const shown = netWorth.accounts.filter((a) => !byId.get(a.account_id)?.closed_at || toNumber(a.balance) !== 0)
   return (
     <Card
       title="Conti"
@@ -36,14 +39,14 @@ function AccountsCard({ netWorth }: { netWorth: NetWorthSummary }) {
         </Link>
       }
     >
-      {netWorth.accounts.length === 0 ? (
+      {shown.length === 0 ? (
         <div className="mt-3">
           <EmptyState title="Nessun conto" action={<Link to="/accounts" className={buttonClass('primary')}>Crea un conto</Link>} />
         </div>
       ) : (
         <>
           <ul className="mt-2">
-            {netWorth.accounts.map((account) => {
+            {shown.map((account) => {
               const type = byId.get(account.account_id)?.type
               return (
                 <li key={account.account_id} className="flex justify-between gap-2 border-b border-line py-2.5">

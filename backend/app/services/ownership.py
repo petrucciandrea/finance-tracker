@@ -13,6 +13,7 @@ used by a single router, so hoisting them would trade duplication for
 indirection without removing a real risk.
 """
 
+from datetime import date as date_
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -39,6 +40,25 @@ def get_owned_account(db: Session, account_id: UUID, user: User) -> Account:
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
     return account
+
+
+def ensure_account_open_on(account: Account, on_date: date_) -> None:
+    """
+    A closed account takes no movement dated after its closing day — 409.
+
+    Back-dated ones still go through: fixing history before the close is
+    legitimate, and refusing it would force a reopen-edit-reclose round trip
+    for a typo. Called by every path that writes or re-dates a movement,
+    including the shared transfer and cash-leg helpers.
+    """
+    if account.closed_at is not None and on_date > account.closed_at:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"The account «{account.name}» was closed on "
+                f"{account.closed_at.isoformat()} — reopen it first"
+            ),
+        )
 
 
 def get_owned_leaf_category(

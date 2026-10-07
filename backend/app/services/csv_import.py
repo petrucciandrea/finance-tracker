@@ -15,6 +15,7 @@ idea, `SETEX import:{id} 900 <json>`) instead of adding a Postgres table.
 import csv
 import io
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from datetime import date as date_
@@ -112,13 +113,32 @@ def _mark_duplicates(db: Session, rows: list[ImportRow]) -> None:
         row.is_duplicate = exists is not None
 
 
-def parse_csv(db: Session, account_id: UUID, file_content: bytes) -> ImportPreviewData:
+def _mark_after_closure(
+    rows: Sequence["ImportRow | AssetImportRow"], closed_at: date_ | None
+) -> None:
+    """
+    A closed account refuses movements dated after its closing day, so such
+    rows are unparsable here rather than a 409 at confirm time that would
+    throw away the rest of the batch.
+    """
+    if closed_at is None:
+        return
+    for row in rows:
+        if row.is_parsable and row.date > closed_at:
+            row.is_parsable = False
+            row.error = f"Dated after the account was closed ({closed_at.isoformat()})"
+
+
+def parse_csv(
+    db: Session, account_id: UUID, file_content: bytes, *, closed_at: date_ | None = None
+) -> ImportPreviewData:
     text = file_content.decode("utf-8-sig")  # handles Excel's BOM-prefixed exports
     reader = csv.DictReader(io.StringIO(text))
 
     rows = [
         _parse_row(i, account_id, raw) for i, raw in enumerate(reader, start=1)
     ]
+    _mark_after_closure(rows, closed_at)
     _mark_duplicates(db, rows)
 
     preview = ImportPreviewData(import_id=uuid.uuid4(), account_id=account_id, rows=rows)
@@ -256,11 +276,14 @@ def _mark_asset_duplicates(db: Session, rows: list[AssetImportRow]) -> None:
         row.is_duplicate = exists is not None
 
 
-def parse_asset_csv(db: Session, account_id: UUID, file_content: bytes) -> AssetImportPreviewData:
+def parse_asset_csv(
+    db: Session, account_id: UUID, file_content: bytes, *, closed_at: date_ | None = None
+) -> AssetImportPreviewData:
     text = file_content.decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
 
     rows = [_parse_asset_row(i, account_id, raw) for i, raw in enumerate(reader, start=1)]
+    _mark_after_closure(rows, closed_at)
     _mark_asset_duplicates(db, rows)
 
     preview = AssetImportPreviewData(import_id=uuid.uuid4(), account_id=account_id, rows=rows)

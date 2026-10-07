@@ -99,7 +99,9 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
 
   const type = useWatch({ control, name: 'type' })
   const fromAccountId = useWatch({ control, name: 'account_id' })
-  const activeAccounts = (accounts ?? []).filter((a) => !a.deleted_at)
+  // Closed accounts refuse new movements dated after the close; a back-dated
+  // fix is rare enough that reopening the account first is the way in.
+  const activeAccounts = (accounts ?? []).filter((a) => !a.deleted_at && !a.closed_at)
   const isNewTransfer = !editing && type === 'transfer'
   // Giroconti are same-currency only (the backend 422s otherwise), so only
   // offer destinations that can actually receive the money.

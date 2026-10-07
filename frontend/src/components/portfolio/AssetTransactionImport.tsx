@@ -20,7 +20,7 @@ export function AssetTransactionImport({ onDone }: { onDone: () => void }) {
   // Holdings only make sense on investment/crypto accounts — the backend
   // rejects anything else with a 422, filtering here avoids the round-trip.
   const eligibleAccounts = (accounts ?? []).filter(
-    (a) => a.type === 'investment' || a.type === 'crypto_wallet',
+    (a) => (a.type === 'investment' || a.type === 'crypto_wallet') && !a.closed_at,
   )
 
   async function handleUpload() {

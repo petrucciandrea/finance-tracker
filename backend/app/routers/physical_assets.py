@@ -42,7 +42,11 @@ from app.schemas import (
     PhysicalAssetWithValue,
 )
 from app.services.exchange_rates import ExchangeRateUnavailable, get_rate
-from app.services.ownership import get_owned_account, get_owned_leaf_category
+from app.services.ownership import (
+    ensure_account_open_on,
+    get_owned_account,
+    get_owned_leaf_category,
+)
 from app.services.physical_assets import (
     OversoldError,
     metal_position,
@@ -301,6 +305,7 @@ def update_physical_asset(
             else None
         )
         if leg is not None and new_price is not None and rate is not None and new_date:
+            ensure_account_open_on(leg.account, new_date)
             leg.amount = -new_price
             leg.amount_base_currency = -new_price * rate
             leg.exchange_rate = rate

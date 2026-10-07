@@ -108,6 +108,30 @@ class AssetType(str, Enum):
     crypto = "crypto"
 
 
+class PhysicalAssetKind(str, Enum):
+    vehicle = "vehicle"
+    metal = "metal"
+
+
+class VehicleType(str, Enum):
+    car = "car"
+    motorcycle = "motorcycle"
+    other = "other"
+
+
+class PreciousMetal(str, Enum):
+    gold = "gold"
+    silver = "silver"
+    platinum = "platinum"
+
+
+class MetalForm(str, Enum):
+    bullion = "bullion"
+    coin = "coin"
+    # Valued at melt value like the rest — see services/physical_assets.py.
+    jewelry = "jewelry"
+
+
 class SummaryGroupBy(str, Enum):
     category = "category"
     month = "month"
@@ -544,6 +568,107 @@ class HoldingWithValue(BaseModel):
     unrealized_pnl_percentage: float
 
 
+# ---------------------------------------------------------------------------
+# Physical assets — vehicles and precious metals
+# ---------------------------------------------------------------------------
+
+class PhysicalAssetCreate(BaseModel):
+    """
+    One schema for both kinds; the router rejects fields that belong to the
+    other kind (422) rather than silently dropping them, so a client bug
+    can't store a "car" with a purity.
+    """
+
+    kind: PhysicalAssetKind
+    name: str = Field(min_length=1, max_length=100)
+    notes: str | None = Field(default=None, max_length=500)
+    currency: str = Field(min_length=3, max_length=3)
+    purchase_date: date_
+    purchase_price: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=2)
+    # Optional: pay for it from this account (a negative `transfer` row).
+    account_id: UUID | None = None
+    category_id: UUID | None = None
+
+    vehicle_type: VehicleType | None = None
+    depreciation_rate: Decimal | None = Field(default=None, ge=0, lt=1, decimal_places=4)
+
+    metal: PreciousMetal | None = None
+    metal_form: MetalForm | None = None
+    weight_grams: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=4)
+    purity: Decimal | None = Field(default=None, gt=0, le=1, decimal_places=4)
+
+
+class PhysicalAssetUpdate(BaseModel):
+    # `kind`, `metal` and `currency` are immutable: changing any of them
+    # turns the row into a different object, and would desync the frozen
+    # base-currency amounts and the cash legs.
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    notes: str | None = Field(default=None, max_length=500)
+    purchase_date: date_ | None = None
+    purchase_price: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=2)
+    vehicle_type: VehicleType | None = None
+    depreciation_rate: Decimal | None = Field(default=None, ge=0, lt=1, decimal_places=4)
+    metal_form: MetalForm | None = None
+    weight_grams: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=4)
+    purity: Decimal | None = Field(default=None, gt=0, le=1, decimal_places=4)
+
+
+class PhysicalAssetSell(BaseModel):
+    sold_at: date_
+    sale_price: Decimal = Field(ge=0, max_digits=18, decimal_places=2)
+    # Optional: the proceeds land on this account (a positive `transfer` row).
+    account_id: UUID | None = None
+    category_id: UUID | None = None
+
+
+class PhysicalAssetValuationCreate(BaseModel):
+    date: date_
+    value: Decimal = Field(ge=0, max_digits=18, decimal_places=2)
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class PhysicalAssetValuation(ORMBase):
+    id: UUID
+    date: date_
+    value: Decimal
+    notes: str | None = None
+
+
+class PhysicalAssetWithValue(BaseModel):
+    id: UUID
+    kind: PhysicalAssetKind
+    name: str
+    notes: str | None
+    currency: str
+    purchase_date: date_
+    purchase_price: Decimal | None
+    purchase_price_base_currency: Decimal | None
+    purchase_account_id: UUID | None
+    sold_at: date_ | None
+    sale_price: Decimal | None
+    sale_price_base_currency: Decimal | None
+    sale_account_id: UUID | None
+
+    vehicle_type: VehicleType | None
+    depreciation_rate: Decimal | None
+    valuations: list[PhysicalAssetValuation]
+
+    metal: PreciousMetal | None
+    metal_form: MetalForm | None
+    weight_grams: Decimal | None
+    purity: Decimal | None
+    fine_weight_grams: Decimal | None  # weight_grams * purity
+    spot_price_per_gram_base_currency: Decimal | None
+
+    # None when it can't be priced (a metal whose spot quote is unavailable
+    # today) — never 0, which would read as "worthless". Also None once sold.
+    current_value_base_currency: Decimal | None
+    value_date: date_
+    # current (or sale) value minus purchase cost; None without a cost.
+    pnl_base_currency: Decimal | None
+    created_at: datetime
+
+
 class AccountBalance(BaseModel):
     account_id: UUID
     account_name: str
@@ -557,8 +682,12 @@ class NetWorthSummary(BaseModel):
     total_net_worth: Decimal
     total_cash_balance: Decimal
     total_holdings_value: Decimal
+    # Vehicles and precious metals: part of net worth, never of cash — an
+    # illiquid car doesn't extend the survival budget's runway.
+    total_physical_assets_value: Decimal
     accounts: list[AccountBalance]
     holdings: list[HoldingWithValue]
+    physical_assets: list[PhysicalAssetWithValue]
 
 
 class PortfolioHistoryPeriod(str, Enum):
@@ -573,6 +702,7 @@ class PortfolioHistoryPoint(BaseModel):
     date: date_
     total_holdings_value_base_currency: Decimal
     total_cash_balance_base_currency: Decimal
+    total_physical_assets_value_base_currency: Decimal
     total_net_worth: Decimal
 
 

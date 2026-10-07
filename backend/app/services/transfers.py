@@ -102,3 +102,44 @@ def create_linked_transfer(
     db.flush()
 
     return outgoing, incoming
+
+
+def create_cash_leg(
+    db: Session,
+    *,
+    account: Account,
+    amount: Decimal,
+    currency: str,
+    rate: Decimal,
+    on_date: date_,
+    description: str,
+    source: str = "manual",
+    category_id: UUID | None = None,
+) -> Transaction:
+    """
+    The one-sided cousin of a giroconto: money leaving an account to become
+    something else the user owns (a holding, a car, a gold bar) or coming
+    back from it. Recorded as a `transfer`, never expense/income — so it is
+    exempt from the "Varie" fallback and stays out of spend reports — and
+    without it the thing's value would be added to net worth on top of cash
+    that still looks unspent.
+
+    `amount` is already signed (negative = out of the account), `rate`
+    already resolved by the caller, and `category_id` already validated as a
+    transfer category. Flushes so the caller can store the id; never commits.
+    """
+    cash_transaction = Transaction(
+        account_id=account.id,
+        category_id=category_id,
+        amount=amount,
+        currency=currency,
+        amount_base_currency=amount * rate,
+        exchange_rate=rate,
+        date=on_date,
+        description=description,
+        type="transfer",
+        source=source,
+    )
+    db.add(cash_transaction)
+    db.flush()
+    return cash_transaction

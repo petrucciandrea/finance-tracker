@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.deps import get_current_user, get_db
-from app.models import Account, Asset, AssetTransaction, Transaction, User
+from app.models import Account, Asset, AssetTransaction, PhysicalAsset, Transaction, User
 from app.schemas import (
     AssetSearchResult,
     AssetTransactionCreate,
@@ -41,6 +41,7 @@ from app.schemas import (
 )
 from app.services import asset_prices as asset_prices_service
 from app.services import csv_import as csv_import_service
+from app.services import physical_assets as physical_assets_service
 from app.services.asset_prices import AssetPriceUnavailable
 from app.services.exchange_rates import ExchangeRateUnavailable, get_rate, get_rate_history
 from app.services.net_worth import (
@@ -49,6 +50,8 @@ from app.services.net_worth import (
     user_asset_transactions_query,
 )
 from app.services.ownership import get_owned_account, get_owned_leaf_category
+from app.services.physical_assets import physical_assets_with_value
+from app.services.transfers import create_cash_leg
 
 router = APIRouter(prefix="/api/v1/portfolio", tags=["portfolio"])
 
@@ -78,32 +81,20 @@ def _create_linked_cash_transaction(
     category_id: UUID | None = None,
 ) -> Transaction:
     """
-    Every buy/sell moves cash in or out of the account it's logged on — this
-    records that movement as an ordinary `transfer` Transaction (never
-    expense/income, so it's exempt from the "Varie" fallback and doesn't
-    distort expense/income totals) so the account's computed balance and net
-    worth's cash total reflect it. Without this, a holding's market value
-    would be added to net worth on top of cash that still looks unspent —
-    double-counting the money that actually bought it.
+    Every buy/sell moves cash in or out of the account it's logged on — see
+    `services/transfers.py:create_cash_leg` for why that is a `transfer`.
     """
-    signed_amount = _signed_cash_amount(asset_transaction_type, total)
-    cash_transaction = Transaction(
-        account_id=account.id,
-        # Optional transfer category (e.g. "Investimenti"), already validated
-        # by the caller. Never "Varie": this isn't a spend.
-        category_id=category_id,
-        amount=signed_amount,
+    return create_cash_leg(
+        db,
+        account=account,
+        amount=_signed_cash_amount(asset_transaction_type, total),
         currency=asset.currency,
-        amount_base_currency=signed_amount * rate,
-        exchange_rate=rate,
-        date=on_date,
+        rate=rate,
+        on_date=on_date,
         description=_cash_movement_description(asset.symbol, asset_transaction_type),
-        type="transfer",
         source=source,
+        category_id=category_id,
     )
-    db.add(cash_transaction)
-    db.flush()  # populates cash_transaction.id for the AssetTransaction FK
-    return cash_transaction
 
 
 def _get_owned_asset_transaction(db: Session, transaction_id: UUID, user: User) -> AssetTransaction:
@@ -495,18 +486,31 @@ def net_worth(
 ) -> NetWorthSummary:
     accounts = account_balances(db, current_user)
     holdings = holdings_with_value(db, current_user)
+    physical_assets = physical_assets_with_value(db, current_user)
     db.commit()  # persist the price/rate cache rows filled in above
 
     total_cash_balance = sum((a.balance_base_currency for a in accounts), Decimal("0"))
     total_holdings_value = sum((h.market_value_base_currency for h in holdings), Decimal("0"))
+    # An asset that couldn't be priced today counts as nothing rather than
+    # failing the whole summary; the asset list still shows it as unpriced.
+    total_physical_assets_value = sum(
+        (
+            a.current_value_base_currency
+            for a in physical_assets
+            if a.current_value_base_currency is not None
+        ),
+        Decimal("0"),
+    )
 
     return NetWorthSummary(
         base_currency=current_user.base_currency,
-        total_net_worth=total_cash_balance + total_holdings_value,
+        total_net_worth=total_cash_balance + total_holdings_value + total_physical_assets_value,
         total_cash_balance=total_cash_balance,
         total_holdings_value=total_holdings_value,
+        total_physical_assets_value=total_physical_assets_value,
         accounts=accounts,
         holdings=holdings,
+        physical_assets=physical_assets,
     )
 
 
@@ -541,7 +545,18 @@ def portfolio_history(
         .all()
     )
 
-    earliest_dates = [tx.date for tx in asset_transactions] + [tx.date for tx in cash_transactions]
+    # Sold ones too: they were part of net worth until the day they left.
+    physical_assets = (
+        physical_assets_service.user_physical_assets_query(db, current_user)
+        .order_by(PhysicalAsset.purchase_date)
+        .all()
+    )
+
+    earliest_dates = (
+        [tx.date for tx in asset_transactions]
+        + [tx.date for tx in cash_transactions]
+        + [a.purchase_date for a in physical_assets]
+    )
     earliest = min(earliest_dates) if earliest_dates else today
 
     if period == PortfolioHistoryPeriod.all:
@@ -563,8 +578,26 @@ def portfolio_history(
         except AssetPriceUnavailable:
             price_history[asset_id] = {}
 
+    # Metals price through the seeded `metal` assets, so their history comes
+    # from the same backfill as holdings.
+    metal_assets: dict[str, Asset] = {}
+    for metal in {a.metal for a in physical_assets if a.kind == "metal" and a.metal}:
+        metal_asset = physical_assets_service.metal_asset(db, metal)
+        if metal_asset is None:
+            continue
+        metal_assets[metal] = metal_asset
+        try:
+            price_history[metal_asset.id] = asset_prices_service.get_price_history(
+                db, metal_asset, start_date, today
+            )
+        except AssetPriceUnavailable:
+            price_history[metal_asset.id] = {}
+
     rate_history: dict[str, dict[date_, Decimal]] = {}
-    for currency in {asset.currency for asset in assets_by_id.values()}:
+    currencies = {asset.currency for asset in assets_by_id.values()}
+    currencies |= {asset.currency for asset in metal_assets.values()}
+    currencies |= {a.currency for a in physical_assets if a.kind == "vehicle"}
+    for currency in currencies:
         if currency == current_user.base_currency:
             continue
         try:
@@ -622,12 +655,30 @@ def portfolio_history(
             asset = assets_by_id[asset_id]
             holdings_base += quantity * price * rate_on(asset.currency, sample_date)
 
+        physical_base = Decimal("0")
+        for physical_asset in physical_assets:
+            if not physical_assets_service.is_held_on(physical_asset, sample_date):
+                continue
+            if physical_asset.kind == "vehicle":
+                physical_base += physical_assets_service.vehicle_value(
+                    physical_asset, sample_date
+                ) * rate_on(physical_asset.currency, sample_date)
+                continue
+            metal_asset = metal_assets.get(physical_asset.metal or "")
+            spot = price_on(metal_asset.id, sample_date) if metal_asset else None
+            if metal_asset is None or spot is None:
+                continue
+            physical_base += physical_assets_service.metal_value_usd(
+                physical_asset, spot
+            ) * rate_on(metal_asset.currency, sample_date)
+
         points.append(
             PortfolioHistoryPoint(
                 date=sample_date,
                 total_holdings_value_base_currency=holdings_base,
                 total_cash_balance_base_currency=cash_base,
-                total_net_worth=cash_base + holdings_base,
+                total_physical_assets_value_base_currency=physical_base,
+                total_net_worth=cash_base + holdings_base + physical_base,
             )
         )
 

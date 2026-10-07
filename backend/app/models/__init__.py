@@ -459,7 +459,7 @@ class Asset(Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     symbol: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    asset_type: Mapped[str] = mapped_column(String(10), nullable=False)  # stock/etf/crypto
+    asset_type: Mapped[str] = mapped_column(String(10), nullable=False)  # stock/etf/crypto/metal
     currency: Mapped[str] = mapped_column(String(3), ForeignKey("currencies.code"), nullable=False)
 
     asset_transactions: Mapped[list["AssetTransaction"]] = relationship(back_populates="asset")
@@ -467,7 +467,11 @@ class Asset(Base):
 
     __table_args__ = (
         UniqueConstraint("symbol", "asset_type", name="uq_assets_symbol_type"),
-        CheckConstraint("asset_type in ('stock','etf','crypto')", name="ck_assets_type"),
+        # 'metal' rows are seeded by migration (GC=F, SI=F, PL=F) and only
+        # price physical_assets — they are never bought through the portfolio.
+        CheckConstraint(
+            "asset_type in ('stock','etf','crypto','metal')", name="ck_assets_type"
+        ),
     )
 
 
@@ -514,4 +518,5 @@ class ExchangeRate(Base):
     )
 
 from app.models.asset_transaction import AssetTransaction  # noqa: F401,E402
+from app.models.physical_asset import PhysicalAsset, PhysicalAssetValuation  # noqa: F401,E402
 from app.models.refresh_token import RefreshToken  # noqa: F401,E402

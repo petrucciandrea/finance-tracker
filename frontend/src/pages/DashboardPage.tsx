@@ -280,6 +280,16 @@ export function DashboardPage() {
       value: nw ? formatAmount(nw.total_holdings_value, base) : '…',
       sub: holdingsCost ? <><Delta value={holdingsPnl} percent={(holdingsPnl / holdingsCost) * 100} /> non realizzato</> : undefined,
     },
+    // Only once there's something to show: most months nobody buys a car.
+    ...(nw && nw.physical_assets.length > 0
+      ? [
+          {
+            label: 'Beni',
+            value: formatAmount(nw.total_physical_assets_value, base),
+            sub: <Link to="/assets" className="link">{`${nw.physical_assets.length} tra veicoli e metalli`}</Link>,
+          },
+        ]
+      : []),
     {
       label: `Entrate ${month}`,
       value: monthTx.data ? formatAmount(t.income, base, { sign: 'always' }) : '…',

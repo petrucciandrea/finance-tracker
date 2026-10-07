@@ -17,6 +17,7 @@ from app.routers import (
     auth,
     budgets,
     categories,
+    physical_assets,
     planning,
     portfolio,
     savings_goals,
@@ -120,6 +121,7 @@ app.include_router(budgets.router)
 app.include_router(planning.router)
 app.include_router(savings_goals.router)
 app.include_router(portfolio.router)
+app.include_router(physical_assets.router)
 
 
 @app.get("/health", tags=["health"])

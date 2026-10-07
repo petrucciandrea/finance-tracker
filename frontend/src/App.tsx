@@ -9,6 +9,7 @@ import { AccountsPage } from '@/pages/AccountsPage'
 import { CategoriesPage } from '@/pages/CategoriesPage'
 import { PlanningPage } from '@/pages/PlanningPage'
 import { PortfolioPage } from '@/pages/PortfolioPage'
+import { PhysicalAssetsPage } from '@/pages/PhysicalAssetsPage'
 import { TransactionsPage } from '@/pages/TransactionsPage'
 import { ProfilePage } from '@/pages/ProfilePage'
 
@@ -30,6 +31,7 @@ function App() {
                 Re-enable by restoring the import + <Route path="/budgets">. */}
             <Route path="/planning" element={<PlanningPage />} />
             <Route path="/portfolio" element={<PortfolioPage />} />
+            <Route path="/assets" element={<PhysicalAssetsPage />} />
             <Route path="/profile" element={<ProfilePage />} />
           </Route>
         </Route>

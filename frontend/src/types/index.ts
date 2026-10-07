@@ -394,20 +394,110 @@ export interface NetWorthSummary {
   total_net_worth: string
   total_cash_balance: string
   total_holdings_value: string
+  // Vehicles and precious metals: in net worth, never in cash.
+  total_physical_assets_value: string
   accounts: AccountBalance[]
   holdings: HoldingWithValue[]
+  physical_assets: PhysicalAssetWithValue[]
 }
 
 export interface PortfolioHistoryPoint {
   date: string
   total_holdings_value_base_currency: string
   total_cash_balance_base_currency: string
+  total_physical_assets_value_base_currency: string
   total_net_worth: string
 }
 
 export interface PortfolioHistoryResponse {
   base_currency: string
   points: PortfolioHistoryPoint[]
+}
+
+// --- Physical assets (vehicles, precious metals) ---
+
+export type PhysicalAssetKind = 'vehicle' | 'metal'
+export type VehicleType = 'car' | 'motorcycle' | 'other'
+export type PreciousMetal = 'gold' | 'silver' | 'platinum'
+export type MetalForm = 'bullion' | 'coin' | 'jewelry'
+
+export interface PhysicalAssetValuation {
+  id: string
+  date: string
+  value: string
+  notes: string | null
+}
+
+export interface PhysicalAssetWithValue {
+  id: string
+  kind: PhysicalAssetKind
+  name: string
+  notes: string | null
+  currency: string
+  purchase_date: string
+  purchase_price: string | null
+  purchase_price_base_currency: string | null
+  purchase_account_id: string | null
+  sold_at: string | null
+  sale_price: string | null
+  sale_price_base_currency: string | null
+  sale_account_id: string | null
+  vehicle_type: VehicleType | null
+  depreciation_rate: string | null
+  valuations: PhysicalAssetValuation[]
+  metal: PreciousMetal | null
+  metal_form: MetalForm | null
+  weight_grams: string | null
+  purity: string | null
+  fine_weight_grams: string | null
+  spot_price_per_gram_base_currency: string | null
+  // null when it can't be priced today, and once sold — never "0".
+  current_value_base_currency: string | null
+  value_date: string
+  pnl_base_currency: string | null
+  created_at: string
+}
+
+export interface PhysicalAssetCreatePayload {
+  kind: PhysicalAssetKind
+  name: string
+  notes?: string | null
+  currency: string
+  purchase_date: string
+  purchase_price?: string | null
+  account_id?: string | null
+  category_id?: string | null
+  vehicle_type?: VehicleType
+  depreciation_rate?: string
+  metal?: PreciousMetal
+  metal_form?: MetalForm
+  weight_grams?: string
+  purity?: string
+}
+
+export interface PhysicalAssetUpdatePayload {
+  name?: string
+  notes?: string | null
+  purchase_date?: string
+  purchase_price?: string | null
+  vehicle_type?: VehicleType
+  depreciation_rate?: string
+  metal_form?: MetalForm
+  weight_grams?: string
+  purity?: string
+}
+
+export interface PhysicalAssetSellPayload {
+  sold_at: string
+  sale_price: string
+  account_id?: string | null
+  category_id?: string | null
+}
+
+export interface PhysicalAssetValuationPayload {
+  date: string
+  value: string
+  notes?: string | null
 }
 
 // --- Planning (allocation model, survival budget, simulator) ---

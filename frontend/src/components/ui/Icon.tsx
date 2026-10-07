@@ -235,3 +235,11 @@ export function GripVerticalIcon(props: IconProps) {
     </BaseIcon>
   )
 }
+
+export function GemIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M6 3h12l4 6-10 12L2 9zM2 9h20M10 3 8 9l4 12 4-12-2-6" />
+    </BaseIcon>
+  )
+}

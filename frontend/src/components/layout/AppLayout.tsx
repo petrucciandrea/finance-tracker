@@ -4,6 +4,7 @@ import { ThemeChooser } from '@/components/layout/ThemeChooser'
 import {
   ChevronDownIcon,
   CloseIcon,
+  GemIcon,
   GridIcon,
   HomeIcon,
   ListIcon,
@@ -44,6 +45,7 @@ function useNavItems(): NavItem[] {
     },
     { to: '/planning', label: 'Piano', icon: PlanIcon },
     { to: '/portfolio', label: 'Portafoglio', icon: TrendIcon },
+    { to: '/assets', label: 'Beni', icon: GemIcon },
     { to: '/accounts', label: 'Conti', icon: WalletIcon },
     {
       to: '/categories',

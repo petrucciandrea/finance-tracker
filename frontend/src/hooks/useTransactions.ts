@@ -44,6 +44,31 @@ export function useTransactionsList(params: TransactionListParams) {
   })
 }
 
+// The list endpoint caps page_size at 200 (TransactionListParams).
+const MAX_PAGE_SIZE = 200
+
+/**
+ * Every transaction matching `params`, across pages. For what the API can't
+ * compute itself: text search and per-type totals for an arbitrary filter
+ * (the summary endpoint filters by date and currency only). Fine at
+ * personal-finance volumes; callers keep `params` bounded by a period.
+ */
+export function useAllTransactions(params: Omit<TransactionListParams, 'page' | 'page_size'>, enabled = true) {
+  return useQuery({
+    queryKey: [...TRANSACTIONS_KEY, 'all', params],
+    enabled,
+    queryFn: async () => {
+      const first = await transactionsApi.listTransactions({ ...params, page: 1, page_size: MAX_PAGE_SIZE })
+      const rest = await Promise.all(
+        Array.from({ length: Math.max(0, first.meta.total_pages - 1) }, (_, i) =>
+          transactionsApi.listTransactions({ ...params, page: i + 2, page_size: MAX_PAGE_SIZE }),
+        ),
+      )
+      return [first, ...rest].flatMap((page) => page.data)
+    },
+  })
+}
+
 export function useCreateTransaction() {
   const queryClient = useQueryClient()
   return useMutation({

@@ -1,81 +1,342 @@
-import { useTransactionSummary } from '@/hooks/useTransactions'
+import { useState, type FormEvent } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { NetWorthChart } from '@/components/charts/NetWorthChart'
+import { MonthPlanCard } from '@/components/dashboard/MonthPlanCard'
+import { AllocationBar } from '@/components/portfolio/AllocationBar'
+import { Amount, Delta } from '@/components/ui/Amount'
+import { Card } from '@/components/ui/Card'
+import { EmptyState, ErrorBlock, LoadingBlock } from '@/components/ui/EmptyState'
+import { SearchIcon } from '@/components/ui/Icon'
+import { KpiStrip, type Kpi } from '@/components/ui/KpiStrip'
+import { PageHeader } from '@/components/ui/PageHeader'
+import { useAccounts } from '@/hooks/useAccounts'
+import { useAuth } from '@/hooks/useAuth'
+import { useCategories } from '@/hooks/useCategories'
+import { useNetWorth, usePortfolioHistory } from '@/hooks/usePortfolio'
+import { useAllTransactions, useTransactionsList } from '@/hooks/useTransactions'
+import { buttonClass } from '@/lib/buttonClass'
+import { indexById } from '@/lib/categories'
+import { endOfMonth, monthRange } from '@/lib/dates'
+import { formatAmount, formatLongDate, formatMonthName, formatPercent, formatQuantity, formatShortDate } from '@/lib/format'
+import { ACCOUNT_TYPE_LABELS, ASSET_TYPE_LABELS, INVESTMENT_ACCOUNT_TYPES, unrealizedPnlBase } from '@/lib/portfolio'
+import { amountKind, totals } from '@/lib/transactions'
+import type { NetWorthSummary } from '@/types'
 
-function formatMonthLabel(month: string): string {
-  // "2026-09" -> "Settembre 2026"
-  const [year, monthNum] = month.split('-')
-  const date = new Date(Number(year), Number(monthNum) - 1)
-  return date.toLocaleDateString('it-IT', { month: 'long', year: 'numeric' })
-}
-
-export function DashboardPage() {
-  const now = new Date()
-  const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10)
-
-  const { data, isLoading, isError } = useTransactionSummary({
-    group_by: ['category', 'month'],
-    date_from: firstOfMonth,
-  })
-
-  const totalThisMonth = data?.data.reduce(
-    (sum, item) => sum + Number(item.total_amount_base_currency),
-    0,
-  )
-
+function AccountsCard({ netWorth }: { netWorth: NetWorthSummary }) {
+  const { data: accounts } = useAccounts()
+  const byId = indexById(accounts)
+  const base = netWorth.base_currency
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-semibold text-slate-800">Dashboard</h1>
-
-      {isLoading && <p className="text-slate-500">Caricamento...</p>}
-      {isError && <p className="text-red-600">Errore nel caricamento dei dati.</p>}
-
-      {data && (
+    <Card
+      title="Conti"
+      className="flex-[1_1_300px]"
+      action={
+        <Link to="/accounts" className="link text-[13px]">
+          Gestisci
+        </Link>
+      }
+    >
+      {netWorth.accounts.length === 0 ? (
+        <div className="mt-3">
+          <EmptyState title="Nessun conto" action={<Link to="/accounts" className={buttonClass('primary')}>Crea un conto</Link>} />
+        </div>
+      ) : (
         <>
-          <div className="rounded-lg bg-white p-6 shadow-sm">
-            <p className="text-sm text-slate-500">Totale questo mese</p>
-            <p
-              className={`mt-1 text-3xl font-semibold ${
-                (totalThisMonth ?? 0) < 0 ? 'text-red-600' : 'text-green-600'
-              }`}
-            >
-              {(totalThisMonth ?? 0).toLocaleString('it-IT', { style: 'currency', currency: 'EUR' })}
-            </p>
-          </div>
-
-          <div className="rounded-lg bg-white p-6 shadow-sm">
-            <h2 className="mb-4 text-lg font-medium text-slate-800">Per categoria</h2>
-            {data.data.length === 0 ? (
-              <p className="text-sm text-slate-500">Nessuna transazione questo mese.</p>
-            ) : (
-              <ul className="divide-y divide-slate-100">
-                {data.data.map((item) => (
-                  <li
-                    key={`${item.category_id}-${item.month}`}
-                    className="flex items-center justify-between py-3"
-                  >
-                    <div>
-                      <p className="text-sm font-medium text-slate-800">
-                        {item.category_name ?? 'Senza categoria'}
-                      </p>
-                      {item.month && (
-                        <p className="text-xs text-slate-400">{formatMonthLabel(item.month)}</p>
-                      )}
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm font-semibold text-slate-800">
-                        {Number(item.total_amount_base_currency).toLocaleString('it-IT', {
-                          style: 'currency',
-                          currency: 'EUR',
-                        })}
-                      </p>
-                      <p className="text-xs text-slate-400">{item.transaction_count} transazioni</p>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
+          <ul className="mt-2">
+            {netWorth.accounts.map((account) => {
+              const type = byId.get(account.account_id)?.type
+              return (
+                <li key={account.account_id} className="flex justify-between gap-2 border-b border-line py-2.5">
+                  <div className="min-w-0">
+                    <div className="truncate font-bold">{account.account_name}</div>
+                    <div className="text-[12px] text-ink-3">{type ? ACCOUNT_TYPE_LABELS[type] : ''}</div>
+                  </div>
+                  <Amount
+                    value={account.balance}
+                    currency={account.currency}
+                    baseValue={account.balance_base_currency}
+                    baseCurrency={base}
+                    className="font-semibold"
+                  />
+                </li>
+              )
+            })}
+          </ul>
+          <div className="flex justify-between pt-2.5 font-extrabold tabular-nums">
+            <span>Liquidità totale</span>
+            <span>
+              {formatAmount(netWorth.total_cash_balance, base)} <span className="ccy">{base}</span>
+            </span>
           </div>
         </>
       )}
-    </div>
+    </Card>
+  )
+}
+
+function PortfolioCard({ netWorth }: { netWorth: NetWorthSummary }) {
+  const { data: accounts } = useAccounts()
+  const base = netWorth.base_currency
+  const holdings = [...netWorth.holdings].sort(
+    (a, b) => Number(b.market_value_base_currency) - Number(a.market_value_base_currency),
+  )
+  const value = Number(netWorth.total_holdings_value)
+  const pnl = holdings.reduce((sum, h) => sum + unrealizedPnlBase(h), 0)
+  const cost = value - pnl
+  const investmentAccounts = new Set(
+    (accounts ?? []).filter((a) => INVESTMENT_ACCOUNT_TYPES.includes(a.type)).map((a) => a.id),
+  )
+  const cash = netWorth.accounts
+    .filter((a) => investmentAccounts.has(a.account_id))
+    .reduce((sum, a) => sum + Number(a.balance_base_currency), 0)
+  const byType: Record<string, number> = { cash }
+  for (const h of holdings) {
+    byType[h.asset.asset_type] = (byType[h.asset.asset_type] ?? 0) + Number(h.market_value_base_currency)
+  }
+
+  return (
+    <Card
+      title="Portafoglio"
+      className="flex-[999_1_600px]"
+      meta={
+        holdings.length > 0 && (
+          <>
+            <span className="font-extrabold tabular-nums">
+              {formatAmount(value, base)} <span className="ccy">{base}</span>
+            </span>
+            <span className={`rounded-full px-2 py-0.5 text-[12px] ${pnl >= 0 ? 'bg-pos-soft' : 'bg-neg-soft'}`}>
+              <Delta value={pnl} currency={base} percent={cost ? (pnl / cost) * 100 : null} />
+            </span>
+          </>
+        )
+      }
+      action={
+        <Link to="/portfolio" className="link text-[13px]">
+          Dettaglio →
+        </Link>
+      }
+    >
+      {holdings.length === 0 ? (
+        <div className="mt-3">
+          <EmptyState title="Nessuna posizione">Registra un acquisto dal Portafoglio per vederlo qui.</EmptyState>
+        </div>
+      ) : (
+        <>
+          <div className="mt-3.5">
+            <AllocationBar values={byType} currency={base} />
+          </div>
+          <div className="mt-2.5 overflow-x-auto">
+            <table className="w-full min-w-[560px] border-collapse text-[13px] tabular-nums">
+              <thead>
+                <tr className="text-[12px] text-ink-3">
+                  <th scope="col" className="border-b border-line py-2 text-left font-bold">Titolo</th>
+                  <th scope="col" className="border-b border-line py-2 text-right font-bold">Quantità</th>
+                  <th scope="col" className="border-b border-line py-2 text-right font-bold">Prezzo</th>
+                  <th scope="col" className="border-b border-line py-2 text-right font-bold">Valore {base}</th>
+                  <th scope="col" className="border-b border-line py-2 text-right font-bold">Peso</th>
+                  <th scope="col" className="border-b border-line py-2 text-right font-bold">Rendimento</th>
+                </tr>
+              </thead>
+              <tbody>
+                {holdings.slice(0, 6).map((h) => (
+                  <tr key={h.id}>
+                    <td className="border-b border-line py-2.5 pr-3">
+                      <div className="text-[14px] font-extrabold">
+                        {h.asset.symbol}{' '}
+                        <span className="ml-0.5 rounded bg-card-2 px-1.5 py-px text-[10px] font-bold text-ink-3 uppercase">
+                          {ASSET_TYPE_LABELS[h.asset.asset_type]}
+                        </span>
+                      </div>
+                      <div className="max-w-[220px] truncate text-[12px] text-ink-3">{h.asset.name}</div>
+                    </td>
+                    <td className="border-b border-line py-2.5 text-right text-ink-2">{formatQuantity(h.quantity)}</td>
+                    <td className="border-b border-line py-2.5 text-right whitespace-nowrap text-ink-2">
+                      {formatAmount(h.current_price, h.asset.currency)} <span className="ccy">{h.asset.currency}</span>
+                    </td>
+                    <td className="border-b border-line py-2.5 text-right font-bold">
+                      {formatAmount(h.market_value_base_currency, base)}
+                    </td>
+                    <td className="border-b border-line py-2.5 text-right text-ink-2">
+                      {formatPercent(value ? (Number(h.market_value_base_currency) / value) * 100 : 0)}
+                    </td>
+                    <td className="border-b border-line py-2.5 text-right">
+                      <Delta value={Number(h.unrealized_pnl)} percent={h.unrealized_pnl_percentage} className="block" />
+                      <div className="text-[12px] text-ink-3">
+                        {formatAmount(h.unrealized_pnl, h.asset.currency, { sign: 'always' })} {h.asset.currency}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {holdings.length > 6 && (
+            <p className="mt-2 text-[12px] text-ink-3">
+              Prime 6 posizioni su {holdings.length} ·{' '}
+              <Link to="/portfolio" className="link">
+                vedi tutte
+              </Link>
+            </p>
+          )}
+        </>
+      )}
+    </Card>
+  )
+}
+
+function RecentTransactions({ baseCurrency }: { baseCurrency: string }) {
+  const { data, isLoading } = useTransactionsList({ page: 1, page_size: 7 })
+  const { data: categories } = useCategories()
+  const { data: accounts } = useAccounts()
+  const categoriesById = indexById(categories)
+  const accountsById = indexById(accounts)
+  return (
+    <Card
+      title="Ultimi movimenti"
+      className="flex-[1_1_380px]"
+      action={
+        <Link to="/transactions" className="link text-[13px]">
+          Tutti →
+        </Link>
+      }
+    >
+      {isLoading ? (
+        <LoadingBlock className="mt-3 h-64" />
+      ) : !data?.data.length ? (
+        <div className="mt-3">
+          <EmptyState title="Nessun movimento" />
+        </div>
+      ) : (
+        <ul className="mt-1.5">
+          {data.data.map((t) => (
+            <li key={t.id} className="grid grid-cols-[46px_1fr_auto] items-center gap-2.5 border-b border-line py-2.5 tabular-nums">
+              <span className="text-[12px] font-semibold text-ink-3">{formatShortDate(t.date)}</span>
+              <div className="min-w-0">
+                <div className="truncate font-bold">{t.description || '—'}</div>
+                <div className="mt-0.5 flex items-center gap-1.5 overflow-hidden text-[12px] whitespace-nowrap text-ink-3">
+                  <span className="rounded-full bg-card-2 px-[7px] py-px text-[11px] font-bold text-ink-2">
+                    {t.type === 'transfer' ? 'Trasferimento' : (categoriesById.get(t.category_id ?? '')?.name ?? 'Categoria eliminata')}
+                  </span>
+                  <span className="truncate">{accountsById.get(t.account_id)?.name}</span>
+                </div>
+              </div>
+              <Amount
+                value={t.amount}
+                currency={t.currency}
+                baseValue={t.amount_base_currency}
+                baseCurrency={baseCurrency}
+                kind={amountKind(t)}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  )
+}
+
+export function DashboardPage() {
+  const { user } = useAuth()
+  const navigate = useNavigate()
+  // Captured once: the dashboard reads "today" for the whole visit.
+  const [today] = useState(() => new Date())
+  const base = user?.base_currency ?? ''
+  const month = formatMonthName(today)
+
+  const netWorth = useNetWorth()
+  const lastMonth = usePortfolioHistory('1m')
+  const monthTx = useAllTransactions(monthRange(today))
+
+  const nw = netWorth.data
+  const points = lastMonth.data?.points ?? []
+  const nwChange = points.length > 1 && nw ? Number(nw.total_net_worth) - Number(points[0].total_net_worth) : null
+  const nwChangePct = nwChange !== null && Number(points[0].total_net_worth) ? (nwChange / Math.abs(Number(points[0].total_net_worth))) * 100 : null
+  const holdingsPnl = nw?.holdings.reduce((sum, h) => sum + unrealizedPnlBase(h), 0) ?? 0
+  const holdingsCost = Number(nw?.total_holdings_value ?? 0) - holdingsPnl
+  const cashCurrencies = [...new Set(nw?.accounts.map((a) => a.currency))].join(', ')
+  const t = totals(monthTx.data ?? [])
+  const savings = t.income + t.expense
+
+  const kpis: Kpi[] = [
+    {
+      label: 'Patrimonio netto',
+      value: nw ? formatAmount(nw.total_net_worth, base) : '…',
+      sub: nwChange !== null ? <><Delta value={nwChange} currency={base} percent={nwChangePct} /> in 30 gg</> : undefined,
+    },
+    {
+      label: 'Liquidità',
+      value: nw ? formatAmount(nw.total_cash_balance, base) : '…',
+      sub: nw ? `${nw.accounts.length} conti${cashCurrencies ? ` · ${cashCurrencies}` : ''}` : undefined,
+    },
+    {
+      label: 'Investimenti',
+      value: nw ? formatAmount(nw.total_holdings_value, base) : '…',
+      sub: holdingsCost ? <><Delta value={holdingsPnl} percent={(holdingsPnl / holdingsCost) * 100} /> non realizzato</> : undefined,
+    },
+    {
+      label: `Entrate ${month}`,
+      value: monthTx.data ? formatAmount(t.income, base, { sign: 'always' }) : '…',
+      tone: 'pos',
+      sub: `${t.incomeCount} ${t.incomeCount === 1 ? 'movimento' : 'movimenti'}`,
+    },
+    {
+      label: `Uscite ${month}`,
+      value: monthTx.data ? formatAmount(t.expense, base) : '…',
+      sub: `${t.expenseCount} ${t.expenseCount === 1 ? 'movimento' : 'movimenti'}`,
+    },
+    {
+      label: `Risparmio ${month}`,
+      value: monthTx.data ? formatAmount(savings, base) : '…',
+      tone: savings < 0 ? 'neg' : 'default',
+      sub: t.income > 0 ? `${formatPercent((savings / t.income) * 100)} delle entrate` : 'nessuna entrata finora',
+      subTone: savings < 0 ? 'neg' : 'muted',
+    },
+  ]
+
+  function onSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const q = new FormData(event.currentTarget).get('q')?.toString().trim()
+    navigate(q ? `/transactions?q=${encodeURIComponent(q)}` : '/transactions')
+  }
+
+  return (
+    <>
+      <PageHeader
+        title="Panoramica"
+        subtitle={`${formatLongDate(today)} ${today.getFullYear()} · giorno ${today.getDate()} di ${endOfMonth(today).getDate()} · importi in ${base} salvo indicazione`}
+        actions={
+          <>
+            <form role="search" onSubmit={onSearch} className="flex min-w-0 flex-[1_1_240px]">
+              <label className="flex min-h-11 w-full items-center gap-2 rounded-[10px] border border-field bg-card px-3 text-ink-3 focus-within:border-accent">
+                <SearchIcon />
+                <span className="sr-only">Cerca movimenti</span>
+                <input name="q" type="search" placeholder="Cerca movimenti…" className="min-w-0 flex-1 bg-transparent text-ink outline-none placeholder:text-ink-3" />
+              </label>
+            </form>
+            <Link to="/transactions?import=1" className={buttonClass('secondary')}>
+              Importa CSV
+            </Link>
+            <Link to="/transactions?new=1" className={buttonClass('primary')}>
+              + Nuova transazione
+            </Link>
+          </>
+        }
+      />
+
+      {netWorth.isError && <ErrorBlock>Non è stato possibile caricare il patrimonio.</ErrorBlock>}
+      <KpiStrip label="Indicatori principali" items={kpis} />
+
+      <div className="flex flex-wrap gap-4">
+        <NetWorthChart baseCurrency={base} />
+        {nw ? <AccountsCard netWorth={nw} /> : <LoadingBlock className="h-72 flex-[1_1_300px]" />}
+      </div>
+
+      <MonthPlanCard today={today} />
+
+      <div className="flex flex-wrap gap-4">
+        {nw ? <PortfolioCard netWorth={nw} /> : <LoadingBlock className="h-72 flex-[999_1_600px]" />}
+        <RecentTransactions baseCurrency={base} />
+      </div>
+    </>
   )
 }

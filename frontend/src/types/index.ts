@@ -8,7 +8,7 @@
 
 // --- Enums (mirror the Python Enum values exactly, as strings) ---
 
-export type AccountType = 'checking' | 'savings' | 'credit_card' | 'investment' | 'crypto_wallet'
+export type AccountType = 'checking' | 'savings' | 'credit_card' | 'investment' | 'crypto_wallet' | 'cash'
 export type CategoryType = 'expense' | 'income' | 'transfer'
 // How essential a kind of spend is, for the planning engine's allocation
 // model. `null` means "not classified yet" and is reported as its own

@@ -12,6 +12,7 @@ export const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
   credit_card: 'Carta di credito',
   investment: 'Investimento',
   crypto_wallet: 'Wallet crypto',
+  cash: 'Contanti',
 }
 
 // Accounts whose cash counts as "liquidità da investire" in the portfolio.

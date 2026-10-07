@@ -25,7 +25,7 @@ import { ACCOUNT_TYPE_LABELS } from '@/lib/portfolio'
 import { totals } from '@/lib/transactions'
 import type { Account, AccountBalance, AccountType } from '@/types'
 
-const TYPE_ORDER: AccountType[] = ['checking', 'savings', 'credit_card', 'investment', 'crypto_wallet']
+const TYPE_ORDER: AccountType[] = ['checking', 'cash', 'savings', 'credit_card', 'investment', 'crypto_wallet']
 
 const GROUP_TITLES: Record<AccountType, string> = {
   checking: 'Conti correnti',
@@ -33,6 +33,7 @@ const GROUP_TITLES: Record<AccountType, string> = {
   credit_card: 'Carte di credito',
   investment: 'Investimento',
   crypto_wallet: 'Wallet crypto',
+  cash: 'Contanti',
 }
 
 function CardIcon(props: SVGProps<SVGSVGElement>) {
@@ -44,17 +45,28 @@ function CardIcon(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+function CashIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <rect x="2" y="6" width="20" height="12" rx="2" />
+      <circle cx="12" cy="12" r="2.5" />
+      <path d="M6 12h.01M18 12h.01" />
+    </svg>
+  )
+}
+
 const TYPE_ICONS: Record<AccountType, ComponentType<SVGProps<SVGSVGElement>>> = {
   checking: WalletIcon,
   savings: PlanIcon,
   credit_card: CardIcon,
   investment: TrendIcon,
   crypto_wallet: GridIcon,
+  cash: CashIcon,
 }
 
 const schema = z.object({
   name: z.string().trim().min(1, 'Il nome è obbligatorio').max(100, 'Massimo 100 caratteri'),
-  type: z.enum(['checking', 'savings', 'credit_card', 'investment', 'crypto_wallet']),
+  type: z.enum(['checking', 'savings', 'credit_card', 'investment', 'crypto_wallet', 'cash']),
   currency: z.enum(CURRENCIES),
   starting_balance: z
     .string()

@@ -121,3 +121,25 @@ def test_starting_balance_uses_mocked_rate_for_foreign_currency(
         "/api/v1/transactions", headers=registered_user["auth_headers"]
     ).json()["data"]
     assert Decimal(transactions[0]["amount_base_currency"]) == Decimal("90.00")
+
+
+def test_cash_account_counts_toward_net_worth(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    response = client.post(
+        "/api/v1/accounts",
+        json={
+            "name": "Portafoglio",
+            "type": "cash",
+            "currency": "EUR",
+            "starting_balance": "80.00",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["type"] == "cash"
+
+    net_worth = client.get("/api/v1/portfolio/net-worth", headers=headers)
+    assert net_worth.status_code == 200, net_worth.text
+    assert Decimal(net_worth.json()["total_cash_balance"]) == Decimal("80.00")

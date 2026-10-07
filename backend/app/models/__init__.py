@@ -107,7 +107,7 @@ class Account(Base, TimestampMixin, SoftDeleteMixin):
 
     __table_args__ = (
         CheckConstraint(
-            "type in ('checking','savings','credit_card','investment','crypto_wallet')",
+            "type in ('checking','savings','credit_card','investment','crypto_wallet','cash')",
             name="ck_accounts_type",
         ),
     )

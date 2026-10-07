@@ -26,6 +26,9 @@ class AccountType(str, Enum):
     credit_card = "credit_card"
     investment = "investment"
     crypto_wallet = "crypto_wallet"
+    # Physical cash. Just another account: an ATM withdrawal is a giroconto
+    # from the bank account into it, cash spending is an expense on it.
+    cash = "cash"
 
 
 class CategoryType(str, Enum):

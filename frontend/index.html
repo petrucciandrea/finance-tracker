@@ -1,10 +1,29 @@
 <!doctype html>
-<html lang="en">
+<html lang="it">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <title>Finanze</title>
+    <script>
+      // Applies the saved theme before first paint. Doing it from React
+      // instead would flash the light palette on every load in dark mode.
+      // Keep the storage key in sync with src/context/theme.ts.
+      (function () {
+        try {
+          var pref = localStorage.getItem('finance_tracker_theme')
+          var dark = pref === 'dark' ||
+            (pref !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          if (dark) document.documentElement.classList.add('dark')
+        } catch (e) { /* storage blocked: stay on the light default */ }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

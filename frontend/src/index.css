@@ -1,1 +1,125 @@
 @import "tailwindcss";
+
+/* Dark mode follows a `.dark` class on <html> rather than the media query, so
+   the user can override the system setting (see context/ThemeProvider.tsx). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Semantic tokens. Components use these names (bg-card, text-ink-3, …), never
+   raw palette colors, so the dark theme is just a redefinition below. */
+@theme {
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+
+  --color-bg: #EDEFF2;
+  --color-card: #FFFFFF;
+  --color-card-2: #F4F5F7;
+  --color-ink: #101828;
+  --color-ink-2: #3F4A5A;
+  --color-ink-3: #5F6B7A;
+  --color-line: #E1E4E9;
+  --color-field: #D5DAE1;
+  --color-track: #E6E9ED;
+  --color-bar: #2F3A4A;
+  --color-accent: #1D5C8C;
+  --color-accent-soft: #E2EDF6;
+  --color-on-accent: #FFFFFF;
+  --color-pos: #11764C;
+  --color-pos-soft: #E1F2EA;
+  --color-neg: #B4381A;
+  --color-neg-soft: #FBE7E0;
+  --color-warn: #8A5A00;
+  --color-warn-soft: #FBF0D9;
+
+  /* Login brand panel: dark in both themes. */
+  --color-brand-bg: #0F2B40;
+  --color-brand-ink: #E9F1F7;
+  --color-brand-ink-2: #A9C0D2;
+
+  /* Chart series (allocation). s4 is the neutral used for cash. */
+  --color-s1: #2a78d6;
+  --color-s2: #1baf7a;
+  --color-s3: #4a3aa7;
+  --color-s4: #A3A19A;
+}
+
+.dark {
+  --color-bg: #0B0E12;
+  --color-card: #13171D;
+  --color-card-2: #1A1F27;
+  --color-ink: #E7EBF0;
+  --color-ink-2: #B3BDC9;
+  --color-ink-3: #8A95A3;
+  --color-line: #242B35;
+  --color-field: #323B47;
+  --color-track: #252C36;
+  --color-bar: #C3CCD7;
+  --color-accent: #74C6E6;
+  --color-accent-soft: #13303D;
+  --color-on-accent: #0B0E12;
+  --color-pos: #58D29A;
+  --color-pos-soft: #12291F;
+  --color-neg: #FF8A6E;
+  --color-neg-soft: #3A1D17;
+  --color-warn: #EBB650;
+  --color-warn-soft: #33280F;
+
+  --color-brand-bg: #10222F;
+  --color-brand-ink: #E9F1F7;
+  --color-brand-ink-2: #9DB5C7;
+
+  --color-s1: #3987e5;
+  --color-s2: #199e70;
+  --color-s3: #9085e9;
+  --color-s4: #6B6A64;
+
+  color-scheme: dark;
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    @apply bg-bg font-sans text-[14px] leading-[1.45] text-ink antialiased;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* One visible focus ring everywhere; fields get their own (see .field). */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* Form controls share one look; written as a class because <input>,
+     <select> and <textarea> are styled in too many places for a component. */
+  .field {
+    @apply min-h-11 w-full rounded-[10px] border border-field bg-card px-3 text-[15px] text-ink placeholder:text-ink-3 disabled:opacity-60;
+  }
+  .field:focus,
+  .field:focus-visible {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 3px var(--color-accent-soft);
+  }
+  .field[aria-invalid="true"] {
+    border-color: var(--color-neg);
+  }
+
+  /* Small grey ISO code beside an amount. */
+  .ccy {
+    @apply text-[11px] font-bold tracking-[0.04em] text-ink-3;
+  }
+
+  .link {
+    @apply font-bold text-accent hover:underline;
+  }
+}

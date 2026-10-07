@@ -1,7 +1,8 @@
 import type { SVGProps } from 'react'
 
-// Small, dependency-free icon set (Heroicons-style outline paths, MIT-equivalent
-// simple shapes) — avoids pulling in a full icon package for three glyphs.
+// Small, dependency-free outline icon set — avoids pulling in a full icon
+// package. Decorative by default (aria-hidden); icon-only buttons carry
+// their own aria-label.
 type IconProps = SVGProps<SVGSVGElement>
 
 function BaseIcon({ children, ...props }: IconProps) {
@@ -15,6 +16,8 @@ function BaseIcon({ children, ...props }: IconProps) {
       strokeLinecap="round"
       strokeLinejoin="round"
       className="h-4 w-4"
+      aria-hidden="true"
+      focusable="false"
       {...props}
     >
       {children}
@@ -42,6 +45,180 @@ export function TrashIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
       <path d="M4 7h16M9 7V4h6v3m-8 0 .867 12.142A2 2 0 0 0 9.862 21h4.276a2 2 0 0 0 1.995-1.858L17 7" />
+    </BaseIcon>
+  )
+}
+
+export function MenuIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M4 7h16M4 12h16M4 17h16" />
+    </BaseIcon>
+  )
+}
+
+export function CloseIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M6 6l12 12M18 6 6 18" />
+    </BaseIcon>
+  )
+}
+
+export function MoonIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+    </BaseIcon>
+  )
+}
+
+export function LogOutIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10" />
+    </BaseIcon>
+  )
+}
+
+export function ChevronDownIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="m6 9 6 6 6-6" />
+    </BaseIcon>
+  )
+}
+
+export function ChevronLeftIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="m15 6-6 6 6 6" />
+    </BaseIcon>
+  )
+}
+
+export function ChevronRightIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="m9 6 6 6-6 6" />
+    </BaseIcon>
+  )
+}
+
+export function CheckIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M20 6 9 17l-5-5" />
+    </BaseIcon>
+  )
+}
+
+export function UploadIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M12 15V3M7 8l5-5 5 5M4 21h16" />
+    </BaseIcon>
+  )
+}
+
+export function UserIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M20 21a8 8 0 0 0-16 0M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10z" />
+    </BaseIcon>
+  )
+}
+
+export function AlertIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+    </BaseIcon>
+  )
+}
+
+// Navigation glyphs — same paths as the D-Ibrido artboards.
+export function HomeIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z" />
+    </BaseIcon>
+  )
+}
+
+export function ListIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M4 7h16M4 12h16M4 17h10" />
+    </BaseIcon>
+  )
+}
+
+export function PlanIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+    </BaseIcon>
+  )
+}
+
+export function TrendIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M3 17l6-6 4 4 8-8M15 7h6v6" />
+    </BaseIcon>
+  )
+}
+
+export function WalletIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M3 7h18v12H3zM3 11h18M7 15h3" />
+    </BaseIcon>
+  )
+}
+
+export function GridIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" />
+    </BaseIcon>
+  )
+}
+
+export function SearchIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </BaseIcon>
+  )
+}
+
+export function SunIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+    </BaseIcon>
+  )
+}
+
+export function MonitorIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <rect x="3" y="4" width="18" height="12" rx="2" />
+      <path d="M8 20h8M12 16v4" />
+    </BaseIcon>
+  )
+}
+
+export function MoreIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props} strokeWidth={0} fill="currentColor" stroke="none">
+      <circle cx="5" cy="12" r="1.8" />
+      <circle cx="12" cy="12" r="1.8" />
+      <circle cx="19" cy="12" r="1.8" />
     </BaseIcon>
   )
 }

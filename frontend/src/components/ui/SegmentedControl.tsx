@@ -22,7 +22,7 @@ export function SegmentedControl<T extends string>({
   className = '',
 }: SegmentedControlProps<T>) {
   return (
-    <div role="group" aria-label={label} className={`inline-flex max-w-full gap-0.5 overflow-x-auto rounded-[10px] bg-card-2 p-[3px] ${className}`}>
+    <div role="group" aria-label={label} className={`inline-flex max-w-full gap-0.5 relative overflow-x-auto rounded-[10px] bg-card-2 p-[3px] ${className}`}>
       {options.map((option) => {
         const active = option.value === value
         return (

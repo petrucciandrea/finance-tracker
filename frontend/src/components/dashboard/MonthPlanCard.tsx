@@ -10,10 +10,12 @@ import { BUCKET_LABELS, bucketKept, bucketStatus, modelLabel, sortBuckets } from
 import type { AllocationBucket, AllocationStatus } from '@/types'
 
 const HISTORY_MONTHS = 5
+// On phones only the two most recent closed months fit beside the bar.
+const hideOnMobile = (index: number) => (index >= 2 ? 'max-md:hidden' : '')
 
 function HistoryCell({ status, bucket }: { status: AllocationStatus | undefined; bucket: AllocationBucket }) {
   const row = status?.buckets.find((b) => b.bucket === bucket)
-  const base = 'min-w-[58px] rounded-md px-0.5 py-1.5 text-center text-[12px]'
+  const base = 'min-w-[46px] md:min-w-[58px] rounded-md px-0.5 py-1.5 text-center text-[12px]'
   if (!row || Number(row.target_amount) <= 0) {
     return <div className={`${base} bg-card-2 font-semibold text-ink-3`}>—</div>
   }
@@ -77,18 +79,18 @@ export function MonthPlanCard({ today }: { today: Date }) {
         </div>
       ) : (
         <>
-          <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[820px] border-collapse tabular-nums">
+          <div className="mt-3 relative overflow-x-auto">
+            <table className="w-full border-collapse tabular-nums md:min-w-[820px]">
               <thead>
                 <tr className="text-[12px] text-ink-3">
-                  <th scope="col" className="border-b border-line pr-3 pb-2 text-left font-bold">
+                  <th scope="col" className="border-b border-line pr-3 pb-2 text-left font-bold max-md:hidden">
                     Voce
                   </th>
                   <th scope="col" className="w-[34%] border-b border-line pr-4 pb-2 text-left font-extrabold text-ink">
                     {formatMonthName(today)} · in corso
                   </th>
-                  {past.map(({ month }) => (
-                    <th key={month.toISOString()} scope="col" className="border-b border-line px-0.5 pb-2 text-center font-bold">
+                  {past.map(({ month }, i) => (
+                    <th key={month.toISOString()} scope="col" className={`border-b border-line px-0.5 pb-2 text-center font-bold ${hideOnMobile(i)}`}>
                       {formatMonthShort(month)}
                     </th>
                   ))}
@@ -100,15 +102,20 @@ export function MonthPlanCard({ today }: { today: Date }) {
                   const savings = bucket.bucket === 'savings'
                   return (
                     <tr key={bucket.bucket}>
-                      <th scope="row" className="border-b border-line py-2.5 pr-3 text-left font-normal whitespace-nowrap">
+                      <th scope="row" className="border-b border-line py-2.5 pr-3 text-left font-normal whitespace-nowrap max-md:hidden">
                         <div className="text-[14px] font-bold">{BUCKET_LABELS[bucket.bucket]}</div>
                         <div className="text-[12px] text-ink-3">
                           {formatPercent(Number(bucket.percentage), { digits: 1 })} · target{' '}
                           {formatAmount(bucket.target_amount, status.base_currency)}
                         </div>
                       </th>
-                      <td className="border-b border-line py-2.5 pr-4">
-                        <div className="flex items-center justify-between gap-2">
+                      <td className="border-b border-line py-2.5 pr-2 md:pr-4">
+                        {/* Below md the row header is hidden and its label moves here. */}
+                        <div className="mb-1 flex justify-between gap-2 text-[13px] md:hidden" aria-hidden="true">
+                          <span className="font-extrabold">{BUCKET_LABELS[bucket.bucket]}</span>
+                          <span className="text-ink-3">{formatPercent(Number(bucket.percentage), { digits: 1 })}</span>
+                        </div>
+                        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
                           <StatusChip kind={chip.kind}>{chip.label}</StatusChip>
                           <span className="text-[13px]">
                             <b>{formatAmount(bucket.actual_amount, status.base_currency)}</b>{' '}
@@ -125,8 +132,8 @@ export function MonthPlanCard({ today }: { today: Date }) {
                           />
                         </div>
                       </td>
-                      {past.map(({ month, query }) => (
-                        <td key={month.toISOString()} className="border-b border-line px-0.5 py-2.5">
+                      {past.map(({ month, query }, i) => (
+                        <td key={month.toISOString()} className={`border-b border-line px-0.5 py-2.5 ${hideOnMobile(i)}`}>
                           <HistoryCell status={query.data} bucket={bucket.bucket} />
                         </td>
                       ))}
@@ -134,15 +141,16 @@ export function MonthPlanCard({ today }: { today: Date }) {
                   )
                 })}
                 <tr>
-                  <th scope="row" className="pt-2.5 text-left text-[13px] font-extrabold">
+                  <th scope="row" className="pt-2.5 text-left text-[13px] font-extrabold max-md:hidden">
                     Voci nel piano
                   </th>
                   <td className="pt-2.5 text-[13px] font-extrabold">
+                    <span className="md:hidden">Voci nel piano: </span>
                     {status.buckets.filter((b) => bucketStatus(b, { pace, closed: false }).kind !== 'over').length}/
                     {status.buckets.length} <span className="font-medium text-ink-3">finora</span>
                   </td>
-                  {past.map(({ month, query }) => (
-                    <td key={month.toISOString()} className="px-0.5 pt-2.5 text-center text-[13px] font-extrabold text-ink-2">
+                  {past.map(({ month, query }, i) => (
+                    <td key={month.toISOString()} className={`px-0.5 pt-2.5 text-center text-[13px] font-extrabold text-ink-2 ${hideOnMobile(i)}`}>
                       {query.data && Number(query.data.income_total) > 0
                         ? `${query.data.buckets.filter(bucketKept).length}/${query.data.buckets.length}`
                         : '—'}

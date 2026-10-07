@@ -121,7 +121,7 @@ export function TransactionImport({ onDone }: { onDone: () => void }) {
             </span>
           </div>
 
-          <div className="overflow-x-auto rounded-lg border border-slate-100">
+          <div className="relative overflow-x-auto rounded-lg border border-slate-100">
             <table className="min-w-full divide-y divide-slate-100 text-sm">
               <thead>
                 <tr className="text-left text-xs font-medium uppercase text-slate-400">

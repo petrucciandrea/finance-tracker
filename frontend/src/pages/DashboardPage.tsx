@@ -17,7 +17,7 @@ import { useAllTransactions, useTransactionsList } from '@/hooks/useTransactions
 import { buttonClass } from '@/lib/buttonClass'
 import { indexById } from '@/lib/categories'
 import { endOfMonth, monthRange } from '@/lib/dates'
-import { formatAmount, formatLongDate, formatMonthName, formatPercent, formatQuantity, formatShortDate } from '@/lib/format'
+import { formatAmount, formatLongDate, formatMonthName, formatPercent, formatQuantity, formatShortDate, toISODate } from '@/lib/format'
 import { ACCOUNT_TYPE_LABELS, ASSET_TYPE_LABELS, INVESTMENT_ACCOUNT_TYPES, unrealizedPnlBase } from '@/lib/portfolio'
 import { amountKind, totals } from '@/lib/transactions'
 import type { NetWorthSummary } from '@/types'
@@ -125,7 +125,7 @@ function PortfolioCard({ netWorth }: { netWorth: NetWorthSummary }) {
           <div className="mt-3.5">
             <AllocationBar values={byType} currency={base} />
           </div>
-          <div className="mt-2.5 overflow-x-auto">
+          <div className="mt-2.5 relative overflow-x-auto">
             <table className="w-full min-w-[560px] border-collapse text-[13px] tabular-nums">
               <thead>
                 <tr className="text-[12px] text-ink-3">
@@ -244,13 +244,18 @@ export function DashboardPage() {
   const month = formatMonthName(today)
 
   const netWorth = useNetWorth()
-  const lastMonth = usePortfolioHistory('1m')
+  // Same key as the chart's default period, so this is one request, not
+  // two: concurrent history calls on a cold rate cache race on the
+  // exchange_rates unique index in the backend and one of them 500s.
+  const yearHistory = usePortfolioHistory('1y')
   const monthTx = useAllTransactions(monthRange(today))
 
   const nw = netWorth.data
-  const points = lastMonth.data?.points ?? []
-  const nwChange = points.length > 1 && nw ? Number(nw.total_net_worth) - Number(points[0].total_net_worth) : null
-  const nwChangePct = nwChange !== null && Number(points[0].total_net_worth) ? (nwChange / Math.abs(Number(points[0].total_net_worth))) * 100 : null
+  const monthAgo = toISODate(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 30))
+  const reference = yearHistory.data?.points.find((p) => p.date >= monthAgo)
+  const referenceValue = Number(reference?.total_net_worth ?? 0)
+  const nwChange = reference && nw ? Number(nw.total_net_worth) - referenceValue : null
+  const nwChangePct = nwChange !== null && referenceValue ? (nwChange / Math.abs(referenceValue)) * 100 : null
   const holdingsPnl = nw?.holdings.reduce((sum, h) => sum + unrealizedPnlBase(h), 0) ?? 0
   const holdingsCost = Number(nw?.total_holdings_value ?? 0) - holdingsPnl
   const cashCurrencies = [...new Set(nw?.accounts.map((a) => a.currency))].join(', ')
@@ -306,7 +311,7 @@ export function DashboardPage() {
         subtitle={`${formatLongDate(today)} ${today.getFullYear()} · giorno ${today.getDate()} di ${endOfMonth(today).getDate()} · importi in ${base} salvo indicazione`}
         actions={
           <>
-            <form role="search" onSubmit={onSearch} className="flex min-w-0 flex-[1_1_240px]">
+            <form role="search" onSubmit={onSearch} className="flex min-w-0 flex-[1_1_220px] lg:max-w-[300px]">
               <label className="flex min-h-11 w-full items-center gap-2 rounded-[10px] border border-field bg-card px-3 text-ink-3 focus-within:border-accent">
                 <SearchIcon />
                 <span className="sr-only">Cerca movimenti</span>

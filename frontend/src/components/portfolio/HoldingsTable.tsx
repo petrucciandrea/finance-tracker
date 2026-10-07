@@ -92,7 +92,7 @@ export function HoldingsTable({ holdings }: { holdings: HoldingWithValue[] }) {
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg bg-white shadow-sm">
+    <div className="relative overflow-x-auto rounded-lg bg-white shadow-sm">
       <table className="min-w-full divide-y divide-slate-100 text-sm">
         <thead>
           <tr className="text-left text-xs font-medium uppercase text-slate-400">

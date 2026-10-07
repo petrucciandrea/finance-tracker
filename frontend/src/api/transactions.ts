@@ -7,6 +7,7 @@ import type {
   TransactionListResponse,
   TransactionSummaryParams,
   TransactionSummaryResponse,
+  TransactionUpdatePayload,
 } from '@/types'
 
 export async function listTransactions(params: TransactionListParams = {}): Promise<TransactionListResponse> {
@@ -16,6 +17,11 @@ export async function listTransactions(params: TransactionListParams = {}): Prom
 
 export async function createTransaction(payload: TransactionCreatePayload): Promise<Transaction> {
   const { data } = await apiClient.post<Transaction>('/transactions', payload)
+  return data
+}
+
+export async function updateTransaction(id: string, payload: TransactionUpdatePayload): Promise<Transaction> {
+  const { data } = await apiClient.patch<Transaction>(`/transactions/${id}`, payload)
   return data
 }
 

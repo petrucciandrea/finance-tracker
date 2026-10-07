@@ -3,7 +3,12 @@ import * as transactionsApi from '@/api/transactions'
 import { BUDGETS_STATUS_KEY } from '@/hooks/useBudgets'
 import { PLANNING_KEY } from '@/hooks/usePlanning'
 import { NET_WORTH_KEY } from '@/hooks/usePortfolio'
-import type { TransactionCreatePayload, TransactionListParams, TransactionSummaryParams } from '@/types'
+import type {
+  TransactionCreatePayload,
+  TransactionListParams,
+  TransactionSummaryParams,
+  TransactionUpdatePayload,
+} from '@/types'
 
 // Exported so useAccounts.ts can invalidate it too — creating an account
 // with a starting_balance creates an opening-balance transaction server-side.
@@ -45,6 +50,17 @@ export function useCreateTransaction() {
     mutationFn: (payload: TransactionCreatePayload) => transactionsApi.createTransaction(payload),
     // Both the list and any summary views depend on this data — broad
     // invalidation is simplest and correct at this app's scale.
+    onSuccess: () => invalidateTransactionsAndDerived(queryClient),
+  })
+}
+
+export function useUpdateTransaction() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: TransactionUpdatePayload }) =>
+      transactionsApi.updateTransaction(id, payload),
+    // A new category or necessity override moves the plan; a new amount or
+    // date moves balances too.
     onSuccess: () => invalidateTransactionsAndDerived(queryClient),
   })
 }

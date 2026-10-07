@@ -12,8 +12,8 @@ export function ProtectedRoute() {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <p className="text-slate-500">Caricamento...</p>
+      <div role="status" className="flex min-h-screen items-center justify-center">
+        <p className="font-semibold text-ink-3">Caricamento…</p>
       </div>
     )
   }

@@ -1,6 +1,13 @@
 import { useState } from 'react'
-import { isAxiosError } from 'axios'
-import { TrashIcon } from '@/components/ui/Icon'
+import { Button } from '@/components/ui/Button'
+import { Card } from '@/components/ui/Card'
+import { ConfirmDialog, Dialog } from '@/components/ui/Dialog'
+import { EmptyState, ErrorBlock, LoadingBlock } from '@/components/ui/EmptyState'
+import { Field } from '@/components/ui/Field'
+import { CloseIcon } from '@/components/ui/Icon'
+import { ProgressBar } from '@/components/ui/ProgressBar'
+import { RowMenu } from '@/components/ui/RowMenu'
+import { StatusChip } from '@/components/ui/StatusChip'
 import { useAccounts } from '@/hooks/useAccounts'
 import {
   useAddGoalSource,
@@ -11,14 +18,9 @@ import {
   useSavingsGoals,
   useWaterfall,
 } from '@/hooks/useSavingsGoals'
-import type {
-  ApiErrorResponse,
-  SavingsGoal,
-  SavingsGoalKind,
-  TargetMode,
-  WaterfallAction,
-  WaterfallStep,
-} from '@/types'
+import { apiErrorMessage } from '@/lib/apiError'
+import { formatAmount, formatPercent } from '@/lib/format'
+import type { SavingsGoal, SavingsGoalKind, TargetMode, WaterfallAction, WaterfallStep } from '@/types'
 
 const KIND_LABELS: Record<SavingsGoalKind, string> = {
   emergency_fund: 'Fondo emergenza',
@@ -32,343 +34,270 @@ const TARGET_MODE_LABELS: Record<TargetMode, string> = {
   open_ended: 'Senza target (assorbe il residuo)',
 }
 
-function apiMessage(error: unknown, fallback: string): string {
-  if (isAxiosError<ApiErrorResponse>(error) && error.response) {
-    return error.response.data?.error?.message ?? fallback
-  }
-  return fallback
+function StepRow({ step, index, goal, currency }: { step: WaterfallStep; index: number; goal?: SavingsGoal; currency: string }) {
+  const { data: accounts } = useAccounts()
+  const sources = (goal?.sources ?? []).map((s) => accounts?.find((a) => a.id === s.account_id)?.name).filter(Boolean)
+  const money = (v: string | null) => (v === null ? '—' : `${formatAmount(v, currency)} ${currency}`)
+  return (
+    <div className="grid grid-cols-[32px_1fr] gap-3 py-3">
+      <span
+        aria-hidden="true"
+        className={`grid h-8 w-8 place-items-center rounded-full text-[13px] font-extrabold ${
+          step.is_funded ? 'bg-pos-soft text-pos' : 'bg-card-2 text-ink-2'
+        }`}
+      >
+        {step.is_funded ? '✓' : index + 1}
+      </span>
+      <div className="min-w-0 tabular-nums">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <span className="font-extrabold">
+            <span className="sr-only">Gradino {index + 1}: </span>
+            {step.name} <span className="text-[12px] font-semibold text-ink-3">{KIND_LABELS[step.kind]}</span>
+          </span>
+          <span className="flex flex-wrap gap-1.5">
+            {Number(step.allocated_amount) > 0 && <StatusChip kind="info">+{money(step.allocated_amount)} da versare</StatusChip>}
+            {step.is_funded && <StatusChip kind="good">Completo</StatusChip>}
+          </span>
+        </div>
+        {step.target_unavailable ? (
+          <p className="mt-1 text-[13px] font-semibold text-warn">
+            Target non ancora calcolabile: serve almeno un mese completo di storico per la media delle spese primarie. Il gradino è sospeso, non
+            considerato completo.
+          </p>
+        ) : step.target_amount === null ? (
+          <p className="mt-1 text-[13px] text-ink-2">Senza target: riceve tutto ciò che avanza dai gradini sopra. Ora {money(step.current_amount)}.</p>
+        ) : (
+          <>
+            <div className="mt-1 flex justify-between text-[13px] text-ink-2">
+              <span>
+                <b className="text-ink">{money(step.current_amount)}</b> su {money(step.target_amount)}
+              </span>
+              <span>{formatPercent(step.funding_percentage, { digits: 0 })}</span>
+            </div>
+            <div className="mt-1.5">
+              <ProgressBar
+                value={step.funding_percentage}
+                kind={step.is_funded ? 'good' : 'ok'}
+                label={`${step.name}: ${formatPercent(step.funding_percentage, { digits: 0 })} del target`}
+              />
+            </div>
+          </>
+        )}
+        <p className="mt-1 text-[12px] text-ink-3">{sources.length ? `Conti: ${sources.join(', ')}` : 'Nessun conto collegato'}</p>
+      </div>
+    </div>
+  )
 }
 
-function StepRow({
-  step,
-  format,
-}: {
-  step: WaterfallStep
-  format: (amount: string | null) => string
-}) {
-  const width = Math.min(Math.max(step.funding_percentage, 0), 100)
-
+function ActionRow({ action, selected, onToggle }: { action: WaterfallAction; selected: boolean; onToggle: () => void }) {
+  const executable = action.kind === 'transfer'
+  const money = `${formatAmount(action.amount, action.currency)} ${action.currency}`
   return (
-    <li className="py-3">
-      <div className="flex items-baseline justify-between gap-3 text-sm">
-        <span className="font-medium text-slate-800">
-          {step.name} <span className="text-xs text-slate-400">{KIND_LABELS[step.kind]}</span>
-        </span>
-        {Number(step.allocated_amount) > 0 && (
-          <span className="shrink-0 rounded bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">
-            +{format(step.allocated_amount)}
+    <li className={`rounded-[10px] border px-3 py-2.5 ${executable ? 'border-line bg-card' : 'border-dashed border-field bg-card-2'}`}>
+      <label className={`flex items-start gap-3 ${executable ? 'cursor-pointer' : ''}`}>
+        {executable ? (
+          <input type="checkbox" checked={selected} onChange={onToggle} className="mt-1 h-[18px] w-[18px] flex-none accent-accent" />
+        ) : (
+          <span aria-hidden="true" className="mt-0.5 w-[18px] flex-none text-center text-ink-3">
+            ✎
           </span>
         )}
-      </div>
-
-      {step.target_unavailable ? (
-        <p className="mt-1 text-xs text-amber-700">
-          Target non ancora calcolabile: serve almeno un mese completo di storico per la media
-          delle spese primarie. Il gradino è sospeso, non considerato completo.
-        </p>
-      ) : step.target_amount === null ? (
-        <p className="mt-1 text-xs text-slate-500">
-          Nessun target — riceve tutto ciò che avanza dai gradini sopra. Attuale{' '}
-          {format(step.current_amount)}.
-        </p>
-      ) : (
-        <>
-          <div className="mt-1 flex justify-between text-xs text-slate-500">
-            <span>
-              {format(step.current_amount)} / {format(step.target_amount)}
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-baseline justify-between gap-2">
+            <span className="font-bold tabular-nums">
+              {executable ? (
+                <>
+                  ⇄ Gira {money} da {action.from_account_name} a {action.to_account_name}
+                </>
+              ) : (
+                <>
+                  {money} verso «{action.goal_name}»
+                </>
+              )}
             </span>
-            <span>{step.funding_percentage}%</span>
-          </div>
-          <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-slate-100">
-            <div
-              className={`h-full ${step.is_funded ? 'bg-green-600' : 'bg-slate-800'}`}
-              style={{ width: `${width}%` }}
-            />
-          </div>
-        </>
-      )}
+            <StatusChip kind={executable ? 'info' : 'ok'}>{executable ? 'Giroconto' : 'Da fare a mano'}</StatusChip>
+          </span>
+          <span className="mt-0.5 block text-[13px] text-ink-2">{action.reason}</span>
+        </span>
+      </label>
     </li>
   )
 }
 
-function ActionRow({
-  action,
-  format,
-  selected,
-  onToggle,
-}: {
-  action: WaterfallAction
-  format: (amount: string | null) => string
-  selected: boolean
-  onToggle: () => void
-}) {
-  const executable = action.kind === 'transfer'
-
-  return (
-    <li
-      className={`rounded-md border px-3 py-2 text-sm ${
-        executable ? 'border-slate-200 bg-white' : 'border-dashed border-slate-300 bg-slate-50'
-      }`}
-    >
-      <div className="flex items-baseline justify-between gap-3">
-        {executable && (
-          <input
-            type="checkbox"
-            checked={selected}
-            onChange={onToggle}
-            aria-label={`Seleziona il giroconto verso ${action.goal_name}`}
-            className="mt-1 shrink-0 rounded border-slate-300 text-slate-800 focus:ring-slate-500"
-          />
-        )}
-        <span className="flex-1 font-medium text-slate-800">
-          {executable ? (
-            <>
-              Gira {format(action.amount)} da {action.from_account_name} a{' '}
-              {action.to_account_name}
-            </>
-          ) : (
-            <>
-              {format(action.amount)} verso «{action.goal_name}»
-            </>
-          )}
-        </span>
-        <span
-          className={`shrink-0 rounded px-2 py-0.5 text-xs ${
-            executable ? 'bg-slate-800 text-white' : 'bg-slate-200 text-slate-600'
-          }`}
-        >
-          {executable ? 'Giroconto' : 'Da fare a mano'}
-        </span>
-      </div>
-      <p className="mt-0.5 text-xs text-slate-500">{action.reason}</p>
-    </li>
-  )
-}
-
-function GoalForm({ onDone }: { onDone: () => void }) {
+function GoalForm({ nextPriority, onDone }: { nextPriority: number; onDone: () => void }) {
   const createGoal = useCreateGoal()
   const [name, setName] = useState('')
   const [kind, setKind] = useState<SavingsGoalKind>('emergency_fund')
   const [targetMode, setTargetMode] = useState<TargetMode>('months_of_primary_expenses')
   const [months, setMonths] = useState('6')
   const [amount, setAmount] = useState('')
-  const [priority, setPriority] = useState('0')
+  const [priority, setPriority] = useState(String(nextPriority))
   const [error, setError] = useState<string | null>(null)
 
   async function submit() {
     setError(null)
+    if (!name.trim()) return setError('Il nome è obbligatorio')
     try {
       await createGoal.mutateAsync({
         name: name.trim(),
         kind,
         priority: Number(priority),
         target_mode: targetMode,
-        // Each mode carries exactly its own parameter — the backend 422s
-        // anything else, and the database constrains it too.
         target_months: targetMode === 'months_of_primary_expenses' ? months : null,
-        target_amount: targetMode === 'fixed_amount' ? amount : null,
+        target_amount: targetMode === 'fixed_amount' ? amount.replace(',', '.') : null,
       })
       onDone()
     } catch (e) {
-      setError(apiMessage(e, 'Impossibile creare il gradino.'))
+      setError(apiErrorMessage(e, "Impossibile creare l'obiettivo."))
     }
   }
 
   return (
-    <div className="space-y-3 rounded-md bg-slate-50 p-4">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div>
-          <label htmlFor="goal-name" className="block text-xs font-medium text-slate-600">
-            Nome
-          </label>
-          <input
-            id="goal-name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-          />
-        </div>
-        <div>
-          <label htmlFor="goal-kind" className="block text-xs font-medium text-slate-600">
-            Tipo
-          </label>
-          <select
-            id="goal-kind"
-            value={kind}
-            onChange={(e) => setKind(e.target.value as SavingsGoalKind)}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-          >
+    <div className="flex flex-col gap-4">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Nome" htmlFor="goal-name">
+          <input id="goal-name" className="field" value={name} onChange={(e) => setName(e.target.value)} placeholder="Es. Fondo emergenza" />
+        </Field>
+        <Field label="Tipo" htmlFor="goal-kind">
+          <select id="goal-kind" className="field" value={kind} onChange={(e) => setKind(e.target.value as SavingsGoalKind)}>
             {(Object.keys(KIND_LABELS) as SavingsGoalKind[]).map((k) => (
               <option key={k} value={k}>
                 {KIND_LABELS[k]}
               </option>
             ))}
           </select>
-        </div>
-        <div>
-          <label htmlFor="goal-mode" className="block text-xs font-medium text-slate-600">
-            Target
-          </label>
-          <select
-            id="goal-mode"
-            value={targetMode}
-            onChange={(e) => setTargetMode(e.target.value as TargetMode)}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-          >
+        </Field>
+        <Field label="Target" htmlFor="goal-mode">
+          <select id="goal-mode" className="field" value={targetMode} onChange={(e) => setTargetMode(e.target.value as TargetMode)}>
             {(Object.keys(TARGET_MODE_LABELS) as TargetMode[]).map((m) => (
               <option key={m} value={m}>
                 {TARGET_MODE_LABELS[m]}
               </option>
             ))}
           </select>
-        </div>
-        <div>
-          <label htmlFor="goal-priority" className="block text-xs font-medium text-slate-600">
-            Priorità (0 = primo)
-          </label>
-          <input
-            id="goal-priority"
-            type="number"
-            min={0}
-            value={priority}
-            onChange={(e) => setPriority(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-          />
-        </div>
-
+        </Field>
+        <Field label="Priorità" htmlFor="goal-priority" hint="Più bassa = riempita prima.">
+          <input id="goal-priority" type="number" min={0} className="field" aria-describedby="goal-priority-msg" value={priority} onChange={(e) => setPriority(e.target.value)} />
+        </Field>
         {targetMode === 'months_of_primary_expenses' && (
-          <div>
-            <label htmlFor="goal-months" className="block text-xs font-medium text-slate-600">
-              Mesi di spese primarie
-            </label>
-            <input
-              id="goal-months"
-              type="number"
-              min={1}
-              value={months}
-              onChange={(e) => setMonths(e.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-          </div>
+          <Field label="Mesi" htmlFor="goal-months">
+            <input id="goal-months" type="number" min={1} className="field" value={months} onChange={(e) => setMonths(e.target.value)} />
+          </Field>
         )}
         {targetMode === 'fixed_amount' && (
-          <div>
-            <label htmlFor="goal-amount" className="block text-xs font-medium text-slate-600">
-              Importo obiettivo
-            </label>
-            <input
-              id="goal-amount"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-          </div>
+          <Field label="Importo" htmlFor="goal-amount">
+            <input id="goal-amount" inputMode="decimal" className="field" value={amount} onChange={(e) => setAmount(e.target.value)} />
+          </Field>
         )}
       </div>
-
-      {error && <p className="text-sm text-red-600">{error}</p>}
-
-      <button
-        onClick={submit}
-        disabled={createGoal.isPending || !name.trim()}
-        className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
-      >
-        {createGoal.isPending ? 'Creazione...' : 'Aggiungi gradino'}
-      </button>
+      {error && <ErrorBlock>{error}</ErrorBlock>}
+      <div className="flex justify-end gap-2">
+        <Button onClick={onDone}>Annulla</Button>
+        <Button variant="primary" onClick={submit} disabled={createGoal.isPending}>
+          {createGoal.isPending ? 'Creazione…' : 'Crea obiettivo'}
+        </Button>
+      </div>
     </div>
   )
 }
 
-function GoalSources({ goal }: { goal: SavingsGoal }) {
+function GoalSourcesDialog({ goal, onClose }: { goal: SavingsGoal | null; onClose: () => void }) {
   const { data: accounts } = useAccounts()
   const addSource = useAddGoalSource()
   const removeSource = useRemoveGoalSource()
   const [accountId, setAccountId] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const linked = new Set(goal?.sources.map((s) => s.account_id))
 
-  const mappedIds = new Set(goal.sources.map((s) => s.account_id))
-  const available = (accounts ?? []).filter((a) => !mappedIds.has(a.id))
-
-  async function attach() {
-    if (!accountId) return
+  async function add() {
+    if (!goal || !accountId) return
     setError(null)
     try {
       await addSource.mutateAsync({ goalId: goal.id, accountId })
       setAccountId('')
     } catch (e) {
-      // Most likely a 409: the account already funds another goal.
-      setError(apiMessage(e, 'Impossibile collegare il conto.'))
+      // 409 when the account already funds another goal.
+      setError(apiErrorMessage(e, 'Impossibile collegare il conto.'))
     }
   }
 
   return (
-    <div className="mt-2 pl-4">
-      <ul className="space-y-1">
-        {goal.sources.map((source) => {
-          const account = accounts?.find((a) => a.id === source.account_id)
-          return (
-            <li
-              key={source.id}
-              className="flex items-center justify-between text-xs text-slate-600"
-            >
-              <span>{account?.name ?? 'Conto eliminato'}</span>
-              <button
-                onClick={() => removeSource.mutateAsync({ goalId: goal.id, sourceId: source.id })}
-                aria-label="Scollega"
-                title="Scollega"
-                className="rounded p-1 text-red-600 hover:bg-red-50"
-              >
-                <TrashIcon />
-              </button>
-            </li>
-          )
-        })}
-      </ul>
-
-      <div className="mt-2 flex gap-2">
-        <select
-          value={accountId}
-          onChange={(e) => setAccountId(e.target.value)}
-          aria-label={`Collega un conto a ${goal.name}`}
-          className="flex-1 rounded-md border border-slate-300 px-2 py-1 text-xs"
-        >
-          <option value="">Collega un conto...</option>
-          {available.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
-        </select>
-        <button
-          onClick={attach}
-          disabled={!accountId || addSource.isPending}
-          className="rounded-md bg-slate-200 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-300 disabled:opacity-50"
-        >
-          Collega
-        </button>
-      </div>
-      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
-    </div>
+    <Dialog
+      open={!!goal}
+      onClose={onClose}
+      title={`Conti di “${goal?.name ?? ''}”`}
+      description="Il saldo di questi conti conta come quanto già accantonato. Un conto può finanziare un solo obiettivo."
+    >
+      {goal && (
+        <div className="flex flex-col gap-3">
+          {goal.sources.length === 0 ? (
+            <p className="text-[14px] text-ink-3">Nessun conto collegato.</p>
+          ) : (
+            <ul>
+              {goal.sources.map((source) => (
+                <li key={source.id} className="flex items-center justify-between border-t border-line py-1 first:border-t-0">
+                  <span className="font-semibold">{accounts?.find((a) => a.id === source.account_id)?.name ?? 'Conto eliminato'}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeSource.mutateAsync({ goalId: goal.id, sourceId: source.id })}
+                    disabled={removeSource.isPending}
+                    aria-label="Scollega il conto"
+                    className="grid h-11 w-11 cursor-pointer place-items-center rounded-[10px] text-ink-2 hover:bg-card-2"
+                  >
+                    <CloseIcon />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex gap-2">
+            <label htmlFor="goal-source" className="sr-only">
+              Conto da collegare
+            </label>
+            <select id="goal-source" className="field min-w-0 flex-1" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+              <option value="">Collega un conto…</option>
+              {(accounts ?? [])
+                .filter((a) => !linked.has(a.id))
+                .map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} · {a.currency}
+                  </option>
+                ))}
+            </select>
+            <Button variant="primary" onClick={add} disabled={!accountId || addSource.isPending}>
+              Collega
+            </Button>
+          </div>
+          {error && <ErrorBlock>{error}</ErrorBlock>}
+        </div>
+      )}
+    </Dialog>
   )
 }
 
-export function WaterfallSection({ format }: { format: (amount: string | null) => string }) {
-  const { data: waterfall, isLoading } = useWaterfall()
+/**
+ * The savings ladder: the month's savings quota fills goals in priority
+ * order and spills to the next rung only when the one above is full.
+ * Suggested giroconti are pre-selected and run as one all-or-nothing batch.
+ */
+export function WaterfallSection({ date, currency }: { date: string; currency: string }) {
+  const { data: waterfall, isLoading, isError } = useWaterfall(date)
   const { data: goals } = useSavingsGoals()
   const deleteGoal = useDeleteGoal()
   const executeWaterfall = useExecuteWaterfall()
-  const [isAdding, setIsAdding] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const [editingSources, setEditingSources] = useState<SavingsGoal | null>(null)
+  const [deleting, setDeleting] = useState<SavingsGoal | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const [deselected, setDeselected] = useState<Set<string>>(new Set())
   const [executeError, setExecuteError] = useState<string | null>(null)
 
-  const executableActions = (waterfall?.actions ?? []).filter((a) => a.kind === 'transfer')
-  // Selected by default — the suggestions are the point of the page, so
-  // acting on all of them is the common case and opting out is the
-  // exception. Tracking the exceptions keeps the set correct when the
-  // cascade is recomputed after a transfer lands.
-  const selected = new Set(
-    executableActions.map((a) => a.goal_id).filter((id) => !deselected.has(id)),
-  )
+  const goalsById = new Map((goals ?? []).map((g) => [g.id, g]))
+  const actions = waterfall?.actions ?? []
+  const executableActions = actions.filter((a) => a.kind === 'transfer')
+  // Selected by default — acting on the suggestions is the common case.
+  // Tracking the opt-outs keeps the set right when the cascade recomputes.
+  const selected = new Set(executableActions.map((a) => a.goal_id).filter((id) => !deselected.has(id)))
 
   function toggle(goalId: string) {
     setDeselected((current) => {
@@ -383,127 +312,149 @@ export function WaterfallSection({ format }: { format: (amount: string | null) =
     setExecuteError(null)
     const items = executableActions
       .filter((a) => selected.has(a.goal_id))
-      .map((a) => ({
-        goal_id: a.goal_id,
-        from_account_id: a.from_account_id as string,
-        amount: a.amount,
-      }))
+      .map((a) => ({ goal_id: a.goal_id, from_account_id: a.from_account_id as string, amount: a.amount }))
     if (items.length === 0) return
-
     try {
-      await executeWaterfall.mutateAsync({ items })
+      await executeWaterfall.mutateAsync({ date, items })
       setDeselected(new Set())
     } catch (e) {
       // The backend applies the batch all-or-nothing, so nothing landed.
-      setExecuteError(apiMessage(e, 'Impossibile eseguire i giroconti.'))
+      setExecuteError(apiErrorMessage(e, 'Impossibile eseguire i giroconti.'))
     }
   }
 
-  if (isLoading) return <p className="text-slate-500">Caricamento...</p>
+  async function confirmDelete() {
+    if (!deleting) return
+    setDeleteError(null)
+    try {
+      await deleteGoal.mutateAsync(deleting.id)
+      setDeleting(null)
+    } catch (e) {
+      setDeleteError(apiErrorMessage(e))
+    }
+  }
+
+  const steps = [...(waterfall?.steps ?? [])].sort((a, b) => a.priority - b.priority)
+  const nextPriority = steps.length ? Math.max(...steps.map((s) => s.priority)) + 1 : 0
 
   return (
-    <div className="space-y-5">
-      {waterfall && (
-        <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
-          <span className="text-slate-600">
-            Quota risparmio: <strong>{format(waterfall.savings_quota)}</strong>
-          </span>
-          <span className="text-slate-600">
-            Già allocato: <strong>{format(waterfall.already_allocated)}</strong>
-          </span>
-          <span className="text-slate-600">
-            Non allocato: <strong>{format(waterfall.unallocated_amount)}</strong>
-          </span>
+    <Card
+      title="Cascata del risparmio"
+      action={
+        <Button variant="secondary" onClick={() => setAdding(true)}>
+          + Nuovo obiettivo
+        </Button>
+      }
+    >
+      <p className="mt-1 text-[13px] text-ink-2">
+        La quota di risparmio riempie gli obiettivi in ordine di priorità: si passa al gradino dopo solo quando il precedente è pieno (al 95%).
+      </p>
+
+      {isLoading ? (
+        <LoadingBlock className="mt-3 h-40" />
+      ) : isError || !waterfall ? (
+        <div className="mt-3">
+          <ErrorBlock>Non è stato possibile calcolare la cascata.</ErrorBlock>
         </div>
-      )}
-
-      {waterfall && waterfall.steps.length > 0 && (
-        <ul className="divide-y divide-slate-100">
-          {waterfall.steps.map((step) => (
-            <StepRow key={step.goal_id} step={step} format={format} />
-          ))}
-        </ul>
-      )}
-
-      {waterfall && waterfall.actions.length > 0 && (
-        <div>
-          <h3 className="mb-2 text-sm font-semibold text-slate-700">Azioni consigliate</h3>
-          <ul className="space-y-2">
-            {waterfall.actions.map((action) => (
-              <ActionRow
-                key={action.goal_id}
-                action={action}
-                format={format}
-                selected={selected.has(action.goal_id)}
-                onToggle={() => toggle(action.goal_id)}
-              />
-            ))}
-          </ul>
-
-          {executableActions.length > 0 && (
-            <div className="mt-3 flex items-center gap-3">
-              <button
-                onClick={runExecute}
-                disabled={selected.size === 0 || executeWaterfall.isPending}
-                className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
-              >
-                {executeWaterfall.isPending
-                  ? 'Esecuzione...'
-                  : `Esegui ${selected.size} giroconto${selected.size === 1 ? '' : 'i'}`}
-              </button>
-              {executeError && <p className="text-sm text-red-600">{executeError}</p>}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div>
-        <h3 className="mb-2 text-sm font-semibold text-slate-700">Gradini e conti collegati</h3>
-        {(goals ?? []).length === 0 && (
-          <p className="text-sm text-slate-500">
-            Nessun gradino ancora. Il primo è di solito un fondo emergenza da 6 mesi di spese
-            primarie.
-          </p>
-        )}
-        <ul className="space-y-3">
-          {(goals ?? []).map((goal) => (
-            <li key={goal.id} className="rounded-md border border-slate-200 p-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-slate-800">
-                  {goal.priority}. {goal.name}
-                </span>
-                <button
-                  onClick={() => {
-                    if (window.confirm(`Eliminare il gradino "${goal.name}"?`)) {
-                      deleteGoal.mutateAsync(goal.id)
-                    }
-                  }}
-                  aria-label="Elimina gradino"
-                  title="Elimina gradino"
-                  className="rounded p-1.5 text-red-600 hover:bg-red-50"
-                >
-                  <TrashIcon />
-                </button>
+      ) : (
+        <>
+          <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-[13px] tabular-nums">
+            {[
+              ['Quota di risparmio', waterfall.savings_quota],
+              ['Già allocato', waterfall.already_allocated],
+              ['Da allocare', waterfall.unallocated_amount],
+            ].map(([label, value]) => (
+              <div key={label} className="flex gap-1.5">
+                <dt className="text-ink-2">{label}</dt>
+                <dd className="font-extrabold">
+                  {formatAmount(value, currency)} <span className="ccy">{currency}</span>
+                </dd>
               </div>
-              <GoalSources goal={goal} />
-            </li>
-          ))}
-        </ul>
-      </div>
+            ))}
+          </dl>
 
-      <div>
-        <button
-          onClick={() => setIsAdding((v) => !v)}
-          className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-        >
-          {isAdding ? 'Annulla' : 'Nuovo gradino'}
-        </button>
-        {isAdding && (
-          <div className="mt-3">
-            <GoalForm onDone={() => setIsAdding(false)} />
+          <div className="mt-3 flex flex-wrap gap-6">
+            <div className="min-w-0 flex-[999_1_420px]">
+              {steps.length === 0 ? (
+                <EmptyState title="Nessun obiettivo" action={<Button variant="primary" onClick={() => setAdding(true)}>Crea il primo obiettivo</Button>}>
+                  Parti da un fondo emergenza di qualche mese di spese primarie.
+                </EmptyState>
+              ) : (
+                <ol aria-label="Gradini">
+                  {steps.map((step, i) => (
+                    <li key={step.goal_id} className="flex items-start gap-1 border-t border-line first:border-t-0">
+                      <div className="min-w-0 flex-1">
+                        <StepRow step={step} index={i} goal={goalsById.get(step.goal_id)} currency={currency} />
+                      </div>
+                      <div className="pt-3">
+                        <RowMenu
+                          label={`Azioni per ${step.name}`}
+                          items={[
+                            { label: 'Conti collegati…', onSelect: () => setEditingSources(goalsById.get(step.goal_id) ?? null) },
+                            {
+                              label: 'Elimina obiettivo',
+                              tone: 'danger',
+                              onSelect: () => {
+                                setDeleteError(null)
+                                setDeleting(goalsById.get(step.goal_id) ?? null)
+                              },
+                            },
+                          ]}
+                        />
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+
+            <section aria-labelledby="wf-actions" className="min-w-0 flex-[1_1_320px]">
+              <h3 id="wf-actions" className="text-[14px] font-extrabold">
+                Azioni consigliate
+              </h3>
+              {actions.length === 0 ? (
+                <p className="mt-2 text-[13px] text-ink-3">
+                  {steps.length === 0 ? 'Le azioni compaiono quando c’è almeno un obiettivo.' : 'Nessuna azione: la quota di questo mese è già al suo posto.'}
+                </p>
+              ) : (
+                <>
+                  <ul className="mt-2 flex flex-col gap-2">
+                    {actions.map((a) => (
+                      <ActionRow key={`${a.goal_id}-${a.kind}`} action={a} selected={selected.has(a.goal_id)} onToggle={() => toggle(a.goal_id)} />
+                    ))}
+                  </ul>
+                  {executableActions.length > 0 && (
+                    <div className="mt-3 flex flex-col gap-2">
+                      <Button variant="primary" onClick={runExecute} disabled={selected.size === 0 || executeWaterfall.isPending}>
+                        {executeWaterfall.isPending
+                          ? 'Esecuzione…'
+                          : `Esegui ${selected.size} ${selected.size === 1 ? 'giroconto' : 'giroconti'}`}
+                      </Button>
+                      {executeError && <ErrorBlock>{executeError}</ErrorBlock>}
+                    </div>
+                  )}
+                </>
+              )}
+            </section>
           </div>
-        )}
-      </div>
-    </div>
+        </>
+      )}
+
+      <Dialog open={adding} onClose={() => setAdding(false)} title="Nuovo obiettivo" size="md">
+        {adding && <GoalForm nextPriority={nextPriority} onDone={() => setAdding(false)} />}
+      </Dialog>
+      <GoalSourcesDialog goal={editingSources ? (goalsById.get(editingSources.id) ?? null) : null} onClose={() => setEditingSources(null)} />
+      <ConfirmDialog
+        open={!!deleting}
+        title={`Eliminare “${deleting?.name}”?`}
+        confirmLabel="Elimina"
+        pending={deleteGoal.isPending}
+        error={deleteError}
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleting(null)}
+      >
+        I conti collegati restano; i giroconti già fatti restano nei movimenti.
+      </ConfirmDialog>
+    </Card>
   )
 }

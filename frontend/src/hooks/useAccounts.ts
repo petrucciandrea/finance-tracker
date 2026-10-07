@@ -3,7 +3,7 @@ import * as accountsApi from '@/api/accounts'
 import { PLANNING_KEY } from '@/hooks/usePlanning'
 import { NET_WORTH_KEY } from '@/hooks/usePortfolio'
 import { TRANSACTIONS_KEY } from '@/hooks/useTransactions'
-import type { AccountCreatePayload } from '@/types'
+import type { AccountCreatePayload, AccountUpdatePayload } from '@/types'
 
 const ACCOUNTS_KEY = ['accounts'] as const
 
@@ -28,6 +28,18 @@ export function useCreateAccount() {
       queryClient.invalidateQueries({ queryKey: PLANNING_KEY })
       // A starting_balance creates an opening-balance transaction server-side.
       queryClient.invalidateQueries({ queryKey: TRANSACTIONS_KEY })
+    },
+  })
+}
+
+export function useUpdateAccount() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: AccountUpdatePayload }) => accountsApi.updateAccount(id, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY })
+      // Net worth carries the account name.
+      queryClient.invalidateQueries({ queryKey: NET_WORTH_KEY })
     },
   })
 }

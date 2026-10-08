@@ -58,7 +58,9 @@ export function NetWorthChart({ baseCurrency }: { baseCurrency: string }) {
   return (
     <Card
       title="Patrimonio nel tempo"
-      className="flex-[999_1_540px]"
+      // Shares a row with the accounts card, which stretches it to its height:
+      // the plot takes up the slack instead of leaving a blank band below it.
+      className="flex flex-[999_1_540px] flex-col"
       action={<SegmentedControl label="Periodo" options={PERIOD_OPTIONS} value={period} onChange={setPeriod} size="sm" />}
     >
       {points.length > 1 && (
@@ -68,7 +70,9 @@ export function NetWorthChart({ baseCurrency }: { baseCurrency: string }) {
           <Delta value={change} percent={changePct} /> {PERIOD_PHRASE[period]}
         </p>
       )}
-      <div className="mt-3 h-[240px]">
+      {/* min-h overrides the flex item's min-height:auto, which would let the
+          chart's own measured size feed back into the box it measures. */}
+      <div className="mt-3 min-h-[240px] flex-1">
         {isLoading ? (
           <LoadingBlock className="h-full" />
         ) : points.length < 2 ? (

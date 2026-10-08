@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core import rate_limit
 from app.core.config import settings
 from app.deps import get_db
 from app.main import app
@@ -69,6 +70,13 @@ def open_registration(monkeypatch: pytest.MonkeyPatch) -> None:
     # Most tests just need a usable user; the approval flow has its own file
     # that switches the mode back.
     monkeypatch.setattr(settings, "registration_mode", "open")
+
+
+@pytest.fixture(autouse=True)
+def fresh_rate_limits() -> None:
+    # The counters are process-global; without this the many logins across
+    # the suite would trip the limits that production relies on.
+    rate_limit.reset()
 
 
 @pytest.fixture

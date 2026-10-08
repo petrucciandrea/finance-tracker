@@ -48,6 +48,8 @@ export function RegisterPage() {
     } catch (error) {
       if (isAxiosError<ApiErrorResponse>(error) && error.response?.status === 409) {
         setServerError('Esiste già un account con questa email')
+      } else if (isAxiosError<ApiErrorResponse>(error) && error.response?.status === 429) {
+        setServerError('Troppi tentativi. Riprova tra qualche minuto.')
       } else {
         setServerError('Si è verificato un errore. Riprova.')
       }

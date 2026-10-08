@@ -19,6 +19,7 @@ from jose import JWTError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.rate_limit import rate_limit
 from app.core.security import (
     create_access_token,
     create_approval_token,
@@ -49,6 +50,13 @@ from app.services.email import send_email
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+
+# Attempts per client IP and window; see core/rate_limit.py.
+_LIMIT_REGISTER = Depends(rate_limit("register", 5, 3600))
+_LIMIT_LOGIN = Depends(rate_limit("login", 10, 300))
+_LIMIT_REFRESH = Depends(rate_limit("refresh", 60, 300))
+_LIMIT_PASSWORD = Depends(rate_limit("password", 5, 600))
+_LIMIT_APPROVAL = Depends(rate_limit("approval", 20, 600))
 
 
 def _hash_token(token: str) -> str:
@@ -87,7 +95,12 @@ def _notify_admin_of_registration(user_id: UUID, user_email: str) -> None:
     )
 
 
-@router.post("/register", response_model=UserSchema, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    response_model=UserSchema,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[_LIMIT_REGISTER],
+)
 def register(
     payload: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
 ) -> User:
@@ -113,7 +126,7 @@ def register(
     return user
 
 
-@router.post("/login", response_model=TokenPair)
+@router.post("/login", response_model=TokenPair, dependencies=[_LIMIT_LOGIN])
 def login(payload: UserLogin, db: Session = Depends(get_db)) -> TokenPair:
     user = db.query(User).filter(User.email == payload.email).first()
     if user is None or not verify_password(payload.password, user.password_hash):
@@ -142,7 +155,7 @@ def login(payload: UserLogin, db: Session = Depends(get_db)) -> TokenPair:
     return TokenPair(access_token=access_token, refresh_token=refresh_token)
 
 
-@router.post("/refresh", response_model=TokenPair)
+@router.post("/refresh", response_model=TokenPair, dependencies=[_LIMIT_REFRESH])
 def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> TokenPair:
     try:
         token_data = decode_token(payload.refresh_token, expected_type="refresh")
@@ -234,7 +247,7 @@ def update_me(
     return current_user
 
 
-@router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_LIMIT_PASSWORD])
 def change_password(
     payload: PasswordChangeRequest,
     current_user: User = Depends(get_current_user),
@@ -267,14 +280,18 @@ def _user_from_approval_token(db: Session, token: str) -> User:
     return user
 
 
-@router.post("/approvals/preview", response_model=ApprovalRequestInfo)
+@router.post(
+    "/approvals/preview", response_model=ApprovalRequestInfo, dependencies=[_LIMIT_APPROVAL]
+)
 def preview_approval(
     payload: ApprovalTokenRequest, db: Session = Depends(get_db)
 ) -> User:
     return _user_from_approval_token(db, payload.token)
 
 
-@router.post("/approvals/decision", response_model=ApprovalRequestInfo)
+@router.post(
+    "/approvals/decision", response_model=ApprovalRequestInfo, dependencies=[_LIMIT_APPROVAL]
+)
 def decide_approval(
     payload: ApprovalDecisionRequest,
     background_tasks: BackgroundTasks,

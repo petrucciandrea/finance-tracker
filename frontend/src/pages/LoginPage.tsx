@@ -41,6 +41,8 @@ export function LoginPage() {
       // that would defeat the point of the backend's choice.
       if (isAxiosError<ApiErrorResponse>(error) && error.response?.status === 401) {
         setServerError('Email o password non corretti')
+      } else if (isAxiosError<ApiErrorResponse>(error) && error.response?.status === 429) {
+        setServerError('Troppi tentativi. Riprova tra qualche minuto.')
       } else if (isAxiosError<ApiErrorResponse>(error) && error.response?.status === 403) {
         // Only answered after the password matched, so it leaks nothing.
         setServerError(

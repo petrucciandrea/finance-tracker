@@ -107,6 +107,7 @@ def _code_for_status(status_code: int) -> str:
         status.HTTP_404_NOT_FOUND: "NOT_FOUND",
         status.HTTP_409_CONFLICT: "CONFLICT",
         status.HTTP_422_UNPROCESSABLE_ENTITY: "UNPROCESSABLE_ENTITY",
+        status.HTTP_429_TOO_MANY_REQUESTS: "RATE_LIMITED",
     }.get(status_code, "ERROR")
 
 

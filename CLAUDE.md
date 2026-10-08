@@ -138,6 +138,14 @@ the app up, no code change. The migration leaves every existing user `approved`.
 - Tests run with `registration_mode = "open"` (autouse fixture in `conftest.py`);
   `test_registration_approval.py` switches it back.
 
+### Auth endpoints are rate limited, in memory, per client IP
+`core/rate_limit.py` (a dependency on register, login, refresh, password change and the
+approval endpoints) answers 429 with `Retry-After`. It is process-local like the CSV
+preview store: one worker only, otherwise each worker counts separately — move both to
+Redis together. Behind a reverse proxy uvicorn needs `--proxy-headers
+--forwarded-allow-ips=<proxy>`, or every request shares the proxy's bucket. The counters
+are global, so `conftest.py` resets them before each test.
+
 ### Login leaks nothing about which emails exist
 Unknown email and wrong password both return the same 401 with the same message. Don't "improve" the error message.
 

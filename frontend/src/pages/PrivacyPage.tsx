@@ -85,8 +85,8 @@ export function PrivacyPage() {
       <p>
         Puoi chiedere accesso, rettifica, cancellazione, limitazione, portabilità dei tuoi dati e opporti al
         trattamento scrivendo a {LEGAL.email ? <a className="link" href={`mailto:${LEGAL.email}`}>{LEGAL.email}</a> : '[contatto non configurato]'}
-        . Al momento cancellazione ed esportazione dei dati avvengono su richiesta: rispondiamo entro 30 giorni. Hai
-        inoltre il diritto di proporre reclamo al{' '}
+        . Puoi anche fare da solo, dal tuo profilo (sezione «Dati e privacy»): scaricare una copia dei dati in
+        formato JSON ed eliminare definitivamente l&apos;account. Hai inoltre il diritto di proporre reclamo al{' '}
         <a className="link" href="https://www.garanteprivacy.it" target="_blank" rel="noreferrer">
           Garante per la protezione dei dati personali
         </a>

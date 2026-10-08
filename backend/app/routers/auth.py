@@ -15,6 +15,7 @@ from hashlib import sha256
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from jose import JWTError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -34,6 +35,7 @@ from app.deps import get_current_user, get_db
 from app.models import Currency, User
 from app.models.refresh_token import RefreshToken
 from app.schemas import (
+    AccountDeleteRequest,
     ApprovalDecisionRequest,
     ApprovalRequestInfo,
     ApprovalTokenRequest,
@@ -47,6 +49,7 @@ from app.schemas import (
 from app.schemas import (
     User as UserSchema,
 )
+from app.services import user_data
 from app.services.email import send_email
 
 logger = logging.getLogger(__name__)
@@ -59,6 +62,7 @@ _LIMIT_LOGIN = Depends(rate_limit("login", 10, 300))
 _LIMIT_REFRESH = Depends(rate_limit("refresh", 60, 300))
 _LIMIT_PASSWORD = Depends(rate_limit("password", 5, 600))
 _LIMIT_APPROVAL = Depends(rate_limit("approval", 20, 600))
+_LIMIT_ACCOUNT_DATA = Depends(rate_limit("account_data", 5, 600))
 
 
 def _hash_token(token: str) -> str:
@@ -304,6 +308,32 @@ def change_password(
     refresh_token = create_refresh_token(current_user.id)
     _store_refresh_token(db, current_user.id, refresh_token)
     return TokenPair(access_token=access_token, refresh_token=refresh_token)
+
+
+@router.get("/me/export", dependencies=[_LIMIT_ACCOUNT_DATA])
+def export_my_data(
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> JSONResponse:
+    return JSONResponse(
+        user_data.export_user(db, current_user.id),
+        headers={"Content-Disposition": 'attachment; filename="finanze-export.json"'},
+    )
+
+
+@router.delete(
+    "/me", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_LIMIT_ACCOUNT_DATA]
+)
+def delete_my_account(
+    payload: AccountDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    if not verify_password(payload.password, current_user.password_hash):
+        # 403, not 401: the client treats a 401 as an expired session and would
+        # refresh and retry, which is wrong for "you typed the wrong password".
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Incorrect password")
+    user_data.erase_user(db, current_user.id)
+    db.commit()
 
 
 # ---------------------------------------------------------------------------

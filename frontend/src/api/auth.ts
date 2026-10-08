@@ -43,6 +43,21 @@ export async function changePassword(payload: PasswordChangePayload): Promise<To
   return data
 }
 
+/** Downloads the full export as a file; the JSON is built server-side. */
+export async function downloadMyData(): Promise<void> {
+  const { data } = await apiClient.get<Blob>('/auth/me/export', { responseType: 'blob' })
+  const url = URL.createObjectURL(data)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'finanze-export.json'
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+export async function deleteAccount(password: string): Promise<void> {
+  await apiClient.delete('/auth/me', { data: { password } })
+}
+
 export async function previewApproval(token: string): Promise<ApprovalRequestInfo> {
   const { data } = await apiClient.post<ApprovalRequestInfo>('/auth/approvals/preview', { token })
   return data

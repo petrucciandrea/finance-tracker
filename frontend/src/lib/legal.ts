@@ -15,7 +15,7 @@ export const LEGAL = {
   hosting: (env.VITE_LEGAL_HOSTING as string | undefined) ?? '',
   // Mirror of the backend's TERMS_VERSION: bump both when the texts change.
   version: '2026-10',
-  updatedOn: '9 ottobre 2026',
+  updatedOn: '8 ottobre 2026',
 }
 
 /** True while the controller identity is still missing: the pages say so loudly. */

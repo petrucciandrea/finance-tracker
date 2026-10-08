@@ -12,6 +12,7 @@ import { ErrorBlock } from '@/components/ui/EmptyState'
 import { Field } from '@/components/ui/Field'
 import { CheckIcon, LogOutIcon } from '@/components/ui/Icon'
 import { PasswordInput } from '@/components/ui/PasswordInput'
+import { downloadMyData } from '@/api/auth'
 import { useAuth } from '@/hooks/useAuth'
 import { apiErrorMessage } from '@/lib/apiError'
 import { CURRENCIES, CURRENCY_NAMES, type CurrencyCode } from '@/lib/currencies'
@@ -23,6 +24,7 @@ const SECTIONS = [
   { id: 'lavoro', label: 'Lavoro' },
   { id: 'aspetto', label: 'Aspetto' },
   { id: 'password', label: 'Password' },
+  { id: 'privacy', label: 'Dati e privacy' },
 ]
 
 const MIN_PASSWORD = 8
@@ -295,6 +297,101 @@ function ChangePassword() {
   )
 }
 
+function DataAndPrivacy() {
+  const { deleteAccount } = useAuth()
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const [downloading, setDownloading] = useState(false)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
+  const [confirming, setConfirming] = useState(false)
+  const [password, setPassword] = useState('')
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  async function handleDownload() {
+    setDownloading(true)
+    setDownloadError(null)
+    try {
+      await downloadMyData()
+    } catch (e) {
+      setDownloadError(apiErrorMessage(e, 'Non sono riuscito a scaricare i dati. Riprova.'))
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  function closeDialog() {
+    setConfirming(false)
+    setPassword('')
+    setDeleteError(null)
+  }
+
+  async function handleDelete() {
+    if (password.length === 0) {
+      setDeleteError('Inserisci la password per confermare.')
+      return
+    }
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      await deleteAccount(password)
+      // Cached data belongs to the account that no longer exists.
+      queryClient.clear()
+      navigate('/login', { replace: true })
+    } catch (e) {
+      setDeleteError(apiErrorMessage(e, 'Non sono riuscito a eliminare l’account. Riprova.', { 403: 'La password non è corretta.' }))
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <div className="flex max-w-[560px] flex-col gap-5">
+      <div className="flex flex-col items-start gap-2">
+        <p className="text-[14px] text-ink-2">
+          Scarica una copia di tutti i tuoi dati (conti, movimenti, investimenti, beni, fatture…) in un file JSON.
+        </p>
+        <Button onClick={handleDownload} disabled={downloading}>
+          {downloading ? 'Preparazione…' : 'Scarica i miei dati'}
+        </Button>
+        {downloadError && <ErrorBlock>{downloadError}</ErrorBlock>}
+      </div>
+
+      <div className="flex flex-col items-start gap-2 border-t border-line pt-5">
+        <p className="text-[14px] text-ink-2">
+          Elimina il tuo account e tutti i dati collegati. L’operazione è definitiva e non si può annullare: scarica
+          prima una copia, se ti serve.
+        </p>
+        <Button variant="danger" onClick={() => setConfirming(true)}>
+          Elimina account…
+        </Button>
+      </div>
+
+      <ConfirmDialog
+        open={confirming}
+        title="Eliminare l’account?"
+        confirmLabel="Elimina definitivamente"
+        onConfirm={handleDelete}
+        onCancel={closeDialog}
+        pending={deleting}
+        error={deleteError}
+      >
+        <p className="mb-3 text-[14px] text-ink-2">
+          Verranno cancellati subito e per sempre conti, movimenti, investimenti, beni, fatture e ogni altro dato. Per
+          confermare inserisci la tua password.
+        </p>
+        <Field label="Password" htmlFor="delete_password">
+          <PasswordInput
+            id="delete_password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </Field>
+      </ConfirmDialog>
+    </div>
+  )
+}
+
 export function ProfilePage() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
@@ -358,6 +455,9 @@ export function ProfilePage() {
           </Section>
           <Section id="password" title="Cambia password">
             <ChangePassword />
+          </Section>
+          <Section id="privacy" title="Dati e privacy" description="Una copia dei tuoi dati, o la cancellazione definitiva dell’account.">
+            <DataAndPrivacy />
           </Section>
         </div>
       </div>

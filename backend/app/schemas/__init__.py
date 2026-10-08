@@ -245,6 +245,10 @@ class UserUpdate(BaseModel):
     work_type: WorkType | None = None
 
 
+class AccountDeleteRequest(BaseModel):
+    password: str = Field(max_length=_PASSWORD_MAX)
+
+
 class PasswordChangeRequest(BaseModel):
     current_password: str = Field(max_length=_PASSWORD_MAX)
     new_password: str = Field(min_length=8, max_length=_PASSWORD_MAX)

@@ -15,6 +15,8 @@ export interface AuthContextValue {
   logout: () => Promise<void>
   updateProfile: (payload: UserUpdatePayload) => Promise<void>
   changePassword: (payload: PasswordChangePayload) => Promise<void>
+  // Permanent: erases the account and all its data after re-checking the password.
+  deleteAccount: (password: string) => Promise<void>
   setHideAmounts: (hidden: boolean) => void
 }
 

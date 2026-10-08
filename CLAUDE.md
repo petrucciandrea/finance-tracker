@@ -99,6 +99,15 @@ Each transaction stores `amount`, `currency`, plus `amount_base_currency` and `e
 
 Categories are the exception to the "just soft-delete it" rule: deleting one that still has active subcategories returns 409, since a truncated hierarchy is worse to render than one orphaned FK.
 
+**The one exception:** deleting a *user* (`DELETE /auth/me`, GDPR art. 17) hard-deletes
+everything they own, soft-deleted rows included — a person asking to be forgotten gets
+forgotten. `services/user_data.py` holds the ordered table registry (children first; the
+FKs have no ON DELETE CASCADE) that drives both the erasure and `GET /auth/me/export`.
+`test_user_data.py` fails when a table is neither in that registry nor in `GLOBAL_TABLES`, so
+add every new table to one of the two. The export leaves out `password_hash` and
+`refresh_tokens`; a wrong password on the delete is a 403, not 401 (the client would treat a
+401 as an expired session and retry).
+
 ### Closed accounts are not deleted accounts
 `accounts.closed_at` (a `DATE`, set/cleared by PATCH) marks an account as closed. Unlike
 `deleted_at` it keeps the account in lists, balances and net worth. It only refuses
@@ -186,9 +195,8 @@ bumped together when the privacy policy or terms change materially.
 `/privacy` and `/termini` are public routes. The controller's identity comes from build-time
 env vars, not the repo: `VITE_LEGAL_CONTROLLER`, `VITE_LEGAL_EMAIL` (a public contact,
 **not** `ADMIN_EMAIL`), optional `VITE_LEGAL_ADDRESS` and `VITE_LEGAL_HOSTING`. While the first
-two are unset the pages show a warning banner. The texts say deletion and export happen on
-request by email, because that is true today — update them when `DELETE /auth/me` and the
-export endpoint exist.
+two are unset the pages show a warning banner. The privacy text points to the profile's
+"Dati e privacy" section for self-service export/deletion: keep it true if those change.
 
 ### Login leaks nothing about which emails exist
 Unknown email and wrong password both return the same 401 with the same message. Don't "improve" the error message.

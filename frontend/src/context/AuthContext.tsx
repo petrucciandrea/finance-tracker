@@ -96,6 +96,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null)
   }
 
+  async function deleteAccount(password: string) {
+    await authApi.deleteAccount(password)
+    // The server already dropped every token with the account, so there is
+    // nothing to revoke (unlike logout): just forget the session locally.
+    setAccessToken(null)
+    setStoredRefreshToken(null)
+    setUser(null)
+  }
+
   async function updateProfile(payload: UserUpdatePayload) {
     const updatedUser = await authApi.updateProfile(payload)
     setUser(updatedUser)
@@ -125,7 +134,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, isLoading, login, register, logout, updateProfile, changePassword, setHideAmounts }}
+      value={{ user, isLoading, login, register, logout, updateProfile, changePassword, deleteAccount, setHideAmounts }}
     >
       {children}
     </AuthContext.Provider>

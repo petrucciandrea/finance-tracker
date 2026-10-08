@@ -71,10 +71,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function register(payload: RegisterPayload) {
-    await authApi.register(payload)
+    const created = await authApi.register(payload)
     // Registration doesn't log the user in on the backend — chain a login
     // so the UX is "register" -> immediately in the app, one less step.
-    await login({ email: payload.email, password: payload.password })
+    // A pending account can't log in yet (403), so skip it.
+    if (created.approval_status === 'approved') {
+      await login({ email: payload.email, password: payload.password })
+    }
+    return created
   }
 
   async function logout() {

@@ -46,6 +46,16 @@ export interface User {
   date_of_birth: string | null
   hide_amounts: boolean
   work_type: WorkType | null
+  approval_status: ApprovalStatus
+  created_at: string
+}
+
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected'
+
+/** What the admin sees on the page the approval email links to. */
+export interface ApprovalRequestInfo {
+  email: string
+  approval_status: ApprovalStatus
   created_at: string
 }
 

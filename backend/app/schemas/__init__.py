@@ -12,6 +12,7 @@ from datetime import date as date_
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -246,6 +247,22 @@ class User(ORMBase):
     date_of_birth: date_ | None = None
     hide_amounts: bool
     work_type: WorkType | None = None
+    approval_status: Literal["pending", "approved", "rejected"]
+    created_at: datetime
+
+
+class ApprovalTokenRequest(BaseModel):
+    token: str
+
+
+class ApprovalDecisionRequest(BaseModel):
+    token: str
+    decision: Literal["approve", "reject"]
+
+
+class ApprovalRequestInfo(BaseModel):
+    email: EmailStr
+    approval_status: Literal["pending", "approved", "rejected"]
     created_at: datetime
 
 

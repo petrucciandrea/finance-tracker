@@ -50,6 +50,8 @@ def get_current_user(
         raise credentials_exception from None
 
     user = db.get(User, payload.user_id)
-    if user is None:
+    # A token outlives a rejection or a revoked approval by up to its lifetime;
+    # the status is the authority, not the token.
+    if user is None or user.approval_status != "approved":
         raise credentials_exception
     return user

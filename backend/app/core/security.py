@@ -61,6 +61,16 @@ def create_refresh_token(user_id: UUID) -> str:
     )
 
 
+def create_approval_token(user_id: UUID) -> str:
+    # Goes in the email to the admin. Its own `type` keeps it from being
+    # accepted as an access/refresh token (and the other way round).
+    return _create_token(
+        user_id,
+        timedelta(days=settings.approval_token_expire_days),
+        token_type="approval",
+    )
+
+
 class TokenPayload:
     def __init__(self, user_id: UUID, token_type: str):
         self.user_id = user_id

@@ -63,6 +63,14 @@ def db_session(engine) -> Generator[Session, None, None]:
         connection.close()
 
 
+@pytest.fixture(autouse=True)
+def open_registration(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Production defaults to "approval", where a fresh account can't log in.
+    # Most tests just need a usable user; the approval flow has its own file
+    # that switches the mode back.
+    monkeypatch.setattr(settings, "registration_mode", "open")
+
+
 @pytest.fixture
 def client(db_session: Session) -> Generator[TestClient, None, None]:
     def _get_db_override() -> Generator[Session, None, None]:

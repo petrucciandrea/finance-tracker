@@ -74,6 +74,12 @@ class User(Base, TimestampMixin):
     # Only flat_rate unlocks a dedicated section so far. It only gates the
     # UI: a tax liability keeps counting in net worth whatever this says.
     work_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # pending / approved / rejected. Only `approved` can log in or use a
+    # token. The default is `approved` so rows that predate the column (the
+    # owner's own account) keep working; registration sets it explicitly.
+    approval_status: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="approved", server_default="approved"
+    )
 
     accounts: Mapped[list["Account"]] = relationship(back_populates="user")
     categories: Mapped[list["Category"]] = relationship(back_populates="user")
@@ -84,6 +90,10 @@ class User(Base, TimestampMixin):
     __table_args__ = (
         CheckConstraint(
             "work_type in ('employee','flat_rate','ordinary')", name="ck_users_work_type"
+        ),
+        CheckConstraint(
+            "approval_status in ('pending','approved','rejected')",
+            name="ck_users_approval_status",
         ),
     )
 

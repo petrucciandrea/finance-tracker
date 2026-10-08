@@ -9,7 +9,9 @@ export interface AuthContextValue {
   user: User | null
   isLoading: boolean // true only during the initial bootstrap, not during login/register calls
   login: (payload: LoginPayload) => Promise<void>
-  register: (payload: RegisterPayload) => Promise<void>
+  // Resolves with the created user: when registration is gated by admin
+  // approval it comes back `pending` and nobody is logged in.
+  register: (payload: RegisterPayload) => Promise<User>
   logout: () => Promise<void>
   updateProfile: (payload: UserUpdatePayload) => Promise<void>
   changePassword: (payload: PasswordChangePayload) => Promise<void>

@@ -41,6 +41,13 @@ export function LoginPage() {
       // that would defeat the point of the backend's choice.
       if (isAxiosError<ApiErrorResponse>(error) && error.response?.status === 401) {
         setServerError('Email o password non corretti')
+      } else if (isAxiosError<ApiErrorResponse>(error) && error.response?.status === 403) {
+        // Only answered after the password matched, so it leaks nothing.
+        setServerError(
+          error.response.data?.error.message === 'ACCOUNT_REJECTED'
+            ? 'La tua registrazione non è stata approvata.'
+            : 'Il tuo account è in attesa di approvazione. Riceverai un’email appena sarà attivo.',
+        )
       } else {
         setServerError('Si è verificato un errore. Riprova.')
       }

@@ -1,5 +1,6 @@
 import { apiClient } from './client'
 import type {
+  ApprovalRequestInfo,
   LoginPayload,
   PasswordChangePayload,
   RegisterPayload,
@@ -39,4 +40,14 @@ export async function updateProfile(payload: UserUpdatePayload): Promise<User> {
 
 export async function changePassword(payload: PasswordChangePayload): Promise<void> {
   await apiClient.post('/auth/me/password', payload)
+}
+
+export async function previewApproval(token: string): Promise<ApprovalRequestInfo> {
+  const { data } = await apiClient.post<ApprovalRequestInfo>('/auth/approvals/preview', { token })
+  return data
+}
+
+export async function decideApproval(token: string, decision: 'approve' | 'reject'): Promise<ApprovalRequestInfo> {
+  const { data } = await apiClient.post<ApprovalRequestInfo>('/auth/approvals/decision', { token, decision })
+  return data
 }

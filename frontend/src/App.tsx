@@ -4,6 +4,7 @@ import { ProtectedRoute } from '@/components/layout/ProtectedRoute'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { LoginPage } from '@/pages/LoginPage'
 import { RegisterPage } from '@/pages/RegisterPage'
+import { ApprovalPage } from '@/pages/ApprovalPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { AccountsPage } from '@/pages/AccountsPage'
 import { CategoriesPage } from '@/pages/CategoriesPage'
@@ -20,6 +21,8 @@ function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        {/* Opened from the admin's email: the signed token in the URL hash is the credential. */}
+        <Route path="/approvazione" element={<ApprovalPage />} />
 
         <Route element={<ProtectedRoute />}>
           <Route element={<AppLayout />}>

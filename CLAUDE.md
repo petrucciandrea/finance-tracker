@@ -118,6 +118,26 @@ If no `category_id` is supplied, the backend assigns (creating on first use) a *
 
 JWTs include a `jti` (random UUID) because `iat`/`exp` are second-resolution — without it, two tokens issued in the same second are byte-identical and collide on the `token_hash` unique index.
 
+### Registration is gated by admin approval (switchable to open)
+`REGISTRATION_MODE=approval` (the default, so a forgotten setting is not an open door)
+creates the user with `users.approval_status = 'pending'` and emails `ADMIN_EMAIL` a link
+to `/approvazione#token=…`. `open` approves immediately: that is the switch for opening
+the app up, no code change. The migration leaves every existing user `approved`.
+
+- The link only opens a page; approving/rejecting is a POST (`/auth/approvals/decision`).
+  A GET that decides would be triggered by mail scanners prefetching the URL. The token is
+  in the URL *fragment* so it never reaches a server log or Referer header.
+- A decision is final (409 afterwards), so a link opened twice can't flip it.
+- Login returns 403 `ACCOUNT_PENDING_APPROVAL` / `ACCOUNT_REJECTED` **only after the password
+  matched**; before that it is still the one 401. `get_current_user` and `/auth/refresh`
+  re-check the status too: a token outlives a rejection otherwise.
+- Email is plain SMTP (`services/email.py`), run as a background task: a dead mail server
+  must not turn a registration into a 500. Without `SMTP_HOST` the message is only logged
+  (that is the dev workflow). Production refuses to boot in approval mode without
+  `ADMIN_EMAIL`, `SMTP_HOST` and `SMTP_FROM`.
+- Tests run with `registration_mode = "open"` (autouse fixture in `conftest.py`);
+  `test_registration_approval.py` switches it back.
+
 ### Login leaks nothing about which emails exist
 Unknown email and wrong password both return the same 401 with the same message. Don't "improve" the error message.
 

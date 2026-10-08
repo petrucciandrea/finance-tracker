@@ -6,8 +6,9 @@ and Alembic's env.py (via `from app.core.config import settings`).
 """
 
 from functools import lru_cache
+from typing import Literal
 
-from pydantic import Field, PostgresDsn, field_validator
+from pydantic import Field, PostgresDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,6 +38,26 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 30
 
+    # --- Registration ---
+    # "approval": a new account is created pending and can't log in until the
+    # admin approves it from the link emailed to `admin_email`. "open": anyone
+    # can register and is approved immediately. Defaults to the closed mode so
+    # a deploy that forgets to configure it is not accidentally open.
+    registration_mode: Literal["approval", "open"] = "approval"
+    admin_email: str | None = None
+    approval_token_expire_days: int = 14
+    # Public URL of the frontend: the approval/login links in emails point here.
+    frontend_base_url: str = "http://localhost:5173"
+
+    # --- Email (SMTP) ---
+    # Unset host = emails are only logged, never sent (development).
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from: str | None = None
+    smtp_starttls: bool = True
+
     # --- CORS ---
     cors_allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
 
@@ -59,6 +80,21 @@ class Settings(BaseSettings):
         if v not in allowed:
             raise ValueError(f"environment must be one of {allowed}, got {v!r}")
         return v
+
+    @model_validator(mode="after")
+    def validate_approval_setup(self) -> "Settings":
+        # In production, approval mode without anywhere to send the request
+        # would leave every new account pending forever with no one told.
+        if (
+            self.is_production
+            and self.registration_mode == "approval"
+            and not (self.admin_email and self.smtp_host and self.smtp_from)
+        ):
+            raise ValueError(
+                "registration_mode=approval in production needs admin_email, "
+                "smtp_host and smtp_from"
+            )
+        return self
 
     @property
     def is_production(self) -> bool:

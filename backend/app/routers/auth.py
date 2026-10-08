@@ -3,18 +3,25 @@ Auth endpoints: register, login, refresh, logout, me.
 
 Refresh tokens are stored hashed in the DB (see RefreshToken model) so
 `/auth/logout` performs a real revocation, not just a client-side forget.
+
+Registration is gated by `settings.registration_mode`: in "approval" mode a new
+account is `pending` until the admin follows the link emailed to them (the
+`/auth/approvals/*` endpoints, authenticated by the token alone).
 """
 
+import logging
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from jose import JWTError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.security import (
     create_access_token,
+    create_approval_token,
     create_refresh_token,
     decode_token,
     hash_password,
@@ -24,6 +31,9 @@ from app.deps import get_current_user, get_db
 from app.models import User
 from app.models.refresh_token import RefreshToken
 from app.schemas import (
+    ApprovalDecisionRequest,
+    ApprovalRequestInfo,
+    ApprovalTokenRequest,
     PasswordChangeRequest,
     RefreshRequest,
     TokenPair,
@@ -34,6 +44,9 @@ from app.schemas import (
 from app.schemas import (
     User as UserSchema,
 )
+from app.services.email import send_email
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -56,22 +69,47 @@ def _store_refresh_token(db: Session, user_id, token: str) -> None:
     db.commit()
 
 
+def _notify_admin_of_registration(user_id: UUID, user_email: str) -> None:
+    if not settings.admin_email:
+        # Without this the account would sit pending with no one told.
+        logger.warning("ADMIN_EMAIL is not set: %s is pending and nobody was notified", user_email)
+        return
+    token = create_approval_token(user_id)
+    # The token rides in the URL fragment, which browsers never send to the
+    # server: it stays out of the static host's access logs and Referer headers.
+    link = f"{settings.frontend_base_url.rstrip('/')}/approvazione#token={token}"
+    send_email(
+        settings.admin_email,
+        f"{settings.app_name}: nuova registrazione da approvare",
+        f"{user_email} ha chiesto di registrarsi.\n\n"
+        f"Approva o rifiuta da qui (valido {settings.approval_token_expire_days} giorni):\n"
+        f"{link}\n",
+    )
+
+
 @router.post("/register", response_model=UserSchema, status_code=status.HTTP_201_CREATED)
-def register(payload: UserCreate, db: Session = Depends(get_db)) -> User:
+def register(
+    payload: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
+) -> User:
     existing = db.query(User).filter(User.email == payload.email).first()
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Email already registered"
         )
 
+    needs_approval = settings.registration_mode == "approval"
     user = User(
         email=payload.email,
         password_hash=hash_password(payload.password),
         base_currency=payload.base_currency,
+        approval_status="pending" if needs_approval else "approved",
     )
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    if needs_approval:
+        background_tasks.add_task(_notify_admin_of_registration, user.id, user.email)
     return user
 
 
@@ -83,6 +121,18 @@ def login(payload: UserLogin, db: Session = Depends(get_db)) -> TokenPair:
         # which one it was.
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password"
+        )
+
+    # Checked only after the password matched, so these distinct answers don't
+    # reveal which emails exist to someone who doesn't know the password.
+    if user.approval_status != "approved":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "ACCOUNT_PENDING_APPROVAL"
+                if user.approval_status == "pending"
+                else "ACCOUNT_REJECTED"
+            ),
         )
 
     access_token = create_access_token(user.id)
@@ -107,6 +157,12 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> TokenPair
     stored = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
 
     if stored is None or stored.revoked_at is not None or stored.expires_at < datetime.now(UTC):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token expired or revoked"
+        )
+
+    user = db.get(User, token_data.user_id)
+    if user is None or user.approval_status != "approved":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token expired or revoked"
         )
@@ -190,3 +246,66 @@ def change_password(
         )
     current_user.password_hash = hash_password(payload.new_password)
     db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Admin approval. No login: the signed token in the emailed link is the
+# credential. Two steps (preview, then decision) because a GET that approves
+# would be triggered by mail scanners and link previewers opening the URL.
+# ---------------------------------------------------------------------------
+
+def _user_from_approval_token(db: Session, token: str) -> User:
+    try:
+        token_data = decode_token(token, expected_type="approval")
+    except (JWTError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired link"
+        ) from None
+    user = db.get(User, token_data.user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
+    return user
+
+
+@router.post("/approvals/preview", response_model=ApprovalRequestInfo)
+def preview_approval(
+    payload: ApprovalTokenRequest, db: Session = Depends(get_db)
+) -> User:
+    return _user_from_approval_token(db, payload.token)
+
+
+@router.post("/approvals/decision", response_model=ApprovalRequestInfo)
+def decide_approval(
+    payload: ApprovalDecisionRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> User:
+    user = _user_from_approval_token(db, payload.token)
+    # One decision per request: a link opened twice (or approve after reject)
+    # must not silently flip an outcome the admin already chose.
+    if user.approval_status != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Request already handled"
+        )
+
+    approved = payload.decision == "approve"
+    user.approval_status = "approved" if approved else "rejected"
+    db.commit()
+    db.refresh(user)
+
+    login_link = f"{settings.frontend_base_url.rstrip('/')}/login"
+    if approved:
+        background_tasks.add_task(
+            send_email,
+            user.email,
+            f"{settings.app_name}: account approvato",
+            f"Il tuo account è stato approvato. Puoi accedere da qui:\n{login_link}\n",
+        )
+    else:
+        background_tasks.add_task(
+            send_email,
+            user.email,
+            f"{settings.app_name}: registrazione non approvata",
+            "La tua richiesta di registrazione non è stata approvata.\n",
+        )
+    return user

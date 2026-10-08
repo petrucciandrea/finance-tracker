@@ -6,7 +6,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { isAxiosError } from 'axios'
 import { AuthLayout } from '@/components/layout/AuthLayout'
 import { Button } from '@/components/ui/Button'
-import { ErrorBlock } from '@/components/ui/EmptyState'
+import { ErrorBlock, Notice } from '@/components/ui/EmptyState'
 import { Field } from '@/components/ui/Field'
 import { PasswordInput } from '@/components/ui/PasswordInput'
 import { useAuth } from '@/hooks/useAuth'
@@ -25,6 +25,7 @@ export function RegisterPage() {
   const { register: registerUser } = useAuth()
   const navigate = useNavigate()
   const [serverError, setServerError] = useState<string | null>(null)
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null)
 
   const {
     register,
@@ -38,8 +39,12 @@ export function RegisterPage() {
   async function onSubmit(values: RegisterFormValues) {
     setServerError(null)
     try {
-      await registerUser(values)
-      navigate('/', { replace: true })
+      const created = await registerUser(values)
+      if (created.approval_status === 'approved') {
+        navigate('/', { replace: true })
+      } else {
+        setPendingEmail(created.email)
+      }
     } catch (error) {
       if (isAxiosError<ApiErrorResponse>(error) && error.response?.status === 409) {
         setServerError('Esiste già un account con questa email')
@@ -47,6 +52,23 @@ export function RegisterPage() {
         setServerError('Si è verificato un errore. Riprova.')
       }
     }
+  }
+
+  if (pendingEmail) {
+    return (
+      <AuthLayout title="Richiesta inviata" subtitle="Le registrazioni sono su approvazione.">
+        <div className="mt-6 flex flex-col gap-4">
+          <Notice tone="info">In attesa di approvazione</Notice>
+          <p className="text-[15px] text-ink-2">
+            Abbiamo registrato la richiesta per <strong className="text-ink">{pendingEmail}</strong>. Appena verrà approvata
+            riceverai un&apos;email e potrai accedere con la password che hai scelto.
+          </p>
+          <Link to="/login" className="link">
+            Vai al login
+          </Link>
+        </div>
+      </AuthLayout>
+    )
   }
 
   return (

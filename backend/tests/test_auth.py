@@ -9,7 +9,12 @@ from fastapi.testclient import TestClient
 def test_register_creates_user(client: TestClient) -> None:
     response = client.post(
         "/api/v1/auth/register",
-        json={"email": "new.user@example.com", "password": "password123", "base_currency": "EUR"},
+        json={
+            "email": "new.user@example.com",
+            "password": "password123",
+            "base_currency": "EUR",
+            "accept_terms": True,
+        },
     )
 
     assert response.status_code == 201
@@ -26,6 +31,7 @@ def test_register_rejects_duplicate_email(client: TestClient, registered_user: d
             "email": registered_user["email"],
             "password": "different-password",
             "base_currency": "USD",
+            "accept_terms": True,
         },
     )
 
@@ -62,7 +68,9 @@ def test_password_longer_than_bcrypt_limit_registers_and_logs_in(client: TestCli
     password = "ü" * 50  # 100 bytes in UTF-8
     credentials = {"email": "long.password@example.com", "password": password}
 
-    register = client.post("/api/v1/auth/register", json={**credentials, "base_currency": "EUR"})
+    register = client.post(
+        "/api/v1/auth/register", json={**credentials, "base_currency": "EUR", "accept_terms": True}
+    )
     login = client.post("/api/v1/auth/login", json=credentials)
 
     assert register.status_code == 201
@@ -219,7 +227,12 @@ def test_work_type_persists_and_clears(client: TestClient, registered_user: dict
 def test_update_me_rejects_email_already_taken(client: TestClient, registered_user: dict) -> None:
     other = client.post(
         "/api/v1/auth/register",
-        json={"email": "other.user@example.com", "password": "password123", "base_currency": "EUR"},
+        json={
+            "email": "other.user@example.com",
+            "password": "password123",
+            "base_currency": "EUR",
+            "accept_terms": True,
+        },
     )
     assert other.status_code == 201
 
@@ -293,12 +306,22 @@ def test_change_password_revokes_other_sessions_but_returns_a_working_one(
 def test_emails_are_case_insensitive(client: TestClient) -> None:
     client.post(
         "/api/v1/auth/register",
-        json={"email": "Mixed.Case@Example.com", "password": "password123", "base_currency": "EUR"},
+        json={
+            "email": "Mixed.Case@Example.com",
+            "password": "password123",
+            "base_currency": "EUR",
+            "accept_terms": True,
+        },
     )
 
     duplicate = client.post(
         "/api/v1/auth/register",
-        json={"email": "mixed.case@example.com", "password": "password123", "base_currency": "EUR"},
+        json={
+            "email": "mixed.case@example.com",
+            "password": "password123",
+            "base_currency": "EUR",
+            "accept_terms": True,
+        },
     )
     login = client.post(
         "/api/v1/auth/login",
@@ -312,7 +335,12 @@ def test_emails_are_case_insensitive(client: TestClient) -> None:
 def test_oversized_password_is_rejected(client: TestClient) -> None:
     response = client.post(
         "/api/v1/auth/register",
-        json={"email": "big@example.com", "password": "x" * 300, "base_currency": "EUR"},
+        json={
+            "email": "big@example.com",
+            "password": "x" * 300,
+            "base_currency": "EUR",
+            "accept_terms": True,
+        },
     )
 
     assert response.status_code == 422
@@ -331,7 +359,12 @@ def test_refresh_token_cannot_be_used_twice(client: TestClient, registered_user:
 def test_register_rejects_an_unknown_base_currency(client: TestClient) -> None:
     response = client.post(
         "/api/v1/auth/register",
-        json={"email": "x@example.com", "password": "password123", "base_currency": "ZZZ"},
+        json={
+            "email": "x@example.com",
+            "password": "password123",
+            "base_currency": "ZZZ",
+            "accept_terms": True,
+        },
     )
 
     assert response.status_code == 422
@@ -347,3 +380,32 @@ def test_profile_rejects_an_unknown_base_currency(
     )
 
     assert response.status_code == 422
+
+
+def test_register_requires_accepting_the_terms(client: TestClient) -> None:
+    base = {"email": "consent@example.com", "password": "password123", "base_currency": "EUR"}
+
+    missing = client.post("/api/v1/auth/register", json=base)
+    declined = client.post("/api/v1/auth/register", json={**base, "accept_terms": False})
+
+    assert missing.status_code == 422
+    assert declined.status_code == 422
+
+
+def test_register_records_which_terms_were_accepted(client: TestClient, db_session) -> None:
+    from app.core.config import settings
+    from app.models import User
+
+    client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "consent@example.com",
+            "password": "password123",
+            "base_currency": "EUR",
+            "accept_terms": True,
+        },
+    )
+
+    user = db_session.query(User).filter(User.email == "consent@example.com").one()
+    assert user.terms_accepted_at is not None
+    assert user.terms_version == settings.terms_version

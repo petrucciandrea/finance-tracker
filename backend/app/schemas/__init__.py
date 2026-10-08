@@ -209,6 +209,9 @@ class UserCreate(BaseModel):
     email: LowerEmail
     password: str = Field(min_length=8, max_length=_PASSWORD_MAX)
     base_currency: str = Field(min_length=3, max_length=3, description="ISO 4217 code, e.g. EUR")
+    # Literal[True]: unticked is a 422, so consent can't be skipped by calling
+    # the API directly instead of the form.
+    accept_terms: Literal[True]
 
 
 class UserLogin(BaseModel):

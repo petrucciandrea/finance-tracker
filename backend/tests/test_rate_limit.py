@@ -32,6 +32,7 @@ def test_register_is_throttled(client: TestClient) -> None:
                 "email": f"spam{i}@example.com",
                 "password": "password123",
                 "base_currency": "EUR",
+                "accept_terms": True,
             },
         ).status_code
 

@@ -176,6 +176,20 @@ preview instead of a 500 at confirm that would drop the batch. The symbol check 
 because the ticker is interpolated into an outbound Yahoo URL. The handlers are plain `def`
 (threadpool): the parser does a DB query per row and must not block the event loop.
 
+### Consent and legal pages
+Registration needs `accept_terms: true` (`Literal[True]` in the schema, so calling the API
+directly can't skip it) and stores `terms_accepted_at` + `terms_version`. Users that predate
+it stay NULL on purpose: they were never asked, and backfilling would fake a consent.
+`TERMS_VERSION` (backend setting) and `LEGAL.version` (`frontend/src/lib/legal.ts`) must be
+bumped together when the privacy policy or terms change materially.
+
+`/privacy` and `/termini` are public routes. The controller's identity comes from build-time
+env vars, not the repo: `VITE_LEGAL_CONTROLLER`, `VITE_LEGAL_EMAIL` (a public contact,
+**not** `ADMIN_EMAIL`), optional `VITE_LEGAL_ADDRESS` and `VITE_LEGAL_HOSTING`. While the first
+two are unset the pages show a warning banner. The texts say deletion and export happen on
+request by email, because that is true today — update them when `DELETE /auth/me` and the
+export endpoint exist.
+
 ### Login leaks nothing about which emails exist
 Unknown email and wrong password both return the same 401 with the same message. Don't "improve" the error message.
 

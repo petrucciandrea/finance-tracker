@@ -5,6 +5,8 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { LoginPage } from '@/pages/LoginPage'
 import { RegisterPage } from '@/pages/RegisterPage'
 import { ApprovalPage } from '@/pages/ApprovalPage'
+import { PrivacyPage } from '@/pages/PrivacyPage'
+import { TermsPage } from '@/pages/TermsPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { AccountsPage } from '@/pages/AccountsPage'
 import { CategoriesPage } from '@/pages/CategoriesPage'
@@ -22,6 +24,9 @@ function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         {/* Opened from the admin's email: the signed token in the URL hash is the credential. */}
+        {/* Public on purpose: the register form links to them, before anyone has an account. */}
+        <Route path="/privacy" element={<PrivacyPage />} />
+        <Route path="/termini" element={<TermsPage />} />
         <Route path="/approvazione" element={<ApprovalPage />} />
 
         <Route element={<ProtectedRoute />}>

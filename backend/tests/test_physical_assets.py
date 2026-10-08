@@ -205,6 +205,7 @@ def test_another_users_asset_is_not_found(
             "email": "other@example.com",
             "password": "another-password-1",
             "base_currency": "EUR",
+            "accept_terms": True,
         },
     )
     token = client.post(

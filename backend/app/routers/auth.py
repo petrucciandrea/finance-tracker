@@ -127,6 +127,8 @@ def register(
         password_hash=hash_password(payload.password),
         base_currency=payload.base_currency,
         approval_status="pending" if needs_approval else "approved",
+        terms_accepted_at=datetime.now(UTC),
+        terms_version=settings.terms_version,
     )
     db.add(user)
     try:

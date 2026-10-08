@@ -803,6 +803,7 @@ def test_another_users_invoice_is_not_found(client: TestClient, headers: dict) -
             "email": "other@example.com",
             "password": "another-password-1",
             "base_currency": "EUR",
+            "accept_terms": True,
         },
     )
     token = client.post(

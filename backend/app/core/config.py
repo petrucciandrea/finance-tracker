@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     registration_mode: Literal["approval", "open"] = "approval"
     admin_email: str | None = None
     approval_token_expire_days: int = 14
+    # Version of the privacy policy + terms a new account accepts. Bump it when
+    # the texts change materially; it is stored with the acceptance timestamp.
+    terms_version: str = "2026-10"
     # Public URL of the frontend: the approval/login links in emails point here.
     frontend_base_url: str = "http://localhost:5173"
 

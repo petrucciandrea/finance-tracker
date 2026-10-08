@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { CheckIcon, MoonIcon, SunIcon } from '@/components/ui/Icon'
+import { LegalFooter } from '@/components/layout/LegalFooter'
 import { useTheme } from '@/hooks/useTheme'
 
 const POINTS = [
@@ -74,6 +75,7 @@ export function AuthLayout({ title, subtitle, children }: { title: string; subti
               {next === 'dark' ? 'Tema scuro' : 'Tema chiaro'}
             </button>
           </div>
+          <LegalFooter className="mt-4" />
         </div>
       </main>
     </div>

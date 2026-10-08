@@ -29,7 +29,9 @@ def approval_mode(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
 
 
 def _register(client: TestClient) -> dict:
-    response = client.post("/api/v1/auth/register", json={**CREDS, "base_currency": "EUR"})
+    response = client.post(
+        "/api/v1/auth/register", json={**CREDS, "base_currency": "EUR", "accept_terms": True}
+    )
     assert response.status_code == 201, response.text
     return response.json()
 

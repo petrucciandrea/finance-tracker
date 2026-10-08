@@ -117,6 +117,7 @@ def test_update_transaction_rejects_category_owned_by_another_user(
             "email": "other.user2@example.com",
             "password": "password123",
             "base_currency": "EUR",
+            "accept_terms": True,
         },
     )
     assert other_user.status_code == 201
@@ -202,7 +203,12 @@ def test_create_transaction_rejects_account_owned_by_another_user(
     # user's account — this is the ownership check in _get_owned_account_or_404.
     other_user = client.post(
         "/api/v1/auth/register",
-        json={"email": "other.user@example.com", "password": "password123", "base_currency": "EUR"},
+        json={
+            "email": "other.user@example.com",
+            "password": "password123",
+            "base_currency": "EUR",
+            "accept_terms": True,
+        },
     )
     assert other_user.status_code == 201
     login = client.post(

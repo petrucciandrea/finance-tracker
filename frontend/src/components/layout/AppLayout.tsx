@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentType, type SVGProps } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { LegalFooter } from '@/components/layout/LegalFooter'
 import { ThemeChooser } from '@/components/layout/ThemeChooser'
 import {
   ChevronDownIcon,
@@ -346,6 +347,7 @@ export function AppLayout() {
           <Outlet key={hidden ? 'amounts-hidden' : 'amounts-shown'} />
         </div>
       </main>
+      <LegalFooter className="pb-6" />
     </div>
   )
 }

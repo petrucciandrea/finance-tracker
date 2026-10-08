@@ -77,6 +77,13 @@ class User(Base, TimestampMixin):
     # pending / approved / rejected. Only `approved` can log in or use a
     # token. The default is `approved` so rows that predate the column (the
     # owner's own account) keep working; registration sets it explicitly.
+    # Consent given at registration (privacy policy + terms). NULL for accounts
+    # that predate the consent checkbox: they were never asked, so nothing is
+    # backfilled to look as if they had been.
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    terms_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     approval_status: Mapped[str] = mapped_column(
         String(10), nullable=False, default="approved", server_default="approved"
     )

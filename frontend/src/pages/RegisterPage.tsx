@@ -17,6 +17,7 @@ const registerSchema = z.object({
   email: z.string().email('Inserisci un indirizzo email valido'),
   password: z.string().min(8, 'La password deve avere almeno 8 caratteri'),
   base_currency: z.enum(CURRENCIES),
+  accept_terms: z.boolean().refine((accepted) => accepted, 'Per registrarti devi accettare privacy e termini'),
 })
 
 type RegisterFormValues = z.infer<typeof registerSchema>
@@ -112,6 +113,35 @@ export function RegisterPage() {
             ))}
           </select>
         </Field>
+
+        <div>
+          <label className="flex min-h-11 cursor-pointer items-start gap-3 text-[14px] text-ink-2">
+            <input
+              id="accept_terms"
+              type="checkbox"
+              aria-invalid={!!errors.accept_terms}
+              aria-describedby={errors.accept_terms ? 'accept_terms-msg' : undefined}
+              className="mt-0.5 h-5 w-5 flex-none cursor-pointer"
+              {...register('accept_terms')}
+            />
+            <span>
+              Ho letto e accetto l&apos;
+              <Link to="/privacy" target="_blank" className="link">
+                informativa sulla privacy
+              </Link>{' '}
+              e i{' '}
+              <Link to="/termini" target="_blank" className="link">
+                termini di servizio
+              </Link>
+              .
+            </span>
+          </label>
+          {errors.accept_terms && (
+            <p id="accept_terms-msg" role="alert" className="mt-1.5 text-[13px] font-bold text-neg">
+              ✕ {errors.accept_terms.message}
+            </p>
+          )}
+        </div>
 
         {serverError && <ErrorBlock>{serverError}</ErrorBlock>}
 

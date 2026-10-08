@@ -100,6 +100,7 @@ def registered_user(client: TestClient) -> dict:
         "email": "test.user@example.com",
         "password": "a-secure-password-123",
         "base_currency": "EUR",
+        "accept_terms": True,
     }
     response = client.post("/api/v1/auth/register", json=payload)
     assert response.status_code == 201, response.text

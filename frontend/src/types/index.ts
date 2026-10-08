@@ -63,6 +63,7 @@ export interface RegisterPayload {
   email: string
   password: string
   base_currency: string
+  accept_terms: boolean
 }
 
 export interface LoginPayload {

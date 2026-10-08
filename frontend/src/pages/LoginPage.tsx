@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/Button'
 import { ErrorBlock } from '@/components/ui/EmptyState'
 import { Field } from '@/components/ui/Field'
 import { PasswordInput } from '@/components/ui/PasswordInput'
+import * as authApi from '@/api/auth'
 import { useAuth } from '@/hooks/useAuth'
 import type { ApiErrorResponse } from '@/types'
 
@@ -23,15 +24,20 @@ export function LoginPage() {
   const { login } = useAuth()
   const navigate = useNavigate()
   const [serverError, setServerError] = useState<string | null>(null)
+  const [needsVerification, setNeedsVerification] = useState(false)
+  const [resent, setResent] = useState(false)
 
   const {
     register,
     handleSubmit,
+    getValues,
     formState: { errors, isSubmitting },
   } = useForm<LoginFormValues>({ resolver: zodResolver(loginSchema) })
 
   async function onSubmit(values: LoginFormValues) {
     setServerError(null)
+    setNeedsVerification(false)
+    setResent(false)
     try {
       await login(values)
       navigate('/', { replace: true })
@@ -45,15 +51,27 @@ export function LoginPage() {
         setServerError('Troppi tentativi. Riprova tra qualche minuto.')
       } else if (isAxiosError<ApiErrorResponse>(error) && error.response?.status === 403) {
         // Only answered after the password matched, so it leaks nothing.
-        setServerError(
-          error.response.data?.error.message === 'ACCOUNT_REJECTED'
-            ? 'La tua registrazione non è stata approvata.'
-            : 'Il tuo account è in attesa di approvazione. Riceverai un’email appena sarà attivo.',
-        )
+        const code = error.response.data?.error.message
+        if (code === 'EMAIL_NOT_VERIFIED') {
+          setNeedsVerification(true)
+          setServerError('Devi prima confermare il tuo indirizzo email: apri il link che ti abbiamo mandato.')
+        } else {
+          setServerError(
+            code === 'ACCOUNT_REJECTED'
+              ? 'La tua registrazione non è stata approvata.'
+              : 'Il tuo account è in attesa di approvazione. Riceverai un’email appena sarà attivo.',
+          )
+        }
       } else {
         setServerError('Si è verificato un errore. Riprova.')
       }
     }
+  }
+
+  async function resendVerification() {
+    // Uniform on the server whether or not the address exists, so we can say "sent" regardless.
+    await authApi.resendVerification(getValues('email')).catch(() => undefined)
+    setResent(true)
   }
 
   return (
@@ -82,7 +100,16 @@ export function LoginPage() {
           />
         </Field>
 
+        <Link to="/password-dimenticata" className="link -mt-2 self-start text-[14px]">
+          Password dimenticata?
+        </Link>
+
         {serverError && <ErrorBlock>{serverError}</ErrorBlock>}
+        {needsVerification && (
+          <Button onClick={resendVerification} disabled={resent}>
+            {resent ? 'Email inviata' : 'Reinvia email di conferma'}
+          </Button>
+        )}
 
         <Button type="submit" variant="primary" disabled={isSubmitting} className="mt-1 min-h-[50px] text-[16px] font-extrabold">
           {isSubmitting ? 'Accesso in corso…' : 'Accedi'}

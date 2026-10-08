@@ -47,6 +47,7 @@ export interface User {
   hide_amounts: boolean
   work_type: WorkType | null
   approval_status: ApprovalStatus
+  email_verified_at: string | null
   created_at: string
 }
 

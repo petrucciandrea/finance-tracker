@@ -11,7 +11,7 @@ import { Field } from '@/components/ui/Field'
 import { PasswordInput } from '@/components/ui/PasswordInput'
 import { useAuth } from '@/hooks/useAuth'
 import { CURRENCIES, CURRENCY_NAMES } from '@/lib/currencies'
-import type { ApiErrorResponse } from '@/types'
+import type { ApiErrorResponse, User } from '@/types'
 
 const registerSchema = z.object({
   email: z.string().email('Inserisci un indirizzo email valido'),
@@ -26,7 +26,7 @@ export function RegisterPage() {
   const { register: registerUser } = useAuth()
   const navigate = useNavigate()
   const [serverError, setServerError] = useState<string | null>(null)
-  const [pendingEmail, setPendingEmail] = useState<string | null>(null)
+  const [created, setCreated] = useState<User | null>(null)
 
   const {
     register,
@@ -40,11 +40,11 @@ export function RegisterPage() {
   async function onSubmit(values: RegisterFormValues) {
     setServerError(null)
     try {
-      const created = await registerUser(values)
-      if (created.approval_status === 'approved') {
+      const user = await registerUser(values)
+      if (user.approval_status === 'approved' && user.email_verified_at) {
         navigate('/', { replace: true })
       } else {
-        setPendingEmail(created.email)
+        setCreated(user)
       }
     } catch (error) {
       if (isAxiosError<ApiErrorResponse>(error) && error.response?.status === 409) {
@@ -57,15 +57,27 @@ export function RegisterPage() {
     }
   }
 
-  if (pendingEmail) {
+  if (created) {
+    const needsVerification = !created.email_verified_at
+    const needsApproval = created.approval_status === 'pending'
     return (
-      <AuthLayout title="Richiesta inviata" subtitle="Le registrazioni sono su approvazione.">
+      <AuthLayout title="Quasi fatto" subtitle="Ancora un passaggio prima di poter accedere.">
         <div className="mt-6 flex flex-col gap-4">
-          <Notice tone="info">In attesa di approvazione</Notice>
-          <p className="text-[15px] text-ink-2">
-            Abbiamo registrato la richiesta per <strong className="text-ink">{pendingEmail}</strong>. Appena verrà approvata
-            riceverai un&apos;email e potrai accedere con la password che hai scelto.
-          </p>
+          {needsVerification && (
+            <p className="text-[15px] text-ink-2">
+              Abbiamo mandato un link di conferma a <strong className="text-ink">{created.email}</strong>. Aprilo per
+              verificare l&apos;indirizzo (controlla anche lo spam).
+            </p>
+          )}
+          {needsApproval && (
+            <>
+              <Notice tone="info">In attesa di approvazione</Notice>
+              <p className="text-[15px] text-ink-2">
+                Le registrazioni sono su approvazione: appena la tua richiesta verrà approvata riceverai un&apos;email e
+                potrai accedere con la password che hai scelto.
+              </p>
+            </>
+          )}
           <Link to="/login" className="link">
             Vai al login
           </Link>

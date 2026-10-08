@@ -5,7 +5,10 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { LoginPage } from '@/pages/LoginPage'
 import { RegisterPage } from '@/pages/RegisterPage'
 import { ApprovalPage } from '@/pages/ApprovalPage'
+import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage'
 import { PrivacyPage } from '@/pages/PrivacyPage'
+import { ResetPasswordPage } from '@/pages/ResetPasswordPage'
+import { VerifyEmailPage } from '@/pages/VerifyEmailPage'
 import { TermsPage } from '@/pages/TermsPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { AccountsPage } from '@/pages/AccountsPage'
@@ -24,6 +27,10 @@ function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         {/* Opened from the admin's email: the signed token in the URL hash is the credential. */}
+        {/* Reached from emails; the signed token is in the URL hash. */}
+        <Route path="/password-dimenticata" element={<ForgotPasswordPage />} />
+        <Route path="/reimposta-password" element={<ResetPasswordPage />} />
+        <Route path="/verifica-email" element={<VerifyEmailPage />} />
         {/* Public on purpose: the register form links to them, before anyone has an account. */}
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/termini" element={<TermsPage />} />

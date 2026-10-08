@@ -63,7 +63,7 @@ export function PrivacyPage() {
           l&apos;applicazione e il database in qualità di responsabile del trattamento.
         </li>
         <li>
-          <strong>Invio email:</strong> il servizio di posta usato per le notifiche di registrazione e approvazione.
+          <strong>Invio email:</strong> il servizio di posta usato per le email di conferma dell&apos;indirizzo, di approvazione e di reimpostazione della password.
         </li>
         <li>
           <strong>Dati di mercato:</strong> per cambi e prezzi il server interroga Frankfurter (Banca Centrale

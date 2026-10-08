@@ -264,7 +264,21 @@ class User(ORMBase):
     hide_amounts: bool
     work_type: WorkType | None = None
     approval_status: Literal["pending", "approved", "rejected"]
+    email_verified_at: datetime | None = None
     created_at: datetime
+
+
+class EmailRequest(BaseModel):
+    email: LowerEmail
+
+
+class TokenRequest(BaseModel):
+    token: str
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str
+    new_password: str = Field(min_length=8, max_length=_PASSWORD_MAX)
 
 
 class ApprovalTokenRequest(BaseModel):

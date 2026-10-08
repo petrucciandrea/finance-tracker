@@ -84,6 +84,11 @@ class User(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
     terms_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # NULL = the address was never confirmed. Accounts that existed before email
+    # verification are stamped on migration: the owner knows them personally.
+    email_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     approval_status: Mapped[str] = mapped_column(
         String(10), nullable=False, default="approved", server_default="approved"
     )

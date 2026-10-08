@@ -73,6 +73,13 @@ def open_registration(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def no_email_verification(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Same idea as open_registration: most tests need a usable user, not the
+    # confirmation step. test_email_flows.py switches it back on.
+    monkeypatch.setattr(settings, "require_email_verification", False)
+
+
+@pytest.fixture(autouse=True)
 def fresh_rate_limits() -> None:
     # The counters are process-global; without this the many logins across
     # the suite would trip the limits that production relies on.

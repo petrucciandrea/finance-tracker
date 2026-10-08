@@ -4,6 +4,7 @@ import { AuthLayout } from '@/components/layout/AuthLayout'
 import { Button } from '@/components/ui/Button'
 import { ErrorBlock, LoadingBlock, Notice } from '@/components/ui/EmptyState'
 import * as authApi from '@/api/auth'
+import { readHashToken } from '@/lib/hashToken'
 import type { ApprovalRequestInfo } from '@/types'
 
 const OUTCOME_LABEL = { approved: 'Account approvato', rejected: 'Registrazione rifiutata' } as const
@@ -15,7 +16,7 @@ const OUTCOME_LABEL = { approved: 'Account approvato', rejected: 'Registrazione 
  * links can't approve or reject anyone.
  */
 export function ApprovalPage() {
-  const [token] = useState(() => new URLSearchParams(window.location.hash.slice(1)).get('token'))
+  const [token] = useState(readHashToken)
   const [info, setInfo] = useState<ApprovalRequestInfo | null>(null)
   const [error, setError] = useState<string | null>(token ? null : 'Link non valido.')
   const [busy, setBusy] = useState(false)

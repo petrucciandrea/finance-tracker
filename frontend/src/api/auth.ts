@@ -67,3 +67,19 @@ export async function decideApproval(token: string, decision: 'approve' | 'rejec
   const { data } = await apiClient.post<ApprovalRequestInfo>('/auth/approvals/decision', { token, decision })
   return data
 }
+
+export async function verifyEmail(token: string): Promise<void> {
+  await apiClient.post('/auth/email/verify', { token })
+}
+
+export async function resendVerification(email: string): Promise<void> {
+  await apiClient.post('/auth/email/resend-verification', { email })
+}
+
+export async function requestPasswordReset(email: string): Promise<void> {
+  await apiClient.post('/auth/password-reset/request', { email })
+}
+
+export async function confirmPasswordReset(token: string, newPassword: string): Promise<void> {
+  await apiClient.post('/auth/password-reset/confirm', { token, new_password: newPassword })
+}

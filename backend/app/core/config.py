@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     # Version of the privacy policy + terms a new account accepts. Bump it when
     # the texts change materially; it is stored with the acceptance timestamp.
     terms_version: str = "2026-10"
+    # A new account must confirm its email before it can log in. This is what
+    # makes a password-reset link safe to send to the address on file.
+    require_email_verification: bool = True
+    email_verification_expire_hours: int = 48
+    password_reset_expire_minutes: int = 60
     # Public URL of the frontend: the approval/login links in emails point here.
     frontend_base_url: str = "http://localhost:5173"
 

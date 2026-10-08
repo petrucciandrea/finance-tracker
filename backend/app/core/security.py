@@ -2,6 +2,7 @@
 Security utilities: password hashing and JWT access/refresh token handling.
 """
 
+import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -34,9 +35,12 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 DUMMY_PASSWORD_HASH = hash_password("not-a-real-password")
 
 
-def _create_token(subject: UUID, expires_delta: timedelta, token_type: str) -> str:
+def _create_token(
+    subject: UUID, expires_delta: timedelta, token_type: str, claims: dict | None = None
+) -> str:
     now = datetime.now(UTC)
     payload = {
+        **(claims or {}),
         "sub": str(subject),
         "type": token_type,
         "iat": now,
@@ -76,10 +80,36 @@ def create_approval_token(user_id: UUID) -> str:
     )
 
 
+def create_email_verification_token(user_id: UUID) -> str:
+    return _create_token(
+        user_id, timedelta(hours=settings.email_verification_expire_hours), "email_verification"
+    )
+
+
+def _password_fingerprint(password_hash: str) -> str:
+    return hashlib.sha256(password_hash.encode()).hexdigest()[:16]
+
+
+def create_password_reset_token(user_id: UUID, password_hash: str) -> str:
+    # Bound to the current password hash: once the password changes the claim no
+    # longer matches, so the link works exactly once without a table to track it.
+    return _create_token(
+        user_id,
+        timedelta(minutes=settings.password_reset_expire_minutes),
+        "password_reset",
+        claims={"pwd": _password_fingerprint(password_hash)},
+    )
+
+
+def password_reset_token_matches(token_data: "TokenPayload", password_hash: str) -> bool:
+    return token_data.claims.get("pwd") == _password_fingerprint(password_hash)
+
+
 class TokenPayload:
-    def __init__(self, user_id: UUID, token_type: str):
+    def __init__(self, user_id: UUID, token_type: str, claims: dict | None = None):
         self.user_id = user_id
         self.token_type = token_type
+        self.claims = claims or {}
 
 
 def decode_token(token: str, expected_type: str) -> TokenPayload:
@@ -97,4 +127,4 @@ def decode_token(token: str, expected_type: str) -> TokenPayload:
     token_type = payload.get("type")
     if token_type != expected_type:
         raise ValueError(f"Expected a {expected_type} token, got {token_type}")
-    return TokenPayload(user_id=UUID(payload["sub"]), token_type=token_type)
+    return TokenPayload(user_id=UUID(payload["sub"]), token_type=token_type, claims=payload)

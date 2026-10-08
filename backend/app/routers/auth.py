@@ -26,9 +26,12 @@ from app.core.security import (
     DUMMY_PASSWORD_HASH,
     create_access_token,
     create_approval_token,
+    create_email_verification_token,
+    create_password_reset_token,
     create_refresh_token,
     decode_token,
     hash_password,
+    password_reset_token_matches,
     verify_password,
 )
 from app.deps import get_current_user, get_db
@@ -39,9 +42,12 @@ from app.schemas import (
     ApprovalDecisionRequest,
     ApprovalRequestInfo,
     ApprovalTokenRequest,
+    EmailRequest,
     PasswordChangeRequest,
+    PasswordResetConfirm,
     RefreshRequest,
     TokenPair,
+    TokenRequest,
     UserCreate,
     UserLogin,
     UserUpdate,
@@ -62,6 +68,10 @@ _LIMIT_LOGIN = Depends(rate_limit("login", 10, 300))
 _LIMIT_REFRESH = Depends(rate_limit("refresh", 60, 300))
 _LIMIT_PASSWORD = Depends(rate_limit("password", 5, 600))
 _LIMIT_APPROVAL = Depends(rate_limit("approval", 20, 600))
+# Requests that make us send an email (reset, resend): few, since each one costs
+# a message to a third party's inbox. Confirming a link is cheaper to allow.
+_LIMIT_EMAIL_ACTION = Depends(rate_limit("email_action", 5, 3600))
+_LIMIT_TOKEN_ACTION = Depends(rate_limit("token_action", 20, 600))
 _LIMIT_ACCOUNT_DATA = Depends(rate_limit("account_data", 5, 600))
 
 
@@ -91,15 +101,40 @@ def _ensure_known_currency(db: Session, code: str) -> None:
         )
 
 
+def _link(path: str, token: str) -> str:
+    # In the fragment, so the token never reaches a server log or Referer header.
+    return f"{settings.frontend_base_url.rstrip('/')}/{path}#token={token}"
+
+
+def _send_verification_email(user_id: UUID, email: str) -> None:
+    send_email(
+        email,
+        f"{settings.app_name}: conferma il tuo indirizzo email",
+        "Conferma il tuo indirizzo email per poter accedere "
+        f"(il link vale {settings.email_verification_expire_hours} ore):\n"
+        f"{_link('verifica-email', create_email_verification_token(user_id))}\n\n"
+        "Se non hai chiesto tu la registrazione, ignora questa email.\n",
+    )
+
+
+def _send_password_reset_email(user_id: UUID, email: str, password_hash: str) -> None:
+    send_email(
+        email,
+        f"{settings.app_name}: reimposta la password",
+        "Per scegliere una nuova password usa questo link "
+        f"(vale {settings.password_reset_expire_minutes} minuti e funziona una sola volta):\n"
+        f"{_link('reimposta-password', create_password_reset_token(user_id, password_hash))}\n\n"
+        "Se non l'hai chiesto tu, ignora questa email: la tua password non cambia.\n",
+    )
+
+
 def _notify_admin_of_registration(user_id: UUID, user_email: str) -> None:
     if not settings.admin_email:
         # Without this the account would sit pending with no one told.
         logger.warning("ADMIN_EMAIL is not set: %s is pending and nobody was notified", user_email)
         return
     token = create_approval_token(user_id)
-    # The token rides in the URL fragment, which browsers never send to the
-    # server: it stays out of the static host's access logs and Referer headers.
-    link = f"{settings.frontend_base_url.rstrip('/')}/approvazione#token={token}"
+    link = _link("approvazione", token)
     send_email(
         settings.admin_email,
         f"{settings.app_name}: nuova registrazione da approvare",
@@ -133,6 +168,8 @@ def register(
         approval_status="pending" if needs_approval else "approved",
         terms_accepted_at=datetime.now(UTC),
         terms_version=settings.terms_version,
+        # With verification switched off there is nothing to confirm.
+        email_verified_at=None if settings.require_email_verification else datetime.now(UTC),
     )
     db.add(user)
     try:
@@ -146,6 +183,8 @@ def register(
         ) from None
     db.refresh(user)
 
+    if settings.require_email_verification:
+        background_tasks.add_task(_send_verification_email, user.id, user.email)
     if needs_approval:
         background_tasks.add_task(_notify_admin_of_registration, user.id, user.email)
     return user
@@ -166,6 +205,8 @@ def login(payload: UserLogin, db: Session = Depends(get_db)) -> TokenPair:
 
     # Checked only after the password matched, so these distinct answers don't
     # reveal which emails exist to someone who doesn't know the password.
+    if settings.require_email_verification and user.email_verified_at is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="EMAIL_NOT_VERIFIED")
     if user.approval_status != "approved":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -308,6 +349,87 @@ def change_password(
     refresh_token = create_refresh_token(current_user.id)
     _store_refresh_token(db, current_user.id, refresh_token)
     return TokenPair(access_token=access_token, refresh_token=refresh_token)
+
+
+def _user_from_token(db: Session, token: str, token_type: str):
+    try:
+        token_data = decode_token(token, expected_type=token_type)
+    except (JWTError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired link"
+        ) from None
+    user = db.get(User, token_data.user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired link"
+        )
+    return user, token_data
+
+
+@router.post(
+    "/email/verify", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_LIMIT_TOKEN_ACTION]
+)
+def verify_email(payload: TokenRequest, db: Session = Depends(get_db)) -> None:
+    user, _ = _user_from_token(db, payload.token, "email_verification")
+    # Idempotent: a link opened twice (or by a mail scanner first) is harmless.
+    if user.email_verified_at is None:
+        user.email_verified_at = datetime.now(UTC)
+        db.commit()
+
+
+@router.post(
+    "/email/resend-verification",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[_LIMIT_EMAIL_ACTION],
+)
+def resend_verification(
+    payload: EmailRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
+) -> None:
+    # Same 202 whether or not the address exists or is already verified, so this
+    # can't be used to probe which emails have an account.
+    user = db.query(User).filter(User.email == payload.email).first()
+    if user is not None and user.email_verified_at is None:
+        background_tasks.add_task(_send_verification_email, user.id, user.email)
+
+
+@router.post(
+    "/password-reset/request",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[_LIMIT_EMAIL_ACTION],
+)
+def request_password_reset(
+    payload: EmailRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
+) -> None:
+    # Uniform answer, and the email goes out in the background so the response
+    # time doesn't tell an existing address from an unknown one either.
+    user = db.query(User).filter(User.email == payload.email).first()
+    if user is not None and user.approval_status != "rejected":
+        background_tasks.add_task(
+            _send_password_reset_email, user.id, user.email, user.password_hash
+        )
+
+
+@router.post(
+    "/password-reset/confirm",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[_LIMIT_TOKEN_ACTION],
+)
+def confirm_password_reset(payload: PasswordResetConfirm, db: Session = Depends(get_db)) -> None:
+    user, token_data = _user_from_token(db, payload.token, "password_reset")
+    if not password_reset_token_matches(token_data, user.password_hash):
+        # The password changed since the link was issued: it was already used.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired link"
+        )
+    user.password_hash = hash_password(payload.new_password)
+    # Receiving the link proves the mailbox is theirs.
+    if user.email_verified_at is None:
+        user.email_verified_at = datetime.now(UTC)
+    # A reset exists for "someone else may have my password": end every session.
+    db.query(RefreshToken).filter(
+        RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None)
+    ).update({"revoked_at": datetime.now(UTC)}, synchronize_session=False)
+    db.commit()
 
 
 @router.get("/me/export", dependencies=[_LIMIT_ACCOUNT_DATA])

@@ -74,8 +74,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const created = await authApi.register(payload)
     // Registration doesn't log the user in on the backend — chain a login
     // so the UX is "register" -> immediately in the app, one less step.
-    // A pending account can't log in yet (403), so skip it.
-    if (created.approval_status === 'approved') {
+    // An unapproved or unverified account can't log in yet (403), so skip it.
+    if (created.approval_status === 'approved' && created.email_verified_at) {
       await login({ email: payload.email, password: payload.password })
     }
     return created

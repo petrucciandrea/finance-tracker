@@ -185,6 +185,20 @@ preview instead of a 500 at confirm that would drop the batch. The symbol check 
 because the ticker is interpolated into an outbound Yahoo URL. The handlers are plain `def`
 (threadpool): the parser does a DB query per row and must not block the event loop.
 
+### Email verification and password reset use stateless signed links
+`email_verified_at` is stamped on every user that existed when the column was added; new
+accounts must confirm before logging in (`REQUIRE_EMAIL_VERIFICATION`, off in tests via an
+autouse fixture). Login answers 403 `EMAIL_NOT_VERIFIED` after the password matched, as with
+approval. Both flows email a JWT in the URL fragment; there is no token table.
+
+- A reset token carries a fingerprint of the current `password_hash` (`pwd` claim), so it
+  works exactly once: after the password changes the claim no longer matches. Confirming a
+  reset revokes every session and also marks the address verified (they read the mailbox).
+- Request/resend endpoints answer a uniform 202 and send in the background, so neither the
+  body nor the response time shows whether an address has an account.
+- **Not done:** changing the email from the profile (`PATCH /auth/me`) is still immediate and
+  unverified. A proper flow needs a confirmation sent to the *new* address first.
+
 ### Consent and legal pages
 Registration needs `accept_terms: true` (`Literal[True]` in the schema, so calling the API
 directly can't skip it) and stores `terms_accepted_at` + `terms_version`. Users that predate

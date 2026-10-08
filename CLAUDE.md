@@ -138,6 +138,15 @@ the app up, no code change. The migration leaves every existing user `approved`.
 - Tests run with `registration_mode = "open"` (autouse fixture in `conftest.py`);
   `test_registration_approval.py` switches it back.
 
+### Production refuses to boot on unsafe settings
+`Settings.validate_production_setup` rejects, when `ENVIRONMENT=production`: `DEBUG=true`
+(Starlette would return full tracebacks past our error handler, and SQLAlchemy echoes
+every statement with its parameters), a JWT secret under 32 characters or the
+`.env.example` placeholder, CORS `*`, and approval mode without admin email + SMTP. `/docs`,
+`/redoc` and `/openapi.json` are off in production. The frontend is built for Vercel
+(`frontend/vercel.json`); the backend is not: its rate limiter and CSV preview are
+in-memory, so it needs a long-lived single process, not serverless functions.
+
 ### Auth endpoints are rate limited, in memory, per client IP
 `core/rate_limit.py` (a dependency on register, login, refresh, password change and the
 approval endpoints) answers 429 with `Retry-After`. It is process-local like the CSV

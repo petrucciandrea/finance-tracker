@@ -82,18 +82,28 @@ class Settings(BaseSettings):
         return v
 
     @model_validator(mode="after")
-    def validate_approval_setup(self) -> "Settings":
-        # In production, approval mode without anywhere to send the request
-        # would leave every new account pending forever with no one told.
-        if (
-            self.is_production
-            and self.registration_mode == "approval"
-            and not (self.admin_email and self.smtp_host and self.smtp_from)
+    def validate_production_setup(self) -> "Settings":
+        # Production refuses to boot on settings that are unsafe or incomplete,
+        # rather than serving traffic and failing quietly later.
+        if not self.is_production:
+            return self
+        problems = []
+        if self.debug:
+            # debug=True returns full tracebacks (bypassing the error handler)
+            # and logs every SQL statement with its parameters.
+            problems.append("DEBUG must be false")
+        if len(self.jwt_secret_key) < 32 or self.jwt_secret_key.startswith("replace-this"):
+            problems.append("JWT_SECRET_KEY must be a random value of at least 32 characters")
+        if "*" in self.cors_allowed_origins:
+            problems.append("CORS_ALLOWED_ORIGINS must list explicit origins, not '*'")
+        if self.registration_mode == "approval" and not (
+            # Approval mode with nowhere to send the request would leave every
+            # new account pending forever with no one told.
+            self.admin_email and self.smtp_host and self.smtp_from
         ):
-            raise ValueError(
-                "registration_mode=approval in production needs admin_email, "
-                "smtp_host and smtp_from"
-            )
+            problems.append("REGISTRATION_MODE=approval needs ADMIN_EMAIL, SMTP_HOST and SMTP_FROM")
+        if problems:
+            raise ValueError("Unsafe production configuration: " + "; ".join(problems))
         return self
 
     @property

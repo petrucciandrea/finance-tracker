@@ -28,9 +28,18 @@ from app.routers import (
 logging.basicConfig(level=logging.DEBUG if settings.debug else logging.INFO)
 logger = logging.getLogger(__name__)
 
+# The interactive docs and the OpenAPI schema describe every endpoint to
+# anyone who asks; keep them for development only.
+_docs_url = None if settings.is_production else "/docs"
+_redoc_url = None if settings.is_production else "/redoc"
+_openapi_url = None if settings.is_production else "/openapi.json"
+
 app = FastAPI(
     title=settings.app_name,
     debug=settings.debug,
+    docs_url=_docs_url,
+    redoc_url=_redoc_url,
+    openapi_url=_openapi_url,
 )
 
 app.add_middleware(

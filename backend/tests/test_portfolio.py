@@ -274,6 +274,46 @@ def test_update_sell_quantity_still_validates_overdraw(
     assert response.status_code == 422
 
 
+def test_update_buy_quantity_cannot_drop_below_what_was_sold(
+    client: TestClient, registered_user: dict, investment_account: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    account_id = investment_account["id"]
+    buy = _create_asset_transaction(client, headers, account_id, quantity="10", price="100.00")
+    _create_asset_transaction(
+        client, headers, account_id, type_="sell", quantity="4", price="150.00"
+    )
+
+    response = client.patch(
+        f"/api/v1/portfolio/transactions/{buy['id']}", json={"quantity": "3"}, headers=headers
+    )
+    assert response.status_code == 422
+
+    response = client.patch(
+        f"/api/v1/portfolio/transactions/{buy['id']}", json={"quantity": "4"}, headers=headers
+    )
+    assert response.status_code == 200
+
+
+def test_delete_buy_refused_when_a_sell_relies_on_it(
+    client: TestClient, registered_user: dict, investment_account: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    account_id = investment_account["id"]
+    buy = _create_asset_transaction(client, headers, account_id, quantity="10", price="100.00")
+    sell = _create_asset_transaction(
+        client, headers, account_id, type_="sell", quantity="4", price="150.00"
+    )
+
+    buy_url = f"/api/v1/portfolio/transactions/{buy['id']}"
+    sell_url = f"/api/v1/portfolio/transactions/{sell['id']}"
+    assert client.delete(buy_url, headers=headers).status_code == 422
+
+    # Retire the sell first and the buy goes.
+    assert client.delete(sell_url, headers=headers).status_code == 204
+    assert client.delete(buy_url, headers=headers).status_code == 204
+
+
 def test_delete_transaction_soft_deletes_and_removes_holding(
     client: TestClient, registered_user: dict, investment_account: dict
 ) -> None:

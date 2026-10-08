@@ -1,4 +1,4 @@
-import type { AccountType, AssetType, HoldingWithValue, PortfolioHistoryPeriod } from '@/types'
+import type { AccountType, AssetTransaction, AssetType, HoldingWithValue, PortfolioHistoryPeriod } from '@/types'
 
 export const ASSET_TYPE_LABELS: Record<AssetType, string> = {
   stock: 'Azioni',
@@ -55,3 +55,14 @@ export const PERIOD_OPTIONS: { value: PortfolioHistoryPeriod; label: string }[] 
   { value: '1y', label: '1A' },
   { value: 'all', label: 'Tutto' },
 ]
+
+/** The ⋯ menu items for one operation, shared by the position history and the recent list. */
+export function assetTransactionMenuItems(
+  tx: AssetTransaction,
+  { onEdit, onDelete }: { onEdit: (tx: AssetTransaction) => void; onDelete: (tx: AssetTransaction) => void },
+) {
+  return [
+    { label: 'Modifica operazione', onSelect: () => onEdit(tx) },
+    { label: 'Elimina operazione', tone: 'danger' as const, onSelect: () => onDelete(tx) },
+  ]
+}

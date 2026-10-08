@@ -288,16 +288,21 @@ def update_asset_transaction(
     if update_data.get("date") is not None:
         ensure_account_open_on(transaction.account, update_data["date"])
 
-    if transaction.type == "sell":
-        new_quantity = Decimal(str(update_data.get("quantity", transaction.quantity)))
-        held = _current_quantity(
-            db, transaction.account_id, transaction.asset_id, exclude_transaction_id=transaction.id
+    new_quantity = Decimal(str(update_data.get("quantity", transaction.quantity)))
+    held = _current_quantity(
+        db, transaction.account_id, transaction.asset_id, exclude_transaction_id=transaction.id
+    )
+    if transaction.type == "sell" and new_quantity > held:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Cannot sell {new_quantity} — only {held} currently held",
         )
-        if new_quantity > held:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Cannot sell {new_quantity} — only {held} currently held",
-            )
+    # The mirror case: shrinking a buy that later sells already drew on.
+    if transaction.type == "buy" and held + new_quantity < 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Cannot lower this buy to {new_quantity} — {-held} already sold",
+        )
 
     # Sign convention frozen at write time, same rule as Transaction: editing
     # a note must not touch it, but quantity/price/fee/date all feed into it.
@@ -340,6 +345,15 @@ def delete_asset_transaction(
     current_user: User = Depends(get_current_user),
 ) -> None:
     transaction = _get_owned_asset_transaction(db, transaction_id, current_user)
+    if transaction.type == "buy":
+        held = _current_quantity(
+            db, transaction.account_id, transaction.asset_id, exclude_transaction_id=transaction.id
+        )
+        if held < 0:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Cannot delete this buy — later sells rely on it ({-held} oversold)",
+            )
     transaction.deleted_at = datetime.now(UTC)
     if transaction.transaction_id is not None:
         cash_transaction = db.get(Transaction, transaction.transaction_id)

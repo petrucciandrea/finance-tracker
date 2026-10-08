@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { AllocationBar } from '@/components/portfolio/AllocationBar'
+import { DeleteAssetTransactionDialog, EditAssetTransactionDialog } from '@/components/portfolio/AssetTransactionDialogs'
 import { AssetTransactionForm } from '@/components/portfolio/AssetTransactionForm'
 import { AssetTransactionImport } from '@/components/portfolio/AssetTransactionImport'
 import { HoldingsTable } from '@/components/portfolio/HoldingsTable'
@@ -12,12 +13,14 @@ import { EmptyState, ErrorBlock, LoadingBlock } from '@/components/ui/EmptyState
 import { UploadIcon } from '@/components/ui/Icon'
 import { KpiStrip, type Kpi } from '@/components/ui/KpiStrip'
 import { PageHeader } from '@/components/ui/PageHeader'
+import { RowMenu } from '@/components/ui/RowMenu'
 import { useAccounts } from '@/hooks/useAccounts'
 import { useAssetTransactionsList } from '@/hooks/useAssetTransactions'
 import { useAuth } from '@/hooks/useAuth'
 import { useNetWorth } from '@/hooks/usePortfolio'
 import { formatAmount, formatFullDate, formatPercent, formatQuantity, formatShortDate } from '@/lib/format'
-import { costBasisBase, INVESTMENT_ACCOUNT_TYPES, realizedPnlBase, unrealizedPnlBase } from '@/lib/portfolio'
+import type { AssetTransaction } from '@/types'
+import { assetTransactionMenuItems, costBasisBase, INVESTMENT_ACCOUNT_TYPES, realizedPnlBase, unrealizedPnlBase } from '@/lib/portfolio'
 
 type Panel = 'none' | 'form' | 'import'
 
@@ -57,6 +60,8 @@ function CurrencyExposure({ exposure, baseCurrency }: { exposure: Map<string, nu
 
 function RecentTrades({ baseCurrency }: { baseCurrency: string }) {
   const { data, isLoading } = useAssetTransactionsList()
+  const [editing, setEditing] = useState<AssetTransaction | null>(null)
+  const [deleting, setDeleting] = useState<AssetTransaction | null>(null)
   const recent = [...(data ?? [])].filter((t) => !t.deleted_at).sort((a, b) => b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at)).slice(0, 8)
   return (
     <Card title="Operazioni recenti" className="flex-[1_1_380px]">
@@ -69,7 +74,7 @@ function RecentTrades({ baseCurrency }: { baseCurrency: string }) {
       ) : (
         <ul className="mt-1.5">
           {recent.map((t) => (
-            <li key={t.id} className="grid grid-cols-[46px_1fr_auto] items-center gap-2.5 border-b border-line py-2.5 tabular-nums last:border-b-0">
+            <li key={t.id} className="grid grid-cols-[46px_1fr_auto_auto] items-center gap-2.5 border-b border-line py-2.5 tabular-nums last:border-b-0">
               <span className="text-[12px] font-semibold text-ink-3">{formatShortDate(t.date)}</span>
               <div className="min-w-0">
                 <div className="font-bold">
@@ -83,10 +88,16 @@ function RecentTrades({ baseCurrency }: { baseCurrency: string }) {
                 {formatAmount(t.type === 'buy' ? -Number(t.amount_base_currency) : t.amount_base_currency, baseCurrency, { sign: t.type === 'sell' ? 'always' : 'auto' })}{' '}
                 <span className="ccy">{baseCurrency}</span>
               </span>
+              <RowMenu
+                label={`Azioni per ${t.type === 'buy' ? 'acquisto' : 'vendita'} ${t.asset.symbol} del ${formatShortDate(t.date)}`}
+                items={assetTransactionMenuItems(t, { onEdit: setEditing, onDelete: setDeleting })}
+              />
             </li>
           ))}
         </ul>
       )}
+      <EditAssetTransactionDialog transaction={editing} onClose={() => setEditing(null)} />
+      <DeleteAssetTransactionDialog transaction={deleting} onClose={() => setDeleting(null)} />
     </Card>
   )
 }

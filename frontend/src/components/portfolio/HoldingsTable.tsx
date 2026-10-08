@@ -1,15 +1,14 @@
 import { Fragment, useState } from 'react'
+import { DeleteAssetTransactionDialog, EditAssetTransactionDialog } from '@/components/portfolio/AssetTransactionDialogs'
 import { Delta } from '@/components/ui/Amount'
-import { ConfirmDialog } from '@/components/ui/Dialog'
 import { EmptyState, LoadingBlock } from '@/components/ui/EmptyState'
 import { ChevronDownIcon } from '@/components/ui/Icon'
 import { RowMenu } from '@/components/ui/RowMenu'
 import { useAccounts } from '@/hooks/useAccounts'
-import { useAssetTransactionsList, useDeleteAssetTransaction } from '@/hooks/useAssetTransactions'
-import { apiErrorMessage } from '@/lib/apiError'
+import { useAssetTransactionsList } from '@/hooks/useAssetTransactions'
 import { indexById } from '@/lib/categories'
 import { formatAmount, formatPercent, formatQuantity, formatShortDate } from '@/lib/format'
-import { ASSET_TYPE_LABELS } from '@/lib/portfolio'
+import { ASSET_TYPE_LABELS, assetTransactionMenuItems } from '@/lib/portfolio'
 import type { AssetTransaction, HoldingWithValue } from '@/types'
 
 function HoldingHistory({ holding }: { holding: HoldingWithValue }) {
@@ -17,21 +16,9 @@ function HoldingHistory({ holding }: { holding: HoldingWithValue }) {
     account_id: holding.account_id,
     asset_id: holding.asset.id,
   })
-  const deleteAssetTransaction = useDeleteAssetTransaction()
+  const [editing, setEditing] = useState<AssetTransaction | null>(null)
   const [deleting, setDeleting] = useState<AssetTransaction | null>(null)
-  const [error, setError] = useState<string | null>(null)
   const ccy = holding.asset.currency
-
-  async function confirmDelete() {
-    if (!deleting) return
-    setError(null)
-    try {
-      await deleteAssetTransaction.mutateAsync(deleting.id)
-      setDeleting(null)
-    } catch (e) {
-      setError(apiErrorMessage(e))
-    }
-  }
 
   if (isLoading) return <LoadingBlock className="h-16" label="Caricamento storico…" />
   if (!transactions?.length) return <p className="text-[13px] text-ink-3">Nessuna operazione.</p>
@@ -49,27 +36,13 @@ function HoldingHistory({ holding }: { holding: HoldingWithValue }) {
             </span>
             <RowMenu
               label={`Azioni per l'operazione del ${formatShortDate(tx.date)}`}
-              items={[{ label: 'Elimina operazione', tone: 'danger', onSelect: () => setDeleting(tx) }]}
+              items={assetTransactionMenuItems(tx, { onEdit: setEditing, onDelete: setDeleting })}
             />
           </li>
         ))}
       </ul>
-      <ConfirmDialog
-        open={!!deleting}
-        title="Eliminare questa operazione?"
-        confirmLabel="Elimina"
-        pending={deleteAssetTransaction.isPending}
-        error={error}
-        onConfirm={confirmDelete}
-        onCancel={() => setDeleting(null)}
-      >
-        {deleting && (
-          <>
-            {deleting.type === 'buy' ? 'Acquisto' : 'Vendita'} di {formatQuantity(deleting.quantity)} {holding.asset.symbol} del{' '}
-            {formatShortDate(deleting.date)}. Posizione e liquidità del conto vengono ricalcolate.
-          </>
-        )}
-      </ConfirmDialog>
+      <EditAssetTransactionDialog transaction={editing} onClose={() => setEditing(null)} />
+      <DeleteAssetTransactionDialog transaction={deleting} onClose={() => setDeleting(null)} />
     </>
   )
 }

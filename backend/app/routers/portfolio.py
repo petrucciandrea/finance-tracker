@@ -41,6 +41,7 @@ from app.schemas import (
 )
 from app.services import asset_prices as asset_prices_service
 from app.services import csv_import as csv_import_service
+from app.services import flat_rate as flat_rate_service
 from app.services import physical_assets as physical_assets_service
 from app.services.asset_prices import AssetPriceUnavailable
 from app.services.exchange_rates import ExchangeRateUnavailable, get_rate, get_rate_history
@@ -507,9 +508,14 @@ def net_worth(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> NetWorthSummary:
+    today = date_.today()
     accounts = account_balances(db, current_user)
     holdings = holdings_with_value(db, current_user)
     physical_assets = physical_assets_with_value(db, current_user)
+    ledger = flat_rate_service.load_ledger(db, current_user)
+    total_tax_liability = flat_rate_service.liability_in_base_currency(
+        db, current_user, flat_rate_service.tax_liability(ledger, today), today
+    )
     db.commit()  # persist the price/rate cache rows filled in above
 
     total_cash_balance = sum((a.balance_base_currency for a in accounts), Decimal("0"))
@@ -527,10 +533,16 @@ def net_worth(
 
     return NetWorthSummary(
         base_currency=current_user.base_currency,
-        total_net_worth=total_cash_balance + total_holdings_value + total_physical_assets_value,
+        total_net_worth=(
+            total_cash_balance
+            + total_holdings_value
+            + total_physical_assets_value
+            - total_tax_liability
+        ),
         total_cash_balance=total_cash_balance,
         total_holdings_value=total_holdings_value,
         total_physical_assets_value=total_physical_assets_value,
+        total_tax_liability=total_tax_liability,
         accounts=accounts,
         holdings=holdings,
         physical_assets=physical_assets,
@@ -570,6 +582,8 @@ def portfolio_history(
 
     # Sold ones too: they were part of net worth until the day they left.
     physical_assets = physical_assets_service.user_physical_assets_query(db, current_user).all()
+    # Loaded once; the tax liability on each sample date is then pure math.
+    ledger = flat_rate_service.load_ledger(db, current_user)
 
     earliest_dates = (
         [tx.date for tx in asset_transactions]
@@ -616,6 +630,8 @@ def portfolio_history(
     currencies = {asset.currency for asset in assets_by_id.values()}
     currencies |= {asset.currency for asset in metal_assets.values()}
     currencies |= {a.currency for a in physical_assets if a.kind == "vehicle"}
+    if not ledger.is_empty():
+        currencies.add(flat_rate_service.CURRENCY)
     for currency in currencies:
         if currency == current_user.base_currency:
             continue
@@ -692,13 +708,21 @@ def portfolio_history(
                 fine_grams, spot
             ) * rate_on(metal_asset.currency, sample_date)
 
+        liabilities_base = (
+            Decimal("0")
+            if ledger.is_empty()
+            else flat_rate_service.tax_liability(ledger, sample_date)
+            * rate_on(flat_rate_service.CURRENCY, sample_date)
+        )
+
         points.append(
             PortfolioHistoryPoint(
                 date=sample_date,
                 total_holdings_value_base_currency=holdings_base,
                 total_cash_balance_base_currency=cash_base,
                 total_physical_assets_value_base_currency=physical_base,
-                total_net_worth=cash_base + holdings_base + physical_base,
+                total_liabilities_base_currency=liabilities_base,
+                total_net_worth=cash_base + holdings_base + physical_base - liabilities_base,
             )
         )
 

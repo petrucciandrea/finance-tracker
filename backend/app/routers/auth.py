@@ -169,6 +169,10 @@ def update_me(
     for field, value in anagrafica_fields.items():
         setattr(current_user, field, value)
 
+    # Same: `null` switches the work section off.
+    if "work_type" in payload.model_fields_set:
+        current_user.work_type = payload.work_type.value if payload.work_type else None
+
     db.commit()
     db.refresh(current_user)
     return current_user

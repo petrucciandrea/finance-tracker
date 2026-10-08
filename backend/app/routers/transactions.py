@@ -14,7 +14,16 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
 from app.deps import get_current_user, get_db
-from app.models import Account, AssetTransaction, Category, SavingsAllocation, Transaction, User
+from app.models import (
+    Account,
+    AssetTransaction,
+    Category,
+    Invoice,
+    SavingsAllocation,
+    TaxPayment,
+    Transaction,
+    User,
+)
 from app.schemas import (
     PaginationMeta,
     SummaryGroupBy,
@@ -37,46 +46,13 @@ from app.services import csv_import as csv_import_service
 from app.services.exchange_rates import ExchangeRateUnavailable, get_rate
 from app.services.ownership import (
     ensure_account_open_on,
+    get_or_create_misc_category,
     get_owned_account,
     get_owned_leaf_category,
 )
 from app.services.transfers import create_linked_transfer
 
 router = APIRouter(prefix="/api/v1/transactions", tags=["transactions"])
-
-
-MISC_CATEGORY_NAME = "Varie"
-
-
-def _get_or_create_misc_category(db: Session, user: User, category_type: str) -> Category:
-    """
-    Transactions of type expense/income must always have a category — if the
-    client sends none, fall back to a "Varie" category of the matching type,
-    creating it on first use. `type: transfer` is exempt: a transfer between
-    the user's own accounts isn't a spend/income event, so it isn't forced
-    into "Varie" here.
-    """
-    existing = (
-        db.query(Category)
-        .filter(
-            Category.user_id == user.id,
-            Category.name == MISC_CATEGORY_NAME,
-            Category.type == category_type,
-            Category.deleted_at.is_(None),
-        )
-        .first()
-    )
-    if existing is not None:
-        return existing
-
-    category = Category(
-        user_id=user.id, name=MISC_CATEGORY_NAME, type=category_type, parent_id=None
-    )
-    db.add(category)
-    # populates category.id without committing yet — the caller commits it
-    # alongside the transaction that needed it
-    db.flush()
-    return category
 
 
 def _validate_necessity_override(transaction_type: str, override: object) -> None:
@@ -139,6 +115,45 @@ def _reject_if_linked_to_asset_transaction(
             status_code=status.HTTP_409_CONFLICT,
             detail="This transaction's amount/date are managed by a portfolio "
             "operation — edit or delete it from Portfolio instead",
+        )
+
+
+def _reject_if_linked_to_flat_rate(
+    db: Session, transaction_id: UUID, changed_fields: set[str] | None = None
+) -> None:
+    """
+    Same rule as a portfolio cash leg, for the P.IVA section: an F24
+    payment's leg and an income movement written by collecting an invoice
+    belong to that screen, whose numbers would drift if their amount/date
+    changed here. A movement merely *linked* to an invoice (an imported one)
+    stays editable, but can't be deleted from under it: the invoice would
+    keep reading as collected by a movement that no longer exists.
+    """
+    deleting = changed_fields is None
+    if changed_fields is not None and not changed_fields & {"amount", "date"}:
+        return
+
+    payment = (
+        db.query(TaxPayment)
+        .filter(TaxPayment.transaction_id == transaction_id, TaxPayment.deleted_at.is_(None))
+        .first()
+    )
+    if payment is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This transaction is an F24 payment — edit or delete it from Fatture instead",
+        )
+
+    invoice = (
+        db.query(Invoice)
+        .filter(Invoice.transaction_id == transaction_id, Invoice.deleted_at.is_(None))
+        .first()
+    )
+    if invoice is not None and (deleting or invoice.owns_transaction):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This transaction collects the invoice to «{invoice.client}» — "
+            "undo the collection from Fatture first",
         )
 
 
@@ -270,8 +285,8 @@ def create_transaction(
     elif payload.type in ("expense", "income"):
         # No category given for a spend/income transaction — fall back to
         # "Varie" instead of allowing an uncategorized expense/income to
-        # silently exist (transfers are exempt, see _get_or_create_misc_category).
-        category_id = _get_or_create_misc_category(db, current_user, payload.type).id
+        # silently exist (transfers are exempt, see get_or_create_misc_category).
+        category_id = get_or_create_misc_category(db, current_user, payload.type).id
 
     try:
         rate = get_rate(db, payload.currency, current_user.base_currency, payload.date)
@@ -435,6 +450,7 @@ def update_transaction(
     transaction = _get_owned_transaction(db, transaction_id, current_user)
     update_data = payload.model_dump(exclude_unset=True)
     _reject_if_linked_to_asset_transaction(db, transaction.id, changed_fields=set(update_data))
+    _reject_if_linked_to_flat_rate(db, transaction.id, changed_fields=set(update_data))
     _reject_amount_or_date_edit_on_a_linked_leg(transaction, set(update_data))
     if update_data.get("date") is not None:
         ensure_account_open_on(transaction.account, update_data["date"])
@@ -445,7 +461,7 @@ def update_transaction(
             # falls back to "Varie", same rule as creation — never leave one
             # uncategorized.
             if transaction.type in ("expense", "income"):
-                misc_category = _get_or_create_misc_category(db, current_user, transaction.type)
+                misc_category = get_or_create_misc_category(db, current_user, transaction.type)
                 update_data["category_id"] = misc_category.id
         else:
             update_data["category_id"] = get_owned_leaf_category(
@@ -495,6 +511,7 @@ def delete_transaction(
 ) -> None:
     transaction = _get_owned_transaction(db, transaction_id, current_user)
     _reject_if_linked_to_asset_transaction(db, transaction.id)
+    _reject_if_linked_to_flat_rate(db, transaction.id)
     _soft_delete_with_counterpart(db, transaction)
     db.commit()
 
@@ -567,7 +584,7 @@ def import_confirm(
         transaction_type = "expense" if row.amount < 0 else "income"
         # Imported rows are always expense/income (never transfer), so the
         # same "no category -> Varie" rule as manual creation applies here.
-        category_id = row.suggested_category_id or _get_or_create_misc_category(
+        category_id = row.suggested_category_id or get_or_create_misc_category(
             db, current_user, transaction_type
         ).id
 

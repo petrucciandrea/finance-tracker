@@ -261,3 +261,11 @@ export function GemIcon(props: IconProps) {
     </BaseIcon>
   )
 }
+
+export function InvoiceIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M6 2h9l5 5v15H6zM14 2v6h6M9 13h7M9 17h5" />
+    </BaseIcon>
+  )
+}

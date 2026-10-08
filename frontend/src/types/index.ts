@@ -33,6 +33,10 @@ export type PortfolioHistoryPeriod = '1m' | '3m' | '6m' | '1y' | 'all'
 
 // --- Auth ---
 
+// employee / P.IVA forfettaria / P.IVA ordinaria. Only flat_rate unlocks a
+// section (Fatture) so far; null = the "Lavoro" section is off.
+export type WorkType = 'employee' | 'flat_rate' | 'ordinary'
+
 export interface User {
   id: string
   email: string
@@ -41,6 +45,7 @@ export interface User {
   last_name: string | null
   date_of_birth: string | null
   hide_amounts: boolean
+  work_type: WorkType | null
   created_at: string
 }
 
@@ -62,6 +67,7 @@ export interface UserUpdatePayload {
   last_name?: string | null
   date_of_birth?: string | null
   hide_amounts?: boolean
+  work_type?: WorkType | null
 }
 
 export interface PasswordChangePayload {
@@ -402,6 +408,9 @@ export interface NetWorthSummary {
   total_holdings_value: string
   // Vehicles and precious metals: in net worth, never in cash.
   total_physical_assets_value: string
+  // Taxes accrued on collected P.IVA income, net of F24 payments; already
+  // subtracted from total_net_worth. Negative = a credit (advances paid ahead).
+  total_tax_liability: string
   accounts: AccountBalance[]
   holdings: HoldingWithValue[]
   physical_assets: PhysicalAssetWithValue[]
@@ -412,6 +421,7 @@ export interface PortfolioHistoryPoint {
   total_holdings_value_base_currency: string
   total_cash_balance_base_currency: string
   total_physical_assets_value_base_currency: string
+  total_liabilities_base_currency: string
   total_net_worth: string
 }
 
@@ -753,4 +763,193 @@ export interface ApiErrorResponse {
     message: string
     details: ApiErrorDetail[]
   }
+}
+
+// --- P.IVA forfettaria (amounts in EUR) ---
+
+export type TaxComponent = 'substitute_tax' | 'inps'
+export type TaxPaymentKind = 'balance' | 'first_advance' | 'second_advance'
+export type InvoiceStatus = 'collected' | 'outstanding'
+
+export interface FlatRateSettings {
+  activity_start_date: string | null
+  safety_margin: string
+}
+
+export interface FlatRateSettingsUpdatePayload {
+  activity_start_date?: string | null
+  safety_margin?: string
+}
+
+export interface FlatRateYear {
+  year: number
+  profitability_coefficient: string
+  // Resolved: the override, else 5% within the first five years and 15% after.
+  substitute_tax_rate: string
+  substitute_tax_rate_is_automatic: boolean
+  // Last year of the 5% start-up rate; null without a start date.
+  startup_last_year: number | null
+  inps_rate: string
+  rivalsa_rate: string
+  // The user's explicit choice; null = follow the suggestion.
+  provision_rate: string | null
+  // coefficient × (tax + INPS): what a euro collected owes for its own year.
+  load_rate: string
+  // coefficient × (tax + 80% INPS): the advances it commits next year to.
+  advance_rate: string
+  needed_rate: string
+  suggested_provision_rate: string
+  effective_provision_rate: string
+}
+
+export interface FlatRateYearUpdatePayload {
+  profitability_coefficient?: string
+  // null = back to automatic
+  substitute_tax_rate?: string | null
+  inps_rate?: string
+  rivalsa_rate?: string
+  provision_rate?: string | null
+}
+
+export interface Invoice {
+  id: string
+  number: string | null
+  client: string
+  issue_date: string
+  collected_on: string | null
+  amount: string
+  rivalsa_rate: string
+  rivalsa_amount: string
+  stamp_duty: boolean
+  stamp_duty_amount: string
+  total: string
+  // The collection year once collected, the issue year until then.
+  fiscal_year: number
+  provision_rate: string | null
+  applied_provision_rate: string
+  // Per-invoice estimate, gross of the INPS deduction.
+  taxable_base: string
+  substitute_tax: string
+  inps: string
+  substitute_tax_advance: string
+  inps_advance: string
+  to_provision: string
+  transaction_id: string | null
+  owns_transaction: boolean
+  transaction_account_id: string | null
+  transaction_deleted: boolean
+  notes: string | null
+  created_at: string
+}
+
+export interface InvoiceCreatePayload {
+  number?: string | null
+  client: string
+  issue_date: string
+  amount: string
+  rivalsa_rate?: string | null
+  // null/omitted = automatic above €77,47
+  stamp_duty?: boolean | null
+  provision_rate?: string | null
+  notes?: string | null
+}
+
+// collected_on re-dates a collection; undoing one is /uncollect.
+export type InvoiceUpdatePayload = Partial<InvoiceCreatePayload> & { collected_on?: string }
+
+export interface InvoiceCollectPayload {
+  collected_on: string
+  transaction_id?: string | null
+  account_id?: string | null
+  category_id?: string | null
+}
+
+export interface TaxPayment {
+  id: string
+  paid_on: string
+  fiscal_year: number
+  component: TaxComponent
+  kind: TaxPaymentKind
+  amount: string
+  notes: string | null
+  transaction_id: string | null
+  account_id: string | null
+  created_at: string
+}
+
+export interface TaxPaymentCreatePayload {
+  paid_on: string
+  fiscal_year: number
+  component: TaxComponent
+  kind: TaxPaymentKind
+  amount: string
+  notes?: string | null
+  account_id?: string | null
+  category_id?: string | null
+}
+
+export type TaxPaymentUpdatePayload = Partial<Omit<TaxPaymentCreatePayload, 'account_id' | 'category_id'>>
+
+export interface ProvisionSource {
+  id: string
+  account_id: string
+  account_name: string
+  account_currency: string
+  // null = the account's cash; set = that product held in the account.
+  asset: Asset | null
+  quantity: string | null
+  price: string | null
+  value_base_currency: string | null
+  // Whole units the same account's cash could buy (products sold in whole shares).
+  buyable_units: number | null
+}
+
+export interface ProvisionStatus {
+  total_base_currency: string
+  sources: ProvisionSource[]
+}
+
+export interface ProvisionSourceCreatePayload {
+  account_id: string
+  asset_id?: string | null
+}
+
+export interface F24Deadline {
+  due_date: string
+  fiscal_year: number
+  component: TaxComponent
+  kind: TaxPaymentKind
+  amount_due: string
+  amount_paid: string
+  // Computed on a year that hasn't closed yet.
+  is_estimate: boolean
+}
+
+export interface FlatRateYearFigures {
+  revenue: string
+  revenue_limit: string
+  taxable_base: string
+  inps: string
+  inps_deducted: string
+  substitute_tax: string
+  liability: string
+  advances_due: string
+  paid: string
+  to_provision: string
+  outstanding: string
+  invoice_count: number
+}
+
+export interface FlatRateSummary {
+  year: number
+  as_of: string
+  params: FlatRateYear
+  figures: FlatRateYearFigures
+  // As of today, across every year: the net-worth liability (negative =
+  // credit) and everything the F24s will still ask, next year's advances included.
+  tax_liability: string
+  cash_requirement: string
+  provision: ProvisionStatus
+  gap: string
+  deadlines: F24Deadline[]
 }

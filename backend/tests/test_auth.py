@@ -198,6 +198,24 @@ def test_hide_amounts_defaults_to_false_and_persists(
     assert client.get("/api/v1/auth/me", headers=headers).json()["hide_amounts"] is True
 
 
+def test_work_type_persists_and_clears(client: TestClient, registered_user: dict) -> None:
+    headers = registered_user["auth_headers"]
+    assert client.get("/api/v1/auth/me", headers=headers).json()["work_type"] is None
+
+    response = client.patch("/api/v1/auth/me", json={"work_type": "flat_rate"}, headers=headers)
+    assert response.status_code == 200
+    assert response.json()["work_type"] == "flat_rate"
+
+    # Untouched by a PATCH of another field, cleared by an explicit null.
+    client.patch("/api/v1/auth/me", json={"first_name": "Mario"}, headers=headers)
+    assert client.get("/api/v1/auth/me", headers=headers).json()["work_type"] == "flat_rate"
+    client.patch("/api/v1/auth/me", json={"work_type": None}, headers=headers)
+    assert client.get("/api/v1/auth/me", headers=headers).json()["work_type"] is None
+
+    invalid = client.patch("/api/v1/auth/me", json={"work_type": "freelance"}, headers=headers)
+    assert invalid.status_code == 422
+
+
 def test_update_me_rejects_email_already_taken(client: TestClient, registered_user: dict) -> None:
     other = client.post(
         "/api/v1/auth/register",

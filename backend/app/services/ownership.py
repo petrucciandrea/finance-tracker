@@ -8,6 +8,8 @@ place — so having four of it meant four places to forget one of the two.
 
 `Account` is shared here, and so is the leaf-category lookup now that a
 portfolio buy/sell can file its cash leg under a transfer category too.
+The "Varie" fallback moved here once collecting an invoice started writing
+income transactions outside the transactions router.
 The other `_get_owned_*` helpers stay private to their routers: each is
 used by a single router, so hoisting them would trade duplication for
 indirection without removing a real risk.
@@ -107,4 +109,38 @@ def get_owned_leaf_category(
                 "assign the transaction to a subcategory instead"
             ),
         )
+    return category
+
+
+MISC_CATEGORY_NAME = "Varie"
+
+
+def get_or_create_misc_category(db: Session, user: User, category_type: str) -> Category:
+    """
+    Transactions of type expense/income must always have a category — if the
+    client sends none, fall back to a "Varie" category of the matching type,
+    creating it on first use. `type: transfer` is exempt: a transfer between
+    the user's own accounts isn't a spend/income event, so it isn't forced
+    into "Varie" here.
+    """
+    existing = (
+        db.query(Category)
+        .filter(
+            Category.user_id == user.id,
+            Category.name == MISC_CATEGORY_NAME,
+            Category.type == category_type,
+            Category.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if existing is not None:
+        return existing
+
+    category = Category(
+        user_id=user.id, name=MISC_CATEGORY_NAME, type=category_type, parent_id=None
+    )
+    db.add(category)
+    # populates category.id without committing yet — the caller commits it
+    # alongside the transaction that needed it
+    db.flush()
     return category

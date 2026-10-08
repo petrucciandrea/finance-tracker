@@ -40,6 +40,7 @@ from app.schemas import (
     Transaction as TransactionSchema,
 )
 from app.services import waterfall as waterfall_service
+from app.services.flat_rate import source_account_ids
 from app.services.ownership import get_owned_account
 from app.services.periods import period_bounds
 from app.services.transfers import create_linked_transfer
@@ -361,6 +362,13 @@ def add_source(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This account already funds another savings goal",
+        )
+
+    # Earmarked for taxes: the same balance can't also count as savings.
+    if account.id in source_account_ids(db, current_user, cash_only=True):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This account holds the tax provision — remove it from Fatture first",
         )
 
     source = SavingsGoalSource(goal_id=goal.id, account_id=payload.account_id)

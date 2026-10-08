@@ -32,9 +32,18 @@ from app.models import (
 from app.schemas import Account as AccountSchema
 from app.schemas import AccountCreate, AccountUpdate
 from app.services.exchange_rates import ExchangeRateUnavailable, get_rate
+from app.services.flat_rate import source_account_ids
 from app.services.ownership import get_owned_account
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["accounts"])
+
+
+def _reject_if_holds_the_tax_provision(db: Session, account: Account, user: User) -> None:
+    if account.id in source_account_ids(db, user):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This account holds the tax provision — remove it from Fatture first",
+        )
 
 
 def _reject_if_funds_a_goal(db: Session, account: Account, user: User) -> None:
@@ -224,6 +233,9 @@ def delete_account(
     # reads, so a savings goal funded by it would quietly report zero and
     # the cascade would suggest refilling it — into a deleted account.
     _reject_if_funds_a_goal(db, account, current_user)
+    # Same for the P.IVA provision: its total would silently drop and the
+    # gap would read as a shortfall.
+    _reject_if_holds_the_tax_provision(db, account, current_user)
 
     account.deleted_at = datetime.now(UTC)
     db.commit()

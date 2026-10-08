@@ -10,6 +10,7 @@ import { CategoriesPage } from '@/pages/CategoriesPage'
 import { PlanningPage } from '@/pages/PlanningPage'
 import { PortfolioPage } from '@/pages/PortfolioPage'
 import { PhysicalAssetsPage } from '@/pages/PhysicalAssetsPage'
+import { InvoicesPage } from '@/pages/InvoicesPage'
 import { TransactionsPage } from '@/pages/TransactionsPage'
 import { ProfilePage } from '@/pages/ProfilePage'
 
@@ -32,6 +33,9 @@ function App() {
             <Route path="/planning" element={<PlanningPage />} />
             <Route path="/portfolio" element={<PortfolioPage />} />
             <Route path="/assets" element={<PhysicalAssetsPage />} />
+            {/* Only linked when the profile's work type is P.IVA forfettaria;
+                the page redirects to the profile otherwise. */}
+            <Route path="/invoices" element={<InvoicesPage />} />
             <Route path="/profile" element={<ProfilePage />} />
           </Route>
         </Route>

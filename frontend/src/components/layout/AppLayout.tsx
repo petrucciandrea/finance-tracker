@@ -9,6 +9,7 @@ import {
   GemIcon,
   GridIcon,
   HomeIcon,
+  InvoiceIcon,
   ListIcon,
   LogOutIcon,
   MenuIcon,
@@ -36,6 +37,7 @@ interface NavItem {
 // Budgets stay archived: no nav entry and no route (see App.tsx).
 function useNavItems(): NavItem[] {
   const { toAssign, toClassify } = useAttentionCounts()
+  const { user } = useAuth()
   return [
     { to: '/', label: 'Panoramica', icon: HomeIcon },
     {
@@ -48,6 +50,8 @@ function useNavItems(): NavItem[] {
     { to: '/planning', label: 'Piano', icon: PlanIcon },
     { to: '/portfolio', label: 'Portafoglio', icon: TrendIcon },
     { to: '/assets', label: 'Beni', icon: GemIcon },
+    // Unlocked by the work type chosen in the profile.
+    ...(user?.work_type === 'flat_rate' ? [{ to: '/invoices', label: 'Fatture', icon: InvoiceIcon }] : []),
     { to: '/accounts', label: 'Conti', icon: WalletIcon },
     {
       to: '/categories',

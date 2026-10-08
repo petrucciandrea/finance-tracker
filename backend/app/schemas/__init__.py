@@ -137,6 +137,29 @@ class MetalForm(str, Enum):
     jewelry = "jewelry"
 
 
+class WorkType(str, Enum):
+    employee = "employee"
+    # P.IVA in regime forfettario — the only one with a dedicated section.
+    flat_rate = "flat_rate"
+    ordinary = "ordinary"
+
+
+class TaxComponent(str, Enum):
+    substitute_tax = "substitute_tax"  # imposta sostitutiva
+    inps = "inps"
+
+
+class TaxPaymentKind(str, Enum):
+    balance = "balance"  # saldo
+    first_advance = "first_advance"  # 1° acconto (30 giugno)
+    second_advance = "second_advance"  # 2° acconto (30 novembre)
+
+
+class InvoiceStatus(str, Enum):
+    collected = "collected"
+    outstanding = "outstanding"
+
+
 class SummaryGroupBy(str, Enum):
     category = "category"
     month = "month"
@@ -205,6 +228,8 @@ class UserUpdate(BaseModel):
     last_name: str | None = Field(default=None, max_length=100)
     date_of_birth: date_ | None = None
     hide_amounts: bool | None = None
+    # Clearable like the anagrafica: `null` switches the section off.
+    work_type: WorkType | None = None
 
 
 class PasswordChangeRequest(BaseModel):
@@ -220,6 +245,7 @@ class User(ORMBase):
     last_name: str | None = None
     date_of_birth: date_ | None = None
     hide_amounts: bool
+    work_type: WorkType | None = None
     created_at: datetime
 
 
@@ -726,6 +752,10 @@ class NetWorthSummary(BaseModel):
     # Vehicles and precious metals: part of net worth, never of cash — an
     # illiquid car doesn't extend the survival budget's runway.
     total_physical_assets_value: Decimal
+    # Taxes accrued on collected flat-rate income, net of what's been paid —
+    # subtracted from net worth. Negative = a credit (advances paid ahead of
+    # the income they prepay).
+    total_tax_liability: Decimal
     accounts: list[AccountBalance]
     holdings: list[HoldingWithValue]
     physical_assets: list[PhysicalAssetWithValue]
@@ -744,6 +774,7 @@ class PortfolioHistoryPoint(BaseModel):
     total_holdings_value_base_currency: Decimal
     total_cash_balance_base_currency: Decimal
     total_physical_assets_value_base_currency: Decimal
+    total_liabilities_base_currency: Decimal
     total_net_worth: Decimal
 
 
@@ -830,6 +861,7 @@ class SurvivalBudget(BaseModel):
     monthly_primary_expenses: Decimal | None = None
     monthly_total_expenses: Decimal | None = None
     monthly_income: Decimal | None = None
+    # Excludes the accounts holding the P.IVA tax provision.
     total_cash_balance: Decimal
     # Cash divided by the survival budget. None whenever the survival budget
     # is unknown or zero.
@@ -997,3 +1029,231 @@ class SavingsAllocation(ORMBase):
 class WaterfallExecuteResponse(BaseModel):
     allocations: list[SavingsAllocation]
     transactions: list["Transaction"]
+
+
+# ---------------------------------------------------------------------------
+# P.IVA forfettaria — invoices, F24 payments, provision. Amounts in EUR.
+# ---------------------------------------------------------------------------
+
+class FlatRateSettings(ORMBase):
+    activity_start_date: date_ | None
+    safety_margin: Decimal
+
+
+class FlatRateSettingsUpdate(BaseModel):
+    # Both clearable/settable independently; omitted = unchanged.
+    activity_start_date: date_ | None = None
+    safety_margin: Decimal | None = Field(default=None, ge=0, le=1, max_digits=5, decimal_places=4)
+
+
+class FlatRateYear(BaseModel):
+    year: int
+    profitability_coefficient: Decimal
+    # Resolved: the override if set, else 5% within the first five years of
+    # activity and 15% after.
+    substitute_tax_rate: Decimal
+    substitute_tax_rate_is_automatic: bool
+    # Last year of the 5% start-up rate; None without a start date.
+    startup_last_year: int | None
+    inps_rate: Decimal
+    rivalsa_rate: Decimal
+    # The user's explicit choice; None = follow the suggestion.
+    provision_rate: Decimal | None
+    # coefficient × (tax + INPS): what one euro collected owes for its year.
+    load_rate: Decimal
+    # coefficient × (tax + 80% INPS): the advances it triggers for next year.
+    advance_rate: Decimal
+    # Share of each euro collected this year the F24s will need, before margin.
+    needed_rate: Decimal
+    suggested_provision_rate: Decimal
+    effective_provision_rate: Decimal
+
+
+class FlatRateYearUpdate(BaseModel):
+    profitability_coefficient: Decimal | None = Field(
+        default=None, gt=0, le=1, max_digits=5, decimal_places=4
+    )
+    # Send null to go back to automatic (5% for the first five years).
+    substitute_tax_rate: Decimal | None = Field(
+        default=None, ge=0, lt=1, max_digits=5, decimal_places=4
+    )
+    inps_rate: Decimal | None = Field(default=None, ge=0, lt=1, max_digits=5, decimal_places=4)
+    rivalsa_rate: Decimal | None = Field(default=None, ge=0, lt=1, max_digits=5, decimal_places=4)
+    # Send null to go back to the suggested rate.
+    provision_rate: Decimal | None = Field(default=None, ge=0, le=1, max_digits=5, decimal_places=4)
+
+
+class InvoiceCreate(BaseModel):
+    number: str | None = Field(default=None, max_length=50)
+    client: str = Field(min_length=1, max_length=200)
+    issue_date: date_
+    amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
+    # None = the issue year's default (4% with rivalsa, 0 without).
+    rivalsa_rate: Decimal | None = Field(default=None, ge=0, lt=1, max_digits=5, decimal_places=4)
+    # None = automatic: charged when fee + rivalsa exceeds €77.47.
+    stamp_duty: bool | None = None
+    provision_rate: Decimal | None = Field(default=None, ge=0, le=1, max_digits=5, decimal_places=4)
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class InvoiceUpdate(BaseModel):
+    number: str | None = Field(default=None, max_length=50)
+    client: str | None = Field(default=None, min_length=1, max_length=200)
+    issue_date: date_ | None = None
+    amount: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=2)
+    rivalsa_rate: Decimal | None = Field(default=None, ge=0, lt=1, max_digits=5, decimal_places=4)
+    stamp_duty: bool | None = None
+    # Clearable (null = back to the year's rate), like number and notes.
+    provision_rate: Decimal | None = Field(default=None, ge=0, le=1, max_digits=5, decimal_places=4)
+    notes: str | None = Field(default=None, max_length=500)
+    # Re-dates a collection (and the income written by it). Not clearable
+    # here: undoing a collection is /uncollect, which also retires that income.
+    collected_on: date_ | None = None
+
+
+class InvoiceCollect(BaseModel):
+    """
+    Mark an invoice collected. At most one of: link an existing income
+    movement (`transaction_id`, typically imported from CSV), or write a new
+    one on an account (`account_id`, optional income `category_id`). Neither
+    just records the date.
+    """
+
+    collected_on: date_
+    transaction_id: UUID | None = None
+    account_id: UUID | None = None
+    category_id: UUID | None = None
+
+
+class Invoice(BaseModel):
+    id: UUID
+    number: str | None
+    client: str
+    issue_date: date_
+    collected_on: date_ | None
+    amount: Decimal
+    rivalsa_rate: Decimal
+    rivalsa_amount: Decimal
+    stamp_duty: bool
+    stamp_duty_amount: Decimal
+    total: Decimal
+    # The collection year once collected, the issue year until then.
+    fiscal_year: int
+    provision_rate: Decimal | None
+    applied_provision_rate: Decimal
+    # Per-invoice estimate, gross of the INPS deduction (so on the safe
+    # side); the year's figures apply the deduction.
+    taxable_base: Decimal
+    substitute_tax: Decimal
+    inps: Decimal
+    substitute_tax_advance: Decimal
+    inps_advance: Decimal
+    to_provision: Decimal
+    transaction_id: UUID | None
+    owns_transaction: bool
+    transaction_account_id: UUID | None
+    transaction_deleted: bool
+    notes: str | None
+    created_at: datetime
+
+
+class TaxPaymentCreate(BaseModel):
+    paid_on: date_
+    fiscal_year: int = Field(ge=2000, le=2100)
+    component: TaxComponent
+    kind: TaxPaymentKind
+    amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
+    notes: str | None = Field(default=None, max_length=500)
+    # Optional: paid from this account (a negative one-sided `transfer`).
+    account_id: UUID | None = None
+    category_id: UUID | None = None
+
+
+class TaxPaymentUpdate(BaseModel):
+    paid_on: date_ | None = None
+    fiscal_year: int | None = Field(default=None, ge=2000, le=2100)
+    component: TaxComponent | None = None
+    kind: TaxPaymentKind | None = None
+    amount: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=2)
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class TaxPayment(BaseModel):
+    id: UUID
+    paid_on: date_
+    fiscal_year: int
+    component: TaxComponent
+    kind: TaxPaymentKind
+    amount: Decimal
+    notes: str | None
+    transaction_id: UUID | None
+    account_id: UUID | None
+    created_at: datetime
+
+
+class ProvisionSourceCreate(BaseModel):
+    account_id: UUID
+    # None = the account's cash; set = that holding inside the account.
+    asset_id: UUID | None = None
+
+
+class ProvisionSource(BaseModel):
+    id: UUID
+    account_id: UUID
+    account_name: str
+    account_currency: str
+    asset: Asset | None
+    quantity: Decimal | None
+    price: Decimal | None
+    # None when it can't be priced right now — never 0.
+    value_base_currency: Decimal | None
+    # Whole units of `asset` the same account's cash could buy at `price`,
+    # for products bought in whole shares only (e.g. a money-market ETF).
+    buyable_units: int | None
+
+
+class ProvisionStatus(BaseModel):
+    total_base_currency: Decimal
+    sources: list[ProvisionSource]
+
+
+class F24Deadline(BaseModel):
+    due_date: date_
+    fiscal_year: int
+    component: TaxComponent
+    kind: TaxPaymentKind
+    amount_due: Decimal
+    amount_paid: Decimal
+    # True while the year it's computed on hasn't closed yet.
+    is_estimate: bool
+
+
+class FlatRateYearFigures(BaseModel):
+    revenue: Decimal  # collected in the year: fee + rivalsa + bollo
+    revenue_limit: Decimal
+    taxable_base: Decimal  # revenue × coefficient
+    inps: Decimal
+    # INPS contributions paid during the year, deducted from the tax base.
+    inps_deducted: Decimal
+    substitute_tax: Decimal
+    liability: Decimal  # substitute_tax + inps
+    advances_due: Decimal  # this year's advances, computed on the previous one
+    paid: Decimal  # F24 payments for this fiscal year
+    to_provision: Decimal  # Σ per collected invoice: total × its rate
+    outstanding: Decimal  # issued this year, not collected yet
+    invoice_count: int
+
+
+class FlatRateSummary(BaseModel):
+    year: int
+    as_of: date_
+    params: FlatRateYear
+    figures: FlatRateYearFigures
+    # As of today, across every year: accrued taxes net of payments (the
+    # net-worth liability; negative = credit) and everything the F24s will
+    # still ask for income collected so far, next year's advances included.
+    tax_liability: Decimal
+    cash_requirement: Decimal
+    provision: ProvisionStatus
+    gap: Decimal  # provision − cash_requirement
+    deadlines: list[F24Deadline]

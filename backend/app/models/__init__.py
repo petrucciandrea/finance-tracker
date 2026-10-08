@@ -70,12 +70,22 @@ class User(Base, TimestampMixin):
     hide_amounts: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
+    # employee / flat_rate / ordinary; NULL = the "Lavoro" section is off.
+    # Only flat_rate unlocks a dedicated section so far. It only gates the
+    # UI: a tax liability keeps counting in net worth whatever this says.
+    work_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     accounts: Mapped[list["Account"]] = relationship(back_populates="user")
     categories: Mapped[list["Category"]] = relationship(back_populates="user")
     budgets: Mapped[list["Budget"]] = relationship(back_populates="user")
     allocation_plans: Mapped[list["AllocationPlan"]] = relationship(back_populates="user")
     savings_goals: Mapped[list["SavingsGoal"]] = relationship(back_populates="user")
+
+    __table_args__ = (
+        CheckConstraint(
+            "work_type in ('employee','flat_rate','ordinary')", name="ck_users_work_type"
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -527,6 +537,13 @@ class ExchangeRate(Base):
     )
 
 from app.models.asset_transaction import AssetTransaction  # noqa: F401,E402
+from app.models.flat_rate import (  # noqa: F401,E402
+    FlatRateProvisionSource,
+    FlatRateSettings,
+    FlatRateYear,
+    Invoice,
+    TaxPayment,
+)
 from app.models.physical_asset import (  # noqa: F401,E402
     PhysicalAsset,
     PhysicalAssetMovement,

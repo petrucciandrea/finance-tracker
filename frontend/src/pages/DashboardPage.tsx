@@ -238,6 +238,17 @@ export function DashboardPage() {
           },
         ]
       : []),
+    // Taxes accrued on P.IVA income, already netted out of net worth.
+    ...(nw && Number(nw.total_tax_liability) !== 0
+      ? [
+          {
+            label: Number(nw.total_tax_liability) < 0 ? 'Credito fiscale' : 'Debito fiscale',
+            value: formatAmount(Math.abs(Number(nw.total_tax_liability)), base),
+            sub: <Link to="/invoices" className="link">già tolto dal patrimonio</Link>,
+          },
+        ]
+      : []),
+    // Income and expenses share a cell so the strip stays on one row.
     {
       label: `Entrate · Uscite ${month}`,
       value: monthTx.data ? (

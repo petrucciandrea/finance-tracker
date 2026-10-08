@@ -4,6 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
+import { WorkSettings } from '@/components/flat-rate/WorkSettings'
 import { ThemeChooser } from '@/components/layout/ThemeChooser'
 import { Button } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/Dialog'
@@ -19,6 +20,7 @@ import { displayName, formatFullDate, initials } from '@/lib/format'
 const SECTIONS = [
   { id: 'dati', label: 'Dati personali' },
   { id: 'valuta', label: 'Valuta base' },
+  { id: 'lavoro', label: 'Lavoro' },
   { id: 'aspetto', label: 'Aspetto' },
   { id: 'password', label: 'Password' },
 ]
@@ -343,6 +345,13 @@ export function ProfilePage() {
           </Section>
           <Section id="valuta" title="Valuta base" description="La valuta in cui vedi totali, grafici e piano. Ogni movimento resta nella sua valuta originale.">
             <BaseCurrency />
+          </Section>
+          <Section
+            id="lavoro"
+            title="Lavoro"
+            description="Il tipo di lavoro sblocca le sezioni dedicate. Con la P.IVA forfettaria: fatture, tasse e quanto accantonare."
+          >
+            <WorkSettings />
           </Section>
           <Section id="aspetto" title="Aspetto" description="“Sistema” segue l'impostazione chiaro/scuro del dispositivo.">
             <ThemeChooser size="md" />

@@ -39,6 +39,7 @@ from app.schemas import (
     SimulationResponse,
     SurvivalBudget,
 )
+from app.services.flat_rate import earmarked_cash
 from app.services.necessity import (
     UNCLASSIFIED,
     classification_coverage,
@@ -249,7 +250,9 @@ def average_monthly_primary_expenses(
 def survival_budget(db: Session, user: User, on_date: date_) -> SurvivalBudget:
     plan = get_or_create_plan(db, user)
     window = _analysis_window(db, user, as_of=on_date, lookback_months=plan.lookback_months)
-    cash = total_cash_balance(db, user)
+    # Cash set aside for the P.IVA's taxes is already the State's: counting
+    # it as runway would promise months of living off money that's owed.
+    cash = total_cash_balance(db, user) - earmarked_cash(db, user)
 
     if window is None:
         return SurvivalBudget(

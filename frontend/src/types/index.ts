@@ -40,6 +40,7 @@ export interface User {
   first_name: string | null
   last_name: string | null
   date_of_birth: string | null
+  hide_amounts: boolean
   created_at: string
 }
 
@@ -60,6 +61,7 @@ export interface UserUpdatePayload {
   first_name?: string | null
   last_name?: string | null
   date_of_birth?: string | null
+  hide_amounts?: boolean
 }
 
 export interface PasswordChangePayload {

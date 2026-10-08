@@ -183,6 +183,21 @@ def test_update_me_defaults_anagrafica_fields_to_null(
     assert body["date_of_birth"] is None
 
 
+def test_hide_amounts_defaults_to_false_and_persists(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    assert client.get("/api/v1/auth/me", headers=headers).json()["hide_amounts"] is False
+
+    response = client.patch("/api/v1/auth/me", json={"hide_amounts": True}, headers=headers)
+    assert response.status_code == 200
+    assert response.json()["hide_amounts"] is True
+
+    # A PATCH of another field must not reset it.
+    client.patch("/api/v1/auth/me", json={"first_name": "Mario"}, headers=headers)
+    assert client.get("/api/v1/auth/me", headers=headers).json()["hide_amounts"] is True
+
+
 def test_update_me_rejects_email_already_taken(client: TestClient, registered_user: dict) -> None:
     other = client.post(
         "/api/v1/auth/register",

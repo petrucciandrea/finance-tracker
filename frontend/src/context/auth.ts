@@ -13,6 +13,7 @@ export interface AuthContextValue {
   logout: () => Promise<void>
   updateProfile: (payload: UserUpdatePayload) => Promise<void>
   changePassword: (payload: PasswordChangePayload) => Promise<void>
+  setHideAmounts: (hidden: boolean) => void
 }
 
 export const AuthContext = createContext<AuthContextValue | undefined>(undefined)

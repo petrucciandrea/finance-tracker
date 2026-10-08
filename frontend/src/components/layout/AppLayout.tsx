@@ -4,6 +4,8 @@ import { ThemeChooser } from '@/components/layout/ThemeChooser'
 import {
   ChevronDownIcon,
   CloseIcon,
+  EyeIcon,
+  EyeOffIcon,
   GemIcon,
   GridIcon,
   HomeIcon,
@@ -99,7 +101,7 @@ const menuItemClass =
  * a panel under the bar, and the bar shows the current page's name.
  */
 export function AppLayout() {
-  const { user, logout } = useAuth()
+  const { user, logout, setHideAmounts } = useAuth()
   const { resolved, setPreference } = useTheme()
   const navigate = useNavigate()
   const location = useLocation()
@@ -150,6 +152,8 @@ export function AppLayout() {
 
   const nextTheme = resolved === 'dark' ? 'light' : 'dark'
   const themeToggleLabel = nextTheme === 'dark' ? 'Passa al tema scuro' : 'Passa al tema chiaro'
+  const hidden = user.hide_amounts
+  const amountsToggleLabel = hidden ? 'Mostra importi' : 'Nascondi importi'
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -199,6 +203,18 @@ export function AppLayout() {
               </NavLink>
             ))}
           </nav>
+
+          {/* Unlike the theme toggle, visible at every width: hiding the
+              numbers is most useful on a phone, in public. */}
+          <button
+            type="button"
+            onClick={() => setHideAmounts(!hidden)}
+            aria-label={amountsToggleLabel}
+            title={amountsToggleLabel}
+            className="grid h-10 w-10 flex-none cursor-pointer place-items-center rounded-[10px] border border-line text-ink hover:bg-card-2"
+          >
+            {hidden ? <EyeOffIcon className="h-[18px] w-[18px]" /> : <EyeIcon className="h-[18px] w-[18px]" />}
+          </button>
 
           <button
             type="button"
@@ -319,7 +335,11 @@ export function AppLayout() {
 
       <main className="w-full flex-1 px-4 pt-[22px] pb-12 sm:px-5">
         <div className="mx-auto flex max-w-[1200px] flex-col gap-4">
-          <Outlet />
+          {/* Remount on toggle: the formatters read the flag at render time,
+              and memoised rows or chart tooltips wouldn't re-render on their
+              own. Query data is cached and filters live in the URL, so
+              only transient UI state (an open row, a draft) is lost. */}
+          <Outlet key={hidden ? 'amounts-hidden' : 'amounts-shown'} />
         </div>
       </main>
     </div>

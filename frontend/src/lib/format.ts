@@ -12,6 +12,23 @@ const LOCALE = 'it-IT'
 // U+2212: same width as "+" in tabular figures, unlike the hyphen Intl emits.
 export const MINUS = '−'
 
+// --- Hidden amounts ---
+//
+// "Nascondi importi" masks every amount and quantity at the formatter, so no
+// call site can forget it. It is module state rather than context because
+// most callers are plain functions (tooltips, axis ticks, aria-labels): the
+// AuthProvider sets it whenever the user changes, and AppLayout remounts the
+// page under a new key so everything already rendered picks it up.
+// Percentages stay visible — on their own they reveal no sum.
+
+export const MASK = '•••••'
+
+let amountsHidden = false
+
+export function setAmountsHidden(hidden: boolean): void {
+  amountsHidden = hidden
+}
+
 const numberFormats = new Map<string, Intl.NumberFormat>()
 
 function fractionDigits(currency: string | undefined): number {
@@ -60,6 +77,7 @@ export function formatAmount(
   currency?: string,
   { sign = 'auto', digits }: { sign?: SignMode; digits?: number } = {},
 ): string {
+  if (amountsHidden) return MASK
   const n = toNumber(value)
   const d = digits ?? fractionDigits(currency)
   const body = numberFormat(d, d).format(Math.abs(n))
@@ -79,11 +97,14 @@ export function formatMoney(
 
 /** Compact axis label: "85k", "1,2 Mln". */
 export function formatCompact(value: number): string {
+  if (amountsHidden) return '•••'
   return new Intl.NumberFormat(LOCALE, { notation: 'compact', maximumFractionDigits: 1 }).format(value)
 }
 
 /** Quantities (shares, crypto units): up to 8 decimals, no trailing zeros. */
 export function formatQuantity(value: string | number): string {
+  // Grams of gold or units of a stock give the value away just as well.
+  if (amountsHidden) return MASK
   return numberFormat(0, 8).format(toNumber(value))
 }
 

@@ -155,6 +155,9 @@ def update_me(
     if payload.base_currency is not None:
         current_user.base_currency = payload.base_currency
 
+    if payload.hide_amounts is not None:
+        current_user.hide_amounts = payload.hide_amounts
+
     # Anagrafica fields are nullable and independently clearable — a client
     # sends `null` explicitly to clear one without touching the others, so
     # these use exclude_unset rather than the `is not None` check above

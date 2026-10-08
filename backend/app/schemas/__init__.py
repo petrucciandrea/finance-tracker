@@ -204,6 +204,7 @@ class UserUpdate(BaseModel):
     first_name: str | None = Field(default=None, max_length=100)
     last_name: str | None = Field(default=None, max_length=100)
     date_of_birth: date_ | None = None
+    hide_amounts: bool | None = None
 
 
 class PasswordChangeRequest(BaseModel):
@@ -218,6 +219,7 @@ class User(ORMBase):
     first_name: str | None = None
     last_name: str | None = None
     date_of_birth: date_ | None = None
+    hide_amounts: bool
     created_at: datetime
 
 

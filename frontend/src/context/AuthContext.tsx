@@ -9,12 +9,23 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import * as authApi from '@/api/auth'
 import { getStoredRefreshToken, setAccessToken, setStoredRefreshToken } from '@/api/client'
 import { AuthContext } from '@/context/auth'
+import { setAmountsHidden } from '@/lib/format'
 import type { LoginPayload, PasswordChangePayload, RegisterPayload, User, UserUpdatePayload } from '@/types'
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUserState] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const didBootstrap = useRef(false)
+  const hideAmountsRequest = useRef(0)
+
+  // Every user change goes through here so the formatters' "hide amounts"
+  // flag is already set when the next render runs (see lib/format.ts).
+  // Logging out clears it: the login page has no amounts, and the next
+  // account brings its own preference.
+  function setUser(next: User | null) {
+    setAmountsHidden(next?.hide_amounts ?? false)
+    setUserState(next)
+  }
 
   useEffect(() => {
     // StrictMode double-invokes effects in dev, which would otherwise fire
@@ -90,9 +101,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await authApi.changePassword(payload)
   }
 
+  // Optimistic: the toggle must feel instant. Only a failure of the latest
+  // request reverts — an older one failing after a newer click would
+  // otherwise undo what the user just chose.
+  function setHideAmounts(hidden: boolean) {
+    if (!user) return
+    const previous = user
+    const request = ++hideAmountsRequest.current
+    setUser({ ...user, hide_amounts: hidden })
+    authApi.updateProfile({ hide_amounts: hidden }).catch(() => {
+      if (request === hideAmountsRequest.current) setUser(previous)
+    })
+  }
+
   return (
     <AuthContext.Provider
-      value={{ user, isLoading, login, register, logout, updateProfile, changePassword }}
+      value={{ user, isLoading, login, register, logout, updateProfile, changePassword, setHideAmounts }}
     >
       {children}
     </AuthContext.Provider>

@@ -239,21 +239,26 @@ export function DashboardPage() {
         ]
       : []),
     {
-      label: `Entrate ${month}`,
-      value: monthTx.data ? formatAmount(t.income, base, { sign: 'always' }) : '…',
-      tone: 'pos',
-      sub: `${t.incomeCount} ${t.incomeCount === 1 ? 'movimento' : 'movimenti'}`,
-    },
-    {
-      label: `Uscite ${month}`,
-      value: monthTx.data ? formatAmount(t.expense, base) : '…',
-      sub: `${t.expenseCount} ${t.expenseCount === 1 ? 'movimento' : 'movimenti'}`,
+      label: `Entrate · Uscite ${month}`,
+      value: monthTx.data ? (
+        <>
+          <span className="block whitespace-nowrap text-pos">{formatAmount(t.income, base, { sign: 'always' })}</span>
+          <span className="block whitespace-nowrap">{formatAmount(t.expense, base)}</span>
+        </>
+      ) : (
+        '…'
+      ),
+      sub: `${t.incomeCount} entrate · ${t.expenseCount} uscite`,
     },
     {
       label: `Risparmio ${month}`,
-      value: monthTx.data ? formatAmount(savings, base) : '…',
+      value: <span className="whitespace-nowrap">{monthTx.data ? formatAmount(savings, base) : '…'}</span>,
       tone: savings < 0 ? 'neg' : 'default',
-      sub: t.income > 0 ? `${formatPercent((savings / t.income) * 100)} delle entrate` : 'nessuna entrata finora',
+      sub: (
+        <span className="whitespace-nowrap">
+          {t.income > 0 ? `${formatPercent((savings / t.income) * 100)} delle entrate` : 'nessuna entrata finora'}
+        </span>
+      ),
       subTone: savings < 0 ? 'neg' : 'muted',
     },
   ]

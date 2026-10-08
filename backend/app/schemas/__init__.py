@@ -12,10 +12,10 @@ from datetime import date as date_
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -196,15 +196,24 @@ class ErrorResponse(BaseModel):
 # Auth / Users
 # ---------------------------------------------------------------------------
 
+# Emails are case-insensitive in practice, but the unique index is not: without
+# normalising, Foo@x.com and foo@x.com would be two accounts.
+LowerEmail = Annotated[EmailStr, AfterValidator(str.lower)]
+
+# bcrypt only reads 72 bytes, so the cap is not about hashing: it keeps a
+# multi-megabyte "password" from being parsed and held in memory.
+_PASSWORD_MAX = 256
+
+
 class UserCreate(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=8)
+    email: LowerEmail
+    password: str = Field(min_length=8, max_length=_PASSWORD_MAX)
     base_currency: str = Field(min_length=3, max_length=3, description="ISO 4217 code, e.g. EUR")
 
 
 class UserLogin(BaseModel):
-    email: EmailStr
-    password: str
+    email: LowerEmail
+    password: str = Field(max_length=_PASSWORD_MAX)
 
 
 class TokenPair(BaseModel):
@@ -218,7 +227,7 @@ class RefreshRequest(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    email: EmailStr | None = None
+    email: LowerEmail | None = None
     base_currency: str | None = Field(
         default=None, min_length=3, max_length=3, description="ISO 4217 code, e.g. EUR"
     )
@@ -234,8 +243,8 @@ class UserUpdate(BaseModel):
 
 
 class PasswordChangeRequest(BaseModel):
-    current_password: str
-    new_password: str = Field(min_length=8)
+    current_password: str = Field(max_length=_PASSWORD_MAX)
+    new_password: str = Field(min_length=8, max_length=_PASSWORD_MAX)
 
 
 class User(ORMBase):
@@ -430,7 +439,9 @@ class TransactionImportPreview(BaseModel):
 
 class TransactionImportConfirm(BaseModel):
     import_id: UUID
-    row_numbers: list[int] = Field(description="Rows to actually commit, e.g. excluding duplicates")
+    row_numbers: list[int] = Field(
+        max_length=5000, description="Rows to actually commit, e.g. excluding duplicates"
+    )
 
 
 # --- Summary ---
@@ -535,7 +546,7 @@ class AssetTransactionType(str, Enum):
 
 class AssetTransactionCreate(BaseModel):
     account_id: UUID
-    symbol: str = Field(min_length=1, max_length=20)
+    symbol: str = Field(min_length=1, max_length=20, pattern=r"^[A-Za-z0-9][A-Za-z0-9.\-=^]*$")
     asset_type: AssetType
     type: AssetTransactionType
     quantity: Decimal = Field(gt=0, max_digits=24, decimal_places=8)
@@ -600,7 +611,9 @@ class AssetTransactionImportPreview(BaseModel):
 
 class AssetTransactionImportConfirm(BaseModel):
     import_id: UUID
-    row_numbers: list[int] = Field(description="Rows to actually commit, e.g. excluding duplicates")
+    row_numbers: list[int] = Field(
+        max_length=5000, description="Rows to actually commit, e.g. excluding duplicates"
+    )
 
 
 class HoldingWithValue(BaseModel):

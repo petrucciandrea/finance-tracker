@@ -38,8 +38,9 @@ export async function updateProfile(payload: UserUpdatePayload): Promise<User> {
   return data
 }
 
-export async function changePassword(payload: PasswordChangePayload): Promise<void> {
-  await apiClient.post('/auth/me/password', payload)
+export async function changePassword(payload: PasswordChangePayload): Promise<TokenPair> {
+  const { data } = await apiClient.post<TokenPair>('/auth/me/password', payload)
+  return data
 }
 
 export async function previewApproval(token: string): Promise<ApprovalRequestInfo> {

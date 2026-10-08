@@ -369,7 +369,7 @@ def delete_asset_transaction(
 # ---------------------------------------------------------------------------
 
 @router.post("/transactions/import", response_model=AssetTransactionImportPreview)
-async def asset_transaction_import_preview(
+def asset_transaction_import_preview(
     account_id: UUID,
     file: UploadFile,
     db: Session = Depends(get_db),
@@ -383,7 +383,7 @@ async def asset_transaction_import_preview(
             "wallet accounts",
         )
 
-    content = await file.read()
+    content = csv_import_service.read_upload(file)
     preview = csv_import_service.parse_asset_csv(
         db, account_id, content, closed_at=account.closed_at
     )
@@ -435,7 +435,8 @@ def asset_transaction_import_confirm(
             "wallet accounts",
         )
 
-    selected = {r.row_number: r for r in preview.rows if r.row_number in payload.row_numbers}
+    wanted = set(payload.row_numbers)
+    selected = {r.row_number: r for r in preview.rows if r.row_number in wanted}
     # Process buys before sells on a tied date, same reasoning as
     # `compute_holding_positions` — otherwise a same-day sell can look like
     # it's overdrawing a position a later-processed same-day buy would cover.

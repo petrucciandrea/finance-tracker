@@ -155,6 +155,27 @@ Redis together. Behind a reverse proxy uvicorn needs `--proxy-headers
 --forwarded-allow-ips=<proxy>`, or every request shares the proxy's bucket. The counters
 are global, so `conftest.py` resets them before each test.
 
+### Sessions: single-use refresh, password change revokes the rest
+Rotation claims a refresh token with a conditional `UPDATE … WHERE revoked_at IS NULL`, so
+two concurrent refreshes can't both win. Presenting an already-revoked token is just a 401:
+it deliberately does **not** revoke the user's other sessions, because several tabs share
+one `localStorage` token and an ordinary rotation race would log them all out.
+`POST /auth/me/password` revokes every refresh token and returns a fresh `TokenPair`
+(not 204) for the current device, which the frontend stores — otherwise the person who
+changed the password would be the one logged out at the next refresh.
+
+Emails are lowercased at the schema (`LowerEmail`); the unique index is case-sensitive.
+Login verifies against `DUMMY_PASSWORD_HASH` for unknown emails so response time doesn't
+reveal whether the account exists.
+
+### CSV import: bad rows are flagged, bad files are 422
+`csv_import.py` caps the upload (2 MB, 5000 rows) and turns a non-UTF-8 or malformed file
+into `CsvImportError` → 422 envelope. Per-row problems (NaN/Infinity/≥1e10 amounts, unknown
+or malformed currency, a ticker outside `SYMBOL_PATTERN`) make the row unparsable in the
+preview instead of a 500 at confirm that would drop the batch. The symbol check matters
+because the ticker is interpolated into an outbound Yahoo URL. The handlers are plain `def`
+(threadpool): the parser does a DB query per row and must not block the event loop.
+
 ### Login leaks nothing about which emails exist
 Unknown email and wrong password both return the same 401 with the same message. Don't "improve" the error message.
 

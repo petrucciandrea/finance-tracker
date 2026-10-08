@@ -24,6 +24,7 @@ from app.routers import (
     savings_goals,
     transactions,
 )
+from app.services.csv_import import CsvImportError
 
 logging.basicConfig(level=logging.DEBUG if settings.debug else logging.INFO)
 logger = logging.getLogger(__name__)
@@ -89,6 +90,14 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
             }
         },
         headers=exc.headers,
+    )
+
+
+@app.exception_handler(CsvImportError)
+async def csv_import_error_handler(request: Request, exc: CsvImportError) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"error": {"code": "CSV_IMPORT_ERROR", "message": str(exc), "details": []}},
     )
 
 

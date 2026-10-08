@@ -16,11 +16,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from jose import JWTError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.rate_limit import rate_limit
 from app.core.security import (
+    DUMMY_PASSWORD_HASH,
     create_access_token,
     create_approval_token,
     create_refresh_token,
@@ -29,7 +31,7 @@ from app.core.security import (
     verify_password,
 )
 from app.deps import get_current_user, get_db
-from app.models import User
+from app.models import Currency, User
 from app.models.refresh_token import RefreshToken
 from app.schemas import (
     ApprovalDecisionRequest,
@@ -77,6 +79,14 @@ def _store_refresh_token(db: Session, user_id, token: str) -> None:
     db.commit()
 
 
+def _ensure_known_currency(db: Session, code: str) -> None:
+    # An unknown code would reach the FK as a 500 and make up FX lookups.
+    if db.get(Currency, code) is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Unknown currency {code!r}"
+        )
+
+
 def _notify_admin_of_registration(user_id: UUID, user_email: str) -> None:
     if not settings.admin_email:
         # Without this the account would sit pending with no one told.
@@ -110,6 +120,7 @@ def register(
             status_code=status.HTTP_409_CONFLICT, detail="Email already registered"
         )
 
+    _ensure_known_currency(db, payload.base_currency)
     needs_approval = settings.registration_mode == "approval"
     user = User(
         email=payload.email,
@@ -118,7 +129,15 @@ def register(
         approval_status="pending" if needs_approval else "approved",
     )
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Two concurrent registrations passed the check above; the unique
+        # index caught the second. Same answer as the check, not a 500.
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Email already registered"
+        ) from None
     db.refresh(user)
 
     if needs_approval:
@@ -129,7 +148,10 @@ def register(
 @router.post("/login", response_model=TokenPair, dependencies=[_LIMIT_LOGIN])
 def login(payload: UserLogin, db: Session = Depends(get_db)) -> TokenPair:
     user = db.query(User).filter(User.email == payload.email).first()
-    if user is None or not verify_password(payload.password, user.password_hash):
+    password_ok = verify_password(
+        payload.password, user.password_hash if user else DUMMY_PASSWORD_HASH
+    )
+    if user is None or not password_ok:
         # Same error for "no such user" and "wrong password" — don't leak
         # which one it was.
         raise HTTPException(
@@ -182,12 +204,22 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> TokenPair
 
     # Rotate: revoke the used refresh token and issue a new pair. This limits
     # the damage window if a refresh token is ever stolen (it's single-use).
-    stored.revoked_at = datetime.now(UTC)
+    # The conditional UPDATE is what makes it single-use under concurrency:
+    # two requests can both pass the check above, but only one flips the row.
+    claimed = (
+        db.query(RefreshToken)
+        .filter(RefreshToken.id == stored.id, RefreshToken.revoked_at.is_(None))
+        .update({"revoked_at": datetime.now(UTC)}, synchronize_session=False)
+    )
+    if claimed == 0:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token expired or revoked"
+        )
 
     new_access_token = create_access_token(token_data.user_id)
     new_refresh_token = create_refresh_token(token_data.user_id)
     _store_refresh_token(db, token_data.user_id, new_refresh_token)
-    db.commit()
 
     return TokenPair(access_token=new_access_token, refresh_token=new_refresh_token)
 
@@ -222,6 +254,7 @@ def update_me(
         current_user.email = payload.email
 
     if payload.base_currency is not None:
+        _ensure_known_currency(db, payload.base_currency)
         current_user.base_currency = payload.base_currency
 
     if payload.hide_amounts is not None:
@@ -247,18 +280,28 @@ def update_me(
     return current_user
 
 
-@router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_LIMIT_PASSWORD])
+@router.post("/me/password", response_model=TokenPair, dependencies=[_LIMIT_PASSWORD])
 def change_password(
     payload: PasswordChangeRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> None:
+) -> TokenPair:
     if not verify_password(payload.current_password, current_user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect current password"
         )
     current_user.password_hash = hash_password(payload.new_password)
-    db.commit()
+
+    # A stolen password's sessions must not survive its replacement: revoke
+    # every refresh token, then hand this device a fresh pair so the person
+    # who just changed it isn't the one logged out.
+    db.query(RefreshToken).filter(
+        RefreshToken.user_id == current_user.id, RefreshToken.revoked_at.is_(None)
+    ).update({"revoked_at": datetime.now(UTC)}, synchronize_session=False)
+    access_token = create_access_token(current_user.id)
+    refresh_token = create_refresh_token(current_user.id)
+    _store_refresh_token(db, current_user.id, refresh_token)
+    return TokenPair(access_token=access_token, refresh_token=refresh_token)
 
 
 # ---------------------------------------------------------------------------

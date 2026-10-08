@@ -245,7 +245,7 @@ def test_change_password_with_correct_current_password(
         json={"current_password": registered_user["password"], "new_password": "new-password-456"},
         headers=registered_user["auth_headers"],
     )
-    assert response.status_code == 204
+    assert response.status_code == 200
 
     old_login = client.post(
         "/api/v1/auth/login",
@@ -269,3 +269,81 @@ def test_change_password_with_wrong_current_password_returns_401(
         headers=registered_user["auth_headers"],
     )
     assert response.status_code == 401
+
+
+def test_change_password_revokes_other_sessions_but_returns_a_working_one(
+    client: TestClient, registered_user: dict
+) -> None:
+    response = client.post(
+        "/api/v1/auth/me/password",
+        json={"current_password": registered_user["password"], "new_password": "new-password-456"},
+        headers=registered_user["auth_headers"],
+    )
+    fresh = response.json()
+
+    old = client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": registered_user["refresh_token"]}
+    )
+    new = client.post("/api/v1/auth/refresh", json={"refresh_token": fresh["refresh_token"]})
+
+    assert old.status_code == 401
+    assert new.status_code == 200
+
+
+def test_emails_are_case_insensitive(client: TestClient) -> None:
+    client.post(
+        "/api/v1/auth/register",
+        json={"email": "Mixed.Case@Example.com", "password": "password123", "base_currency": "EUR"},
+    )
+
+    duplicate = client.post(
+        "/api/v1/auth/register",
+        json={"email": "mixed.case@example.com", "password": "password123", "base_currency": "EUR"},
+    )
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"email": "MIXED.CASE@EXAMPLE.COM", "password": "password123"},
+    )
+
+    assert duplicate.status_code == 409
+    assert login.status_code == 200
+
+
+def test_oversized_password_is_rejected(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/auth/register",
+        json={"email": "big@example.com", "password": "x" * 300, "base_currency": "EUR"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_refresh_token_cannot_be_used_twice(client: TestClient, registered_user: dict) -> None:
+    body = {"refresh_token": registered_user["refresh_token"]}
+
+    first = client.post("/api/v1/auth/refresh", json=body)
+    second = client.post("/api/v1/auth/refresh", json=body)
+
+    assert first.status_code == 200
+    assert second.status_code == 401
+
+
+def test_register_rejects_an_unknown_base_currency(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/auth/register",
+        json={"email": "x@example.com", "password": "password123", "base_currency": "ZZZ"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_profile_rejects_an_unknown_base_currency(
+    client: TestClient, registered_user: dict
+) -> None:
+    response = client.patch(
+        "/api/v1/auth/me",
+        json={"base_currency": "ZZZ"},
+        headers=registered_user["auth_headers"],
+    )
+
+    assert response.status_code == 422

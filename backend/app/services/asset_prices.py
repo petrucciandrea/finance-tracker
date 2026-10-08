@@ -11,6 +11,7 @@ DB cache is what keeps this app from hammering it on every page load.
 from datetime import UTC, datetime, timedelta
 from datetime import date as date_
 from decimal import Decimal
+from urllib.parse import quote
 
 import httpx
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -144,7 +145,7 @@ def _fetch_price_history_from_yahoo_finance(
 
     try:
         response = httpx.get(
-            f"{settings.yahoo_finance_api_base_url}/{symbol}",
+            f"{settings.yahoo_finance_api_base_url}/{quote(symbol, safe='')}",
             params={"interval": "1d", "period1": period1, "period2": period2},
             headers=_YAHOO_FINANCE_HEADERS,
             timeout=10.0,
@@ -234,7 +235,7 @@ def find_or_create_asset(db: Session, symbol: str, asset_type: str) -> Asset:
 def _fetch_currency_from_yahoo_finance(symbol: str) -> str:
     try:
         response = httpx.get(
-            f"{settings.yahoo_finance_api_base_url}/{symbol}",
+            f"{settings.yahoo_finance_api_base_url}/{quote(symbol, safe='')}",
             params={"interval": "1d", "range": "1d"},
             headers=_YAHOO_FINANCE_HEADERS,
             timeout=5.0,
@@ -277,7 +278,7 @@ def search_assets(q: str, asset_type: str) -> list[dict]:
 def _fetch_from_yahoo_finance(symbol: str) -> Decimal:
     try:
         response = httpx.get(
-            f"{settings.yahoo_finance_api_base_url}/{symbol}",
+            f"{settings.yahoo_finance_api_base_url}/{quote(symbol, safe='')}",
             params={"interval": "1d", "range": "1d"},
             headers=_YAHOO_FINANCE_HEADERS,
             timeout=5.0,

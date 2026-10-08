@@ -14,6 +14,7 @@ idea, `SETEX import:{id} 900 <json>`) instead of adding a Postgres table.
 
 import csv
 import io
+import re
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -22,11 +23,65 @@ from datetime import date as date_
 from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
+from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
-from app.models import Asset, AssetTransaction, Transaction
+from app.models import Asset, AssetTransaction, Currency, Transaction
 
 _PREVIEW_TTL = timedelta(minutes=15)
+MAX_CSV_BYTES = 2 * 1024 * 1024
+MAX_CSV_ROWS = 5000
+# Columns are Numeric(18, 8): anything at or above 1e10 would overflow at confirm
+# time and lose the whole batch, so it is flagged per row in the preview instead.
+_MAX_ABS_VALUE = Decimal("1e10")
+# Yahoo/CoinGecko-style tickers. The symbol ends up in an outbound URL path, so
+# anything outside this set ('/', '?', '#', '..') must never get that far.
+SYMBOL_PATTERN = r"[A-Z0-9][A-Z0-9.\-=^]{0,19}"
+_CURRENCY_PATTERN = re.compile(r"[A-Z]{3}")
+
+
+class CsvImportError(ValueError):
+    """The file as a whole can't be imported (as opposed to one bad row)."""
+
+
+def read_upload(file: UploadFile) -> bytes:
+    # One byte past the cap is enough to know it's too big without reading all of it.
+    content = file.file.read(MAX_CSV_BYTES + 1)
+    if len(content) > MAX_CSV_BYTES:
+        raise CsvImportError(f"File too large (max {MAX_CSV_BYTES // (1024 * 1024)} MB)")
+    return content
+
+
+def _read_rows(file_content: bytes) -> list[dict[str, str]]:
+    try:
+        text = file_content.decode("utf-8-sig")  # handles Excel's BOM-prefixed exports
+    except UnicodeDecodeError:
+        raise CsvImportError("File must be UTF-8 encoded text") from None
+    rows: list[dict[str, str]] = []
+    try:
+        for raw in csv.DictReader(io.StringIO(text)):
+            if len(rows) >= MAX_CSV_ROWS:
+                raise CsvImportError(f"Too many rows (max {MAX_CSV_ROWS})")
+            rows.append(raw)
+    except csv.Error as exc:
+        raise CsvImportError(f"Malformed CSV: {exc}") from None
+    return rows
+
+
+def _decimal(value: str) -> Decimal:
+    number = Decimal(value.strip())
+    # NaN/Infinity parse as Decimals but break every comparison after this.
+    if not number.is_finite() or abs(number) >= _MAX_ABS_VALUE:
+        raise ValueError(f"number out of range: {value.strip()[:30]!r}")
+    return number
+
+
+def _evict_expired() -> None:
+    # Expired previews were only dropped when someone asked for that exact id,
+    # so abandoned uploads accumulated for the life of the process.
+    for store in (_preview_store, _asset_preview_store):
+        for key in [k for k, v in store.items() if _is_expired(v.created_at)]:
+            del store[key]
 _preview_store: dict[UUID, "ImportPreviewData"] = {}
 _asset_preview_store: dict[UUID, "AssetImportPreviewData"] = {}
 
@@ -66,8 +121,10 @@ def _parse_row(row_number: int, account_id: UUID, raw: dict[str, str]) -> Import
     """
     try:
         parsed_date = date_.fromisoformat(raw["date"].strip())
-        amount = Decimal(raw["amount"].strip())
+        amount = _decimal(raw["amount"])
         currency = raw["currency"].strip().upper()
+        if not _CURRENCY_PATTERN.fullmatch(currency):
+            raise ValueError(f"currency must be a 3-letter code, got {currency[:10]!r}")
         description = raw.get("description", "").strip() or None
         return ImportRow(
             row_number=row_number,
@@ -113,6 +170,18 @@ def _mark_duplicates(db: Session, rows: list[ImportRow]) -> None:
         row.is_duplicate = exists is not None
 
 
+def _mark_unknown_currencies(db: Session, rows: list[ImportRow]) -> None:
+    """
+    An unknown code would fail the currency FK at confirm time (a 500 that
+    throws the batch away) and send a made-up code to the FX provider.
+    """
+    known = {code for (code,) in db.query(Currency.code).all()}
+    for row in rows:
+        if row.is_parsable and row.currency not in known:
+            row.is_parsable = False
+            row.error = f"Unknown currency {row.currency!r}"
+
+
 def _mark_after_closure(
     rows: Sequence["ImportRow | AssetImportRow"], closed_at: date_ | None
 ) -> None:
@@ -132,15 +201,14 @@ def _mark_after_closure(
 def parse_csv(
     db: Session, account_id: UUID, file_content: bytes, *, closed_at: date_ | None = None
 ) -> ImportPreviewData:
-    text = file_content.decode("utf-8-sig")  # handles Excel's BOM-prefixed exports
-    reader = csv.DictReader(io.StringIO(text))
-
     rows = [
-        _parse_row(i, account_id, raw) for i, raw in enumerate(reader, start=1)
+        _parse_row(i, account_id, raw) for i, raw in enumerate(_read_rows(file_content), start=1)
     ]
+    _mark_unknown_currencies(db, rows)
     _mark_after_closure(rows, closed_at)
     _mark_duplicates(db, rows)
 
+    _evict_expired()
     preview = ImportPreviewData(import_id=uuid.uuid4(), account_id=account_id, rows=rows)
     _preview_store[preview.import_id] = preview
     return preview
@@ -199,8 +267,8 @@ def _parse_asset_row(row_number: int, account_id: UUID, raw: dict[str, str]) -> 
     """
     try:
         symbol = raw["symbol"].strip().upper()
-        if not symbol:
-            raise ValueError("symbol is required")
+        if not re.fullmatch(SYMBOL_PATTERN, symbol):
+            raise ValueError(f"invalid symbol: {symbol[:25]!r}")
 
         asset_type = raw["asset_type"].strip().lower()
         if asset_type not in ("stock", "etf", "crypto"):
@@ -210,12 +278,12 @@ def _parse_asset_row(row_number: int, account_id: UUID, raw: dict[str, str]) -> 
         if transaction_type not in ("buy", "sell"):
             raise ValueError(f"type must be buy/sell, got {transaction_type!r}")
 
-        quantity = Decimal(raw["quantity"].strip())
-        price = Decimal(raw["price"].strip())
+        quantity = _decimal(raw["quantity"])
+        price = _decimal(raw["price"])
         if quantity <= 0 or price <= 0:
             raise ValueError("quantity and price must both be positive")
 
-        fee = Decimal(raw.get("fee", "").strip() or "0")
+        fee = _decimal(raw.get("fee", "").strip() or "0")
         parsed_date = date_.fromisoformat(raw["date"].strip())
         notes = raw.get("notes", "").strip() or None
 
@@ -279,13 +347,14 @@ def _mark_asset_duplicates(db: Session, rows: list[AssetImportRow]) -> None:
 def parse_asset_csv(
     db: Session, account_id: UUID, file_content: bytes, *, closed_at: date_ | None = None
 ) -> AssetImportPreviewData:
-    text = file_content.decode("utf-8-sig")
-    reader = csv.DictReader(io.StringIO(text))
-
-    rows = [_parse_asset_row(i, account_id, raw) for i, raw in enumerate(reader, start=1)]
+    rows = [
+        _parse_asset_row(i, account_id, raw)
+        for i, raw in enumerate(_read_rows(file_content), start=1)
+    ]
     _mark_after_closure(rows, closed_at)
     _mark_asset_duplicates(db, rows)
 
+    _evict_expired()
     preview = AssetImportPreviewData(import_id=uuid.uuid4(), account_id=account_id, rows=rows)
     _asset_preview_store[preview.import_id] = preview
     return preview

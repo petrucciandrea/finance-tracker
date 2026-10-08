@@ -521,7 +521,7 @@ def delete_transaction(
 # ---------------------------------------------------------------------------
 
 @router.post("/import", response_model=TransactionImportPreview)
-async def import_preview(
+def import_preview(
     account_id: UUID,
     file: UploadFile,
     db: Session = Depends(get_db),
@@ -529,7 +529,7 @@ async def import_preview(
 ) -> TransactionImportPreview:
     account = get_owned_account(db, account_id, current_user)
 
-    content = await file.read()
+    content = csv_import_service.read_upload(file)
     preview = csv_import_service.parse_csv(db, account_id, content, closed_at=account.closed_at)
 
     rows = [
@@ -570,7 +570,8 @@ def import_confirm(
         )
     get_owned_account(db, preview.account_id, current_user)
 
-    selected = {r.row_number: r for r in preview.rows if r.row_number in payload.row_numbers}
+    wanted = set(payload.row_numbers)
+    selected = {r.row_number: r for r in preview.rows if r.row_number in wanted}
     created: list[Transaction] = []
 
     for row in selected.values():

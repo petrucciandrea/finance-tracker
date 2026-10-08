@@ -102,7 +102,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function changePassword(payload: PasswordChangePayload) {
-    await authApi.changePassword(payload)
+    // The server revokes every session on a password change and returns a
+    // fresh pair for this one; without storing it we'd be logged out at the
+    // next token refresh.
+    const tokens = await authApi.changePassword(payload)
+    setAccessToken(tokens.access_token)
+    setStoredRefreshToken(tokens.refresh_token)
   }
 
   // Optimistic: the toggle must feel instant. Only a failure of the latest

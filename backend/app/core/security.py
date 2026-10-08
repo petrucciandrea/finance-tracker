@@ -29,6 +29,11 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(_bcrypt_input(plain_password), hashed_password.encode("ascii"))
 
 
+# Verified against when the email is unknown, so "no such user" costs the same
+# bcrypt time as "wrong password" and response time doesn't reveal which it was.
+DUMMY_PASSWORD_HASH = hash_password("not-a-real-password")
+
+
 def _create_token(subject: UUID, expires_delta: timedelta, token_type: str) -> str:
     now = datetime.now(UTC)
     payload = {
@@ -83,7 +88,12 @@ def decode_token(token: str, expected_type: str) -> TokenPayload:
     callers turn that into a 401 at the API boundary, not here, so this stays
     reusable outside of FastAPI's request/response cycle.
     """
-    payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+    payload = jwt.decode(
+        token,
+        settings.jwt_secret_key,
+        algorithms=[settings.jwt_algorithm],
+        options={"require_exp": True},
+    )
     token_type = payload.get("type")
     if token_type != expected_type:
         raise ValueError(f"Expected a {expected_type} token, got {token_type}")

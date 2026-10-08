@@ -63,7 +63,7 @@ export function RegisterPage() {
     return (
       <AuthLayout title="Quasi fatto" subtitle="Ancora un passaggio prima di poter accedere.">
         <div className="mt-6 flex flex-col gap-4">
-          {needsVerification && (
+          {needsVerification && !needsApproval && (
             <p className="text-[15px] text-ink-2">
               Abbiamo mandato un link di conferma a <strong className="text-ink">{created.email}</strong>. Aprilo per
               verificare l&apos;indirizzo (controlla anche lo spam).
@@ -73,8 +73,9 @@ export function RegisterPage() {
             <>
               <Notice tone="info">In attesa di approvazione</Notice>
               <p className="text-[15px] text-ink-2">
-                Le registrazioni sono su approvazione: appena la tua richiesta verrà approvata riceverai un&apos;email e
-                potrai accedere con la password che hai scelto.
+                Le registrazioni sono su approvazione. Appena la tua richiesta verrà approvata riceverai
+                un&apos;email: conferma il tuo indirizzo dal link che contiene e potrai accedere con la password che
+                hai scelto.
               </p>
             </>
           )}

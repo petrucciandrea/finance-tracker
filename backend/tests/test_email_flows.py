@@ -194,3 +194,80 @@ def test_reset_request_is_rate_limited(client: TestClient, sent: list[dict]) -> 
     ]
 
     assert statuses == [202] * 5 + [429]
+
+
+# --- approval mode: one email, not two ------------------------------------------
+
+
+@pytest.fixture
+def approval_flow(sent: list[dict], monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    monkeypatch.setattr(settings, "registration_mode", "approval")
+    monkeypatch.setattr(settings, "admin_email", "admin@example.com")
+    return sent
+
+
+def _decide(client: TestClient, admin_message: dict, decision: str):
+    return client.post(
+        "/api/v1/auth/approvals/decision",
+        json={"token": _token(admin_message), "decision": decision},
+    )
+
+
+def test_with_approval_the_user_gets_nothing_until_approved(
+    client: TestClient, approval_flow: list[dict]
+) -> None:
+    _register(client)
+
+    assert [m["to"] for m in approval_flow] == ["admin@example.com"]
+
+
+def test_approval_sends_a_single_email_that_also_confirms_the_address(
+    client: TestClient, approval_flow: list[dict]
+) -> None:
+    _register(client)
+    admin_message = approval_flow[0]
+
+    _decide(client, admin_message, "approve")
+
+    to_user = [m for m in approval_flow if m["to"] == CREDS["email"]]
+    assert len(to_user) == 1
+    assert "approvato" in to_user[0]["subject"]
+    assert "/verifica-email#token=" in to_user[0]["body"]
+    # One click on that link is all that's left before logging in.
+    assert _login(client).status_code == 403
+    client.post("/api/v1/auth/email/verify", json={"token": _token(to_user[0])})
+    assert _login(client).status_code == 200
+
+
+def test_pending_user_is_told_about_approval_not_verification(
+    client: TestClient, approval_flow: list[dict]
+) -> None:
+    _register(client)
+
+    response = _login(client)
+
+    assert response.status_code == 403
+    assert response.json()["error"]["message"] == "ACCOUNT_PENDING_APPROVAL"
+
+
+def test_resend_verification_waits_for_approval(
+    client: TestClient, approval_flow: list[dict]
+) -> None:
+    _register(client)
+    approval_flow.clear()
+
+    client.post("/api/v1/auth/email/resend-verification", json={"email": CREDS["email"]})
+
+    assert approval_flow == []
+
+
+def test_rejection_sends_one_email_and_no_confirmation_link(
+    client: TestClient, approval_flow: list[dict]
+) -> None:
+    _register(client)
+
+    _decide(client, approval_flow[0], "reject")
+
+    to_user = [m for m in approval_flow if m["to"] == CREDS["email"]]
+    assert len(to_user) == 1
+    assert "#token=" not in to_user[0]["body"]

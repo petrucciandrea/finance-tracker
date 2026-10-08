@@ -194,6 +194,11 @@ approval. Both flows email a JWT in the URL fragment; there is no token table.
 - A reset token carries a fingerprint of the current `password_hash` (`pwd` claim), so it
   works exactly once: after the password changes the claim no longer matches. Confirming a
   reset revokes every session and also marks the address verified (they read the mailbox).
+- **One email per user, not two.** With approval on, registration mails only the admin; on
+  approval the user gets a single message that is both "approved" and the confirmation link.
+  With approval off, registration sends the confirmation link. For that reason login checks
+  approval *before* verification (a pending user has no confirmation email to look for), and
+  resend does nothing until the account is approved.
 - Request/resend endpoints answer a uniform 202 and send in the background, so neither the
   body nor the response time shows whether an address has an account.
 - **Not done:** changing the email from the profile (`PATCH /auth/me`) is still immediate and

@@ -106,13 +106,23 @@ def _link(path: str, token: str) -> str:
     return f"{settings.frontend_base_url.rstrip('/')}/{path}#token={token}"
 
 
-def _send_verification_email(user_id: UUID, email: str) -> None:
+def _send_verification_email(user_id: UUID, email: str, *, approved: bool = False) -> None:
+    # `approved`: the account was just approved, so this one message carries both
+    # the approval and the confirmation instead of the user getting two emails.
+    link = _link("verifica-email", create_email_verification_token(user_id))
+    if approved:
+        subject = f"{settings.app_name}: account approvato, conferma la tua email"
+        intro = (
+            "Il tuo account è stato approvato. "
+            "Per poter accedere conferma il tuo indirizzo email"
+        )
+    else:
+        subject = f"{settings.app_name}: conferma il tuo indirizzo email"
+        intro = "Conferma il tuo indirizzo email per poter accedere"
     send_email(
         email,
-        f"{settings.app_name}: conferma il tuo indirizzo email",
-        "Conferma il tuo indirizzo email per poter accedere "
-        f"(il link vale {settings.email_verification_expire_hours} ore):\n"
-        f"{_link('verifica-email', create_email_verification_token(user_id))}\n\n"
+        subject,
+        f"{intro} (il link vale {settings.email_verification_expire_hours} ore):\n{link}\n\n"
         "Se non hai chiesto tu la registrazione, ignora questa email.\n",
     )
 
@@ -183,10 +193,12 @@ def register(
         ) from None
     db.refresh(user)
 
-    if settings.require_email_verification:
-        background_tasks.add_task(_send_verification_email, user.id, user.email)
     if needs_approval:
+        # The user hears nothing yet: the approval email will also carry the
+        # confirmation link, so they get one message instead of two.
         background_tasks.add_task(_notify_admin_of_registration, user.id, user.email)
+    elif settings.require_email_verification:
+        background_tasks.add_task(_send_verification_email, user.id, user.email)
     return user
 
 
@@ -205,8 +217,9 @@ def login(payload: UserLogin, db: Session = Depends(get_db)) -> TokenPair:
 
     # Checked only after the password matched, so these distinct answers don't
     # reveal which emails exist to someone who doesn't know the password.
-    if settings.require_email_verification and user.email_verified_at is None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="EMAIL_NOT_VERIFIED")
+    # Approval comes first: while it is pending no verification email exists yet
+    # (it is sent on approval), so asking them to confirm would send them looking
+    # for a message that was never sent.
     if user.approval_status != "approved":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -216,6 +229,8 @@ def login(payload: UserLogin, db: Session = Depends(get_db)) -> TokenPair:
                 else "ACCOUNT_REJECTED"
             ),
         )
+    if settings.require_email_verification and user.email_verified_at is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="EMAIL_NOT_VERIFIED")
 
     access_token = create_access_token(user.id)
     refresh_token = create_refresh_token(user.id)
@@ -388,7 +403,7 @@ def resend_verification(
     # Same 202 whether or not the address exists or is already verified, so this
     # can't be used to probe which emails have an account.
     user = db.query(User).filter(User.email == payload.email).first()
-    if user is not None and user.email_verified_at is None:
+    if user is not None and user.email_verified_at is None and user.approval_status == "approved":
         background_tasks.add_task(_send_verification_email, user.id, user.email)
 
 
@@ -508,7 +523,9 @@ def decide_approval(
     db.refresh(user)
 
     login_link = f"{settings.frontend_base_url.rstrip('/')}/login"
-    if approved:
+    if approved and settings.require_email_verification and user.email_verified_at is None:
+        background_tasks.add_task(_send_verification_email, user.id, user.email, approved=True)
+    elif approved:
         background_tasks.add_task(
             send_email,
             user.email,

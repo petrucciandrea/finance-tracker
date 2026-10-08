@@ -7,7 +7,10 @@ Three decisions worth knowing before reading the code:
 - **The income base is the period's real income**, not a declared salary,
   so every figure here moves with what actually landed in the accounts.
   `necessity.income_total` already clamps it at zero and drops categories
-  opted out of the base.
+  opted out of the base. For a P.IVA forfettaria it is then taken *net* of
+  the imposta + INPS on the invoices collected in the period (`income_base`):
+  that share is the State's, and F24s are transfers, never spend, so left
+  in it would read as savings.
 
 - **Unclassified spend is never folded into a bucket.** It is reported
   alongside a coverage percentage, because a plan computed over half-
@@ -21,6 +24,7 @@ Three decisions worth knowing before reading the code:
   quota to the next goal down the ladder.
 """
 
+from dataclasses import dataclass
 from datetime import date as date_
 from decimal import Decimal
 from uuid import UUID
@@ -39,7 +43,7 @@ from app.schemas import (
     SimulationResponse,
     SurvivalBudget,
 )
-from app.services.flat_rate import earmarked_cash
+from app.services.flat_rate import earmarked_cash, tax_cost_in_base_currency
 from app.services.necessity import (
     UNCLASSIFIED,
     classification_coverage,
@@ -75,6 +79,28 @@ _PERCENTAGE_FIELD = {
     AllocationBucket.discretionary: "pct_discretionary",
     AllocationBucket.savings: "pct_savings",
 }
+
+
+@dataclass(frozen=True)
+class IncomeBase:
+    gross: Decimal
+    flat_rate_taxes: Decimal
+
+    @property
+    def net(self) -> Decimal:
+        # Clamped like income_total: invoices recorded without their income
+        # movement (collected "date only") can't push the base below zero.
+        return max(Decimal("0"), self.gross - self.flat_rate_taxes)
+
+
+def income_base(db: Session, user: User, *, date_from: date_, date_to: date_) -> IncomeBase:
+    """The allocation model's denominator: income, net of flat-rate taxes."""
+    return IncomeBase(
+        gross=income_total(db, user, date_from=date_from, date_to=date_to),
+        flat_rate_taxes=tax_cost_in_base_currency(
+            db, user, date_from=date_from, date_to=date_to
+        ),
+    )
 
 
 def get_or_create_plan(db: Session, user: User) -> AllocationPlan:
@@ -117,7 +143,8 @@ def allocation_status(db: Session, user: User, on_date: date_) -> AllocationStat
     plan = get_or_create_plan(db, user)
     period_start, period_end = period_bounds("monthly", on_date)
 
-    income = income_total(db, user, date_from=period_start, date_to=period_end)
+    base = income_base(db, user, date_from=period_start, date_to=period_end)
+    income = base.net
     buckets = spend_by_necessity(db, user, date_from=period_start, date_to=period_end)
 
     unclassified = buckets.get(UNCLASSIFIED, Decimal("0"))
@@ -152,6 +179,8 @@ def allocation_status(db: Session, user: User, on_date: date_) -> AllocationStat
         period_start=period_start,
         period_end=period_end,
         income_total=_quantize_money(income),
+        gross_income_total=_quantize_money(base.gross),
+        flat_rate_tax_total=_quantize_money(base.flat_rate_taxes),
         buckets=statuses,
         unclassified_amount=_quantize_money(unclassified),
         classification_coverage=classification_coverage(buckets),
@@ -269,7 +298,7 @@ def survival_budget(db: Session, user: User, on_date: date_) -> SurvivalBudget:
     )
     monthly_total = _quantize_money(sum(buckets.values(), Decimal("0")) / month_count)
     monthly_income = _quantize_money(
-        income_total(db, user, date_from=start, date_to=end) / month_count
+        income_base(db, user, date_from=start, date_to=end).net / month_count
     )
 
     return SurvivalBudget(
@@ -305,7 +334,7 @@ def simulate(
     plan = get_or_create_plan(db, user)
     period_start, period_end = period_bounds("monthly", on_date)
 
-    income = income_total(db, user, date_from=period_start, date_to=period_end)
+    income = income_base(db, user, date_from=period_start, date_to=period_end).net
     rows = spend_by_necessity_and_category(
         db, user, date_from=period_start, date_to=period_end
     )

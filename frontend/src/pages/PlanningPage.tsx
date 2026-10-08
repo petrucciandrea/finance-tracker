@@ -55,7 +55,17 @@ function AllocationTable({ month, today }: { month: Date; today: Date }) {
       meta={
         status && (
           <span className="text-[13px] text-ink-2 tabular-nums">
-            su <b className="text-ink">{formatAmount(status.income_total, status.base_currency)}</b> {status.base_currency} di entrate
+            {toNumber(status.flat_rate_tax_total) > 0 ? (
+              <>
+                su {formatAmount(status.gross_income_total, status.base_currency)} di entrate −{' '}
+                {formatAmount(status.flat_rate_tax_total, status.base_currency)} di tasse e contributi P.IVA ={' '}
+                <b className="text-ink">{formatAmount(status.income_total, status.base_currency)}</b> {status.base_currency} netti
+              </>
+            ) : (
+              <>
+                su <b className="text-ink">{formatAmount(status.income_total, status.base_currency)}</b> {status.base_currency} di entrate
+              </>
+            )}
           </span>
         )
       }
@@ -174,6 +184,7 @@ function AllocationTable({ month, today }: { month: Date; today: Date }) {
 }
 
 function RunwayCard({ survival }: { survival: SurvivalBudget | undefined }) {
+  const { user } = useAuth()
   if (!survival) return <LoadingBlock className="h-56 flex-[1_1_340px]" />
   const currency = survival.base_currency
   const runway = survival.months_of_runway
@@ -215,7 +226,8 @@ function RunwayCard({ survival }: { survival: SurvivalBudget | undefined }) {
             <dd className="text-right font-bold">{formatAmount(survival.monthly_primary_expenses, currency)}</dd>
             <dt className="text-ink-2">Spese totali / mese</dt>
             <dd className="text-right">{survival.monthly_total_expenses ? formatAmount(survival.monthly_total_expenses, currency) : '—'}</dd>
-            <dt className="text-ink-2">Entrate / mese</dt>
+            {/* Net of P.IVA taxes, like the plan's base. */}
+            <dt className="text-ink-2">{user?.work_type === 'flat_rate' ? 'Entrate nette / mese' : 'Entrate / mese'}</dt>
             <dd className="text-right">{survival.monthly_income ? formatAmount(survival.monthly_income, currency) : '—'}</dd>
             <dt className="text-ink-2">Liquidità</dt>
             <dd className="text-right">{formatAmount(survival.total_cash_balance, currency)}</dd>
@@ -380,12 +392,18 @@ export function PlanningPage() {
   const savings = status?.buckets.find((b) => b.bucket === 'savings')
   const excluded = (status?.income_breakdown ?? []).filter((r) => r.excluded_from_income_base).reduce((s, r) => s + toNumber(r.total_amount_base_currency), 0)
   const income = toNumber(status?.income_total)
+  // Imposta + INPS on the invoices collected this month: the State's share,
+  // already out of the base the whole plan is computed on.
+  const flatRateTaxes = toNumber(status?.flat_rate_tax_total)
 
   const kpis: Kpi[] = [
     {
-      label: inProgress ? 'Entrate del mese' : `Entrate di ${formatMonthName(month)}`,
+      label: `${flatRateTaxes > 0 ? 'Entrate nette' : 'Entrate'} ${inProgress ? 'del mese' : `di ${formatMonthName(month)}`}`,
       value: status ? formatAmount(income, currency) : '…',
-      sub: `base del piano · ${formatAmount(excluded, currency)} esclusi`,
+      sub:
+        flatRateTaxes > 0
+          ? `${formatAmount(status?.gross_income_total, currency)} lorde − ${formatAmount(flatRateTaxes, currency)} tasse e contributi P.IVA`
+          : `base del piano · ${formatAmount(excluded, currency)} esclusi`,
     },
     {
       label: inProgress ? 'Spese finora' : 'Spese',

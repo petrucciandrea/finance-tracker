@@ -400,6 +400,26 @@ def tax_liability(ledger: Ledger, as_of: date_) -> Decimal:
     return accrued - paid(ledger, as_of=as_of)
 
 
+def tax_cost(ledger: Ledger, date_from: date_, date_to: date_) -> Decimal:
+    """
+    Imposta + INPS on the invoices collected in the range — the per-invoice
+    estimates the Fatture table shows, at each collection year's rates.
+
+    What the planning engine takes off income so that "savings" means net
+    profit. The per-invoice figure is the one to use here, not the year's:
+    it stays gross of the INPS deduction (the safe side) and never swings
+    negative in the month an F24 lowers the year's tax.
+    """
+    total = Decimal("0")
+    for invoice in ledger.invoices:
+        collected = invoice.collected_on
+        if collected is None or not date_from <= collected <= date_to:
+            continue
+        breakdown = invoice_breakdown(invoice, ledger.params_for(collected.year), Decimal("0"))
+        total += breakdown.substitute_tax + breakdown.inps
+    return total
+
+
 def cash_requirement(ledger: Ledger, as_of: date_) -> Decimal:
     """
     What the F24s will still ask for the income collected by `as_of`:
@@ -766,6 +786,17 @@ def liability_in_base_currency(
         return amount * get_rate(db, CURRENCY, user.base_currency, on_date)
     except ExchangeRateUnavailable:
         return Decimal("0")
+
+
+def tax_cost_in_base_currency(
+    db: Session, user: User, *, date_from: date_, date_to: date_
+) -> Decimal:
+    """`tax_cost` for a user, converted like the liability (at today's rate at most)."""
+    ledger = load_ledger(db, user)
+    if not ledger.invoices:
+        return Decimal("0")
+    cost = tax_cost(ledger, date_from, date_to)
+    return liability_in_base_currency(db, user, cost, min(date_to, date_.today()))
 
 
 def source_account_ids(db: Session, user: User, *, cash_only: bool = False) -> set[UUID]:

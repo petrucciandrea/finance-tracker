@@ -295,6 +295,14 @@ Provision sources are `(account)` = its cash, or `(account, asset)` = that holdi
 account source is earmarked: it can't fund a savings goal (409 both ways), can't be
 deleted (409), and its balance is left out of the survival budget's runway.
 
+The planning engine runs on income **net** of flat-rate taxes (`planning.income_base`):
+gross income minus imposta + INPS on the invoices collected in the period. It feeds the
+50/25/15/10 buckets, the savings residual, the waterfall quota, the simulator and the
+survival budget's monthly income. Without it the State's ~24% read as savings, since F24s
+are transfers and never spend. The per-invoice estimate is used (`flat_rate.tax_cost`), not
+the provision rate: next year's advances are a prepayment, not a cost, and the year's own
+figure would swing negative in the month an F24 lowers the tax via the INPS deduction.
+
 `users.work_type` only gates the UI. The API and the liability work regardless — turning
 the section off must not make a real debt vanish from net worth.
 

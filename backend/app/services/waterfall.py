@@ -37,10 +37,13 @@ from app.schemas import (
     WaterfallPlan,
     WaterfallStep,
 )
-from app.services.necessity import income_total
 from app.services.net_worth import account_balances
 from app.services.periods import period_bounds
-from app.services.planning import average_monthly_primary_expenses, get_or_create_plan
+from app.services.planning import (
+    average_monthly_primary_expenses,
+    get_or_create_plan,
+    income_base,
+)
 
 # A rung counts as funded here rather than at exactly 100% — see the
 # module docstring on starvation.
@@ -106,7 +109,10 @@ def compute_waterfall(db: Session, user: User, on_date: date_) -> WaterfallPlan:
     plan = get_or_create_plan(db, user)
     period_start, period_end = period_bounds("monthly", on_date)
 
-    income = income_total(db, user, date_from=period_start, date_to=period_end)
+    # Net of flat-rate taxes: a quota on gross invoices would send the
+    # State's share up the savings ladder.
+    base = income_base(db, user, date_from=period_start, date_to=period_end)
+    income = base.net
     quota = _quantize(income * Decimal(str(plan.pct_savings)) / Decimal("100"))
     allocated_already = allocated_in_period(db, user, period_start)
     # Clamped: deleting an income after executing its transfers would
@@ -176,6 +182,8 @@ def compute_waterfall(db: Session, user: User, on_date: date_) -> WaterfallPlan:
         period_start=period_start,
         period_end=period_end,
         income_total=_quantize(income),
+        gross_income_total=_quantize(base.gross),
+        flat_rate_tax_total=_quantize(base.flat_rate_taxes),
         savings_quota=quota,
         already_allocated=_quantize(allocated_already),
         steps=steps,

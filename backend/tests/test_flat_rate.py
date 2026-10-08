@@ -733,6 +733,65 @@ def test_a_product_not_held_in_the_account_is_refused(client: TestClient, header
 
 
 # ---------------------------------------------------------------------------
+# Planning: the income base is net of flat-rate taxes
+# ---------------------------------------------------------------------------
+
+def _march_with_an_invoice(client: TestClient, headers: dict, account: dict) -> None:
+    invoice = _invoice(client, headers)
+    _collect(client, headers, invoice["id"], collected_on="2025-03-15", account_id=account["id"])
+    expense = client.post(
+        "/api/v1/transactions",
+        json={
+            "account_id": account["id"],
+            "amount": "-100.00",
+            "currency": "EUR",
+            "date": "2025-03-20",
+            "type": "expense",
+        },
+        headers=headers,
+    )
+    assert expense.status_code == 201, expense.text
+
+
+def test_the_allocation_model_runs_on_income_net_of_taxes(
+    client: TestClient, headers: dict, account: dict
+) -> None:
+    _march_with_an_invoice(client, headers, account)
+    status = client.get(
+        "/api/v1/planning/allocation-status?date=2025-03-31", headers=headers
+    ).json()
+
+    # 1042 collected, of which 40.64 imposta + 213.19 INPS are the State's.
+    assert Decimal(status["gross_income_total"]) == Decimal("1042.00")
+    assert Decimal(status["flat_rate_tax_total"]) == Decimal("253.83")
+    assert Decimal(status["income_total"]) == Decimal("788.17")
+    savings = next(b for b in status["buckets"] if b["bucket"] == "savings")
+    assert Decimal(savings["actual_amount"]) == Decimal("688.17")  # net − 100 spent
+
+
+def test_the_waterfall_quota_is_on_net_income(
+    client: TestClient, headers: dict, account: dict
+) -> None:
+    _march_with_an_invoice(client, headers, account)
+    plan = client.get("/api/v1/planning/waterfall?date=2025-03-31", headers=headers).json()
+
+    assert Decimal(plan["income_total"]) == Decimal("788.17")
+    assert Decimal(plan["flat_rate_tax_total"]) == Decimal("253.83")
+    # 10% of 788.17, rounded down so allocations never exceed it (not 104.20 on gross).
+    assert Decimal(plan["savings_quota"]) == Decimal("78.81")
+
+
+def test_a_month_without_invoices_is_untouched(
+    client: TestClient, headers: dict, account: dict
+) -> None:
+    _march_with_an_invoice(client, headers, account)
+    status = client.get(
+        "/api/v1/planning/allocation-status?date=2025-04-30", headers=headers
+    ).json()
+    assert Decimal(status["flat_rate_tax_total"]) == Decimal("0")
+
+
+# ---------------------------------------------------------------------------
 # Ownership
 # ---------------------------------------------------------------------------
 

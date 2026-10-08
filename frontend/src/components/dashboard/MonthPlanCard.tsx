@@ -49,7 +49,8 @@ export function MonthPlanCard({ today }: { today: Date }) {
       meta={
         status && (
           <span className="text-[13px] text-ink-2 tabular-nums">
-            Entrate <b className="text-ink">{formatAmount(status.income_total, status.base_currency)}</b> {status.base_currency} · modello{' '}
+            {Number(status.flat_rate_tax_total) > 0 ? 'Entrate nette' : 'Entrate'}{' '}
+            <b className="text-ink">{formatAmount(status.income_total, status.base_currency)}</b> {status.base_currency} · modello{' '}
             {modelLabel(status.buckets)}
           </span>
         )

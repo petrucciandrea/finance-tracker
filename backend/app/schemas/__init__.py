@@ -839,7 +839,11 @@ class AllocationStatus(BaseModel):
     base_currency: str
     period_start: date_
     period_end: date_
+    # The base every bucket is computed on: gross income minus the imposta
+    # + INPS on the P.IVA invoices collected in the period.
     income_total: Decimal
+    gross_income_total: Decimal
+    flat_rate_tax_total: Decimal
     buckets: list[AllocationBucketStatus]
     # Spend whose category (and its parent) carry no necessity level. Kept
     # out of the buckets on purpose: folding it into `primary` would make an
@@ -860,6 +864,7 @@ class SurvivalBudget(BaseModel):
     # mark a dynamic emergency-fund target as already met.
     monthly_primary_expenses: Decimal | None = None
     monthly_total_expenses: Decimal | None = None
+    # Net of flat-rate taxes, as the allocation model's base.
     monthly_income: Decimal | None = None
     # Excludes the accounts holding the P.IVA tax provision.
     total_cash_balance: Decimal
@@ -989,7 +994,9 @@ class WaterfallPlan(BaseModel):
     base_currency: str
     period_start: date_
     period_end: date_
-    income_total: Decimal
+    income_total: Decimal  # net of flat-rate taxes, as in AllocationStatus
+    gross_income_total: Decimal
+    flat_rate_tax_total: Decimal
     savings_quota: Decimal
     already_allocated: Decimal
     steps: list[WaterfallStep]

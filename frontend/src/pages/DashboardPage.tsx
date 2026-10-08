@@ -17,65 +17,10 @@ import { useAllTransactions, useTransactionsList } from '@/hooks/useTransactions
 import { buttonClass } from '@/lib/buttonClass'
 import { indexById } from '@/lib/categories'
 import { endOfMonth, monthRange } from '@/lib/dates'
-import { formatAmount, formatLongDate, formatMonthName, formatPercent, formatQuantity, formatShortDate, toISODate, toNumber } from '@/lib/format'
-import { ACCOUNT_TYPE_LABELS, ASSET_TYPE_LABELS, INVESTMENT_ACCOUNT_TYPES, unrealizedPnlBase } from '@/lib/portfolio'
+import { formatAmount, formatLongDate, formatMonthName, formatPercent, formatQuantity, formatShortDate, toISODate } from '@/lib/format'
+import { ASSET_TYPE_LABELS, INVESTMENT_ACCOUNT_TYPES, unrealizedPnlBase } from '@/lib/portfolio'
 import { accountLabel, amountKind, totals } from '@/lib/transactions'
 import type { NetWorthSummary } from '@/types'
-
-function AccountsCard({ netWorth }: { netWorth: NetWorthSummary }) {
-  const { data: accounts } = useAccounts()
-  const byId = indexById(accounts)
-  const base = netWorth.base_currency
-  // A closed account emptied as it should be is just noise here; one with
-  // money left in it still counts toward the total, so it stays visible.
-  const shown = netWorth.accounts.filter((a) => !byId.get(a.account_id)?.closed_at || toNumber(a.balance) !== 0)
-  return (
-    <Card
-      title="Conti"
-      className="flex-[1_1_300px]"
-      action={
-        <Link to="/accounts" className="link text-[13px]">
-          Gestisci
-        </Link>
-      }
-    >
-      {shown.length === 0 ? (
-        <div className="mt-3">
-          <EmptyState title="Nessun conto" action={<Link to="/accounts" className={buttonClass('primary')}>Crea un conto</Link>} />
-        </div>
-      ) : (
-        <>
-          <ul className="mt-2">
-            {shown.map((account) => {
-              const type = byId.get(account.account_id)?.type
-              return (
-                <li key={account.account_id} className="flex justify-between gap-2 border-b border-line py-2.5">
-                  <div className="min-w-0">
-                    <div className="truncate font-bold">{account.account_name}</div>
-                    <div className="text-[12px] text-ink-3">{type ? ACCOUNT_TYPE_LABELS[type] : ''}</div>
-                  </div>
-                  <Amount
-                    value={account.balance}
-                    currency={account.currency}
-                    baseValue={account.balance_base_currency}
-                    baseCurrency={base}
-                    className="font-semibold"
-                  />
-                </li>
-              )
-            })}
-          </ul>
-          <div className="flex justify-between pt-2.5 font-extrabold tabular-nums">
-            <span>Liquidità totale</span>
-            <span>
-              {formatAmount(netWorth.total_cash_balance, base)} <span className="ccy">{base}</span>
-            </span>
-          </div>
-        </>
-      )}
-    </Card>
-  )
-}
 
 function PortfolioCard({ netWorth }: { netWorth: NetWorthSummary }) {
   const { data: accounts } = useAccounts()
@@ -346,10 +291,7 @@ export function DashboardPage() {
       {netWorth.isError && <ErrorBlock>Non è stato possibile caricare il patrimonio.</ErrorBlock>}
       <KpiStrip label="Indicatori principali" items={kpis} />
 
-      <div className="flex flex-wrap gap-4">
-        <NetWorthChart baseCurrency={base} />
-        {nw ? <AccountsCard netWorth={nw} /> : <LoadingBlock className="h-72 flex-[1_1_300px]" />}
-      </div>
+      <NetWorthChart baseCurrency={base} />
 
       <MonthPlanCard today={today} />
 

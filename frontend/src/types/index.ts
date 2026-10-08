@@ -513,8 +513,9 @@ export interface PhysicalAssetCreatePayload {
 export interface PhysicalAssetUpdatePayload {
   name?: string
   notes?: string | null
-  // Vehicle only: a metal's purchases are its movements.
+  // On a metal this re-dates its first buy movement (and that buy's cash leg).
   purchase_date?: string
+  // Vehicle only: a metal's prices are its movements.
   purchase_price?: string | null
   vehicle_type?: VehicleType
   depreciation_rate?: string

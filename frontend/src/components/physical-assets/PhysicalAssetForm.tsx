@@ -117,6 +117,7 @@ export function PhysicalAssetForm({
   const editing = asset !== null
   // A metal position's weight, prices and dates are its movements.
   const metalEdit = editing && asset.kind === 'metal'
+  const buyCount = asset?.movements.filter((m) => m.type === 'buy').length ?? 0
   const createAsset = useCreatePhysicalAsset()
   const updateAsset = useUpdatePhysicalAsset()
   const { data: accounts } = useAccounts()
@@ -152,7 +153,14 @@ export function PhysicalAssetForm({
           }
     try {
       if (editing) {
-        const purchase = v.kind === 'vehicle' ? { purchase_date: v.purchase_date, purchase_price: price } : {}
+        // A metal's purchase_date re-dates its first buy (and that buy's cash
+        // leg), so it is only sent when it actually changed.
+        const purchase =
+          v.kind === 'vehicle'
+            ? { purchase_date: v.purchase_date, purchase_price: price }
+            : v.purchase_date !== asset.purchase_date
+              ? { purchase_date: v.purchase_date }
+              : {}
         await updateAsset.mutateAsync({
           id: asset.id,
           payload: { name: v.name.trim(), notes: v.notes.trim() || null, ...purchase, ...kindFields },
@@ -324,12 +332,16 @@ export function PhysicalAssetForm({
         )}
       </div>
 
-      {metalEdit ? (
-        <p className="-mt-1 text-[12px] text-ink-3">Peso, prezzi e date si cambiano da «Acquista o vendi»: ogni acquisto e vendita è un movimento.</p>
-      ) : (
-        <Field label="Data di acquisto" htmlFor="pa-date" error={errors.purchase_date?.message}>
-          <input type="date" className="field" {...fieldProps('purchase_date', 'pa-date')} {...register('purchase_date')} />
-        </Field>
+      <Field
+        label={metalEdit && buyCount > 1 ? 'Data del primo acquisto' : 'Data di acquisto'}
+        htmlFor="pa-date"
+        error={errors.purchase_date?.message}
+        hint={metalEdit && buyCount > 1 ? 'Sposta solo il primo acquisto; gli altri si gestiscono da «Acquista o vendi».' : undefined}
+      >
+        <input type="date" className="field" {...fieldProps('purchase_date', 'pa-date')} {...register('purchase_date')} />
+      </Field>
+      {metalEdit && (
+        <p className="-mt-1 text-[12px] text-ink-3">Peso e prezzi si cambiano da «Acquista o vendi»: ogni acquisto e vendita è un movimento.</p>
       )}
 
       {!editing && (

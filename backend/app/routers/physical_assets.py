@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from datetime import date as date_
 from decimal import Decimal
 from enum import Enum
+from types import SimpleNamespace
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -69,8 +70,10 @@ _FOREIGN_FIELDS = {
     PhysicalAssetKind.metal.value: _VEHICLE_FIELDS,
 }
 # A metal's purchase lives in its movements: on create the purchase_* fields
-# describe the first buy, but a later edit goes through the movements.
-_METAL_MOVEMENT_FIELDS = ("purchase_date", "purchase_price")
+# describe the first buy. Afterwards its price is edited through the
+# movements, while `purchase_date` re-dates the first buy (see
+# `_redate_movement`) — the same date the response reports as purchase_date.
+_METAL_MOVEMENT_FIELDS = ("purchase_price",)
 
 
 def _unprocessable(detail: str) -> HTTPException:
@@ -162,6 +165,47 @@ def _check_ledger(movements: list) -> None:
         metal_position(movements)
     except OversoldError as exc:
         raise _unprocessable(str(exc)) from exc
+
+
+def _redate_movement(
+    db: Session,
+    user: User,
+    asset: PhysicalAsset,
+    movement: PhysicalAssetMovement,
+    new_date: date_,
+) -> None:
+    """
+    Move one movement to another day, keeping the ledger, its frozen rate
+    and its cash leg in step. Validates on copies before touching the row,
+    so a refusal leaves nothing half-applied in the session.
+    """
+    _check_ledger(
+        [
+            SimpleNamespace(
+                type=m.type,
+                date=new_date if m.id == movement.id else m.date,
+                weight_grams=m.weight_grams,
+                price_base_currency=m.price_base_currency,
+            )
+            for m in asset.movements
+        ]
+    )
+    leg = movement.transaction
+    if leg is not None and leg.deleted_at is not None:
+        leg = None
+    if leg is not None:
+        ensure_account_open_on(leg.account, new_date)
+    # Frozen-rate rule: a new date reconverts, exactly as a transaction's does.
+    rate = _rate(db, asset.currency, user, new_date) if movement.price is not None else None
+
+    movement.date = new_date
+    if movement.price is not None and rate is not None:
+        movement.price_base_currency = movement.price * rate
+        if leg is not None:
+            leg.amount_base_currency = leg.amount * rate
+            leg.exchange_rate = rate
+    if leg is not None:
+        leg.date = new_date
 
 
 def _valued(db: Session, user: User, asset: PhysicalAsset) -> PhysicalAssetWithValue:
@@ -273,6 +317,14 @@ def update_physical_asset(
     for field in ("name", "purchase_date"):
         if field in update_data and update_data[field] is None:
             raise _unprocessable(f"{field} cannot be cleared")
+
+    if asset.kind == PhysicalAssetKind.metal.value and "purchase_date" in update_data:
+        # Never set on the row (CHECK keeps a metal's purchase_date NULL): it
+        # is the first buy's date, so that's the movement that moves.
+        first_buy = next(
+            m for m in sorted(asset.movements, key=lambda m: m.date) if m.type == "buy"
+        )
+        _redate_movement(db, current_user, asset, first_buy, update_data.pop("purchase_date"))
 
     new_date = update_data.get("purchase_date", asset.purchase_date)
     new_price = update_data.get("purchase_price", asset.purchase_price)

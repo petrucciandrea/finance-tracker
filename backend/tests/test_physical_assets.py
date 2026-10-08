@@ -573,3 +573,69 @@ def test_history_follows_the_grams_held(
     assert Decimal(points[0]["total_physical_assets_value_base_currency"]) == Decimal("6750")
     # 40 g left × 0.75 × 90
     assert Decimal(points[-1]["total_physical_assets_value_base_currency"]) == Decimal("2700")
+
+
+def test_purchase_date_re_dates_a_metals_first_buy(
+    client: TestClient, registered_user: dict, checking_account: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    gold = _create(client, headers, _metal(purchase_price="5000.00",
+                                           account_id=checking_account["id"]))
+    _move(client, headers, gold["id"], type="buy", date="2025-03-01", weight_grams="10",
+          price="600.00")
+
+    response = client.patch(
+        f"{URL}/{gold['id']}", json={"purchase_date": "2024-12-01"}, headers=headers
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["purchase_date"] == "2024-12-01"
+    assert sorted(m["date"] for m in body["movements"]) == ["2024-12-01", "2025-03-01"]
+
+    # The first buy's cash leg moves with it.
+    legs = client.get("/api/v1/transactions", headers=headers).json()["data"]
+    assert next(t["date"] for t in legs if t["description"] == "Acquisto Anello 18kt") == (
+        "2024-12-01"
+    )
+
+
+def test_re_dating_the_first_buy_cannot_strand_a_sale(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    gold = _create(client, headers, _metal())  # 100 g on 2025-01-10
+    _move(client, headers, gold["id"], type="sell", date="2025-02-01", weight_grams="50",
+          price="1000.00")
+
+    late = client.patch(
+        f"{URL}/{gold['id']}", json={"purchase_date": "2025-03-01"}, headers=headers
+    )
+    assert late.status_code == 422
+    unchanged = client.get(URL, headers=headers).json()[0]
+    assert unchanged["purchase_date"] == "2025-01-10"
+
+    cleared = client.patch(f"{URL}/{gold['id']}", json={"purchase_date": None}, headers=headers)
+    assert cleared.status_code == 422
+
+
+def test_re_dating_respects_a_closed_paying_account(
+    client: TestClient, registered_user: dict, checking_account: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    gold = _create(client, headers, _metal(purchase_price="5000.00",
+                                           account_id=checking_account["id"]))
+    closed = client.patch(
+        f"/api/v1/accounts/{checking_account['id']}",
+        json={"closed_at": "2025-01-31"},
+        headers=headers,
+    )
+    assert closed.status_code == 200, closed.text
+
+    after_close = client.patch(
+        f"{URL}/{gold['id']}", json={"purchase_date": "2025-02-15"}, headers=headers
+    )
+    assert after_close.status_code == 409
+    before_close = client.patch(
+        f"{URL}/{gold['id']}", json={"purchase_date": "2025-01-05"}, headers=headers
+    )
+    assert before_close.status_code == 200, before_close.text

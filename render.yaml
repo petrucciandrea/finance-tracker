@@ -90,6 +90,8 @@ services:
     staticPublishPath: dist
     pullRequestPreviewsEnabled: false
     envVars:
+      - key: NODE_VERSION
+        value: "22" # same major as CI; otherwise the build uses whatever Render defaults to
       # Read at BUILD time and public by design: never put a secret in a VITE_ variable.
       - key: VITE_API_BASE_URL
         sync: false # https://<your api>/api/v1

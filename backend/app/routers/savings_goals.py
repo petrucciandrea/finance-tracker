@@ -75,18 +75,18 @@ def _validate_target(
     if target_mode == TargetMode.months_of_primary_expenses.value:
         if target_months is None or target_amount is not None:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="A months_of_primary_expenses goal needs target_months and no target_amount",
             )
     elif target_mode == TargetMode.fixed_amount.value:
         if target_amount is None or target_months is not None:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="A fixed_amount goal needs target_amount and no target_months",
             )
     elif target_months is not None or target_amount is not None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="An open_ended goal takes neither target_months nor target_amount",
         )
 
@@ -223,7 +223,7 @@ def _build_transfers(
         )
         if destination_id is None:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Savings goal «{goal.name}» has no account to transfer into",
             )
         to_account = get_owned_account(db, destination_id, current_user)

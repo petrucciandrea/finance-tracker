@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import bcrypt
-from jose import jwt
+import jwt
 
 from app.core.config import settings
 
@@ -114,7 +114,7 @@ class TokenPayload:
 
 def decode_token(token: str, expected_type: str) -> TokenPayload:
     """
-    Raises jose.JWTError (or ValueError for a type mismatch) on any problem —
+    Raises jwt.PyJWTError (or ValueError for a type mismatch) on any problem —
     callers turn that into a 401 at the API boundary, not here, so this stays
     reusable outside of FastAPI's request/response cycle.
     """
@@ -122,7 +122,7 @@ def decode_token(token: str, expected_type: str) -> TokenPayload:
         token,
         settings.jwt_secret_key,
         algorithms=[settings.jwt_algorithm],
-        options={"require_exp": True},
+        options={"require": ["exp"]},
     )
     token_type = payload.get("type")
     if token_type != expected_type:

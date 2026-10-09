@@ -147,6 +147,19 @@ the app up, no code change. The migration leaves every existing user `approved`.
 - Tests run with `registration_mode = "open"` (autouse fixture in `conftest.py`);
   `test_registration_approval.py` switches it back.
 
+### Dependencies are locked and audited
+`backend/poetry.lock` is committed and the Dockerfile copies it without a wildcard: a build
+must not resolve "whatever is newest today". After changing dependencies, rebuild the image
+(`docker compose up -d --build backend`) rather than trusting what was installed by hand in a
+running container. Check for known vulnerabilities with `pip-audit` (install it ad hoc in the
+container) and `npm audit` in `frontend/`; both were clean at the last upgrade, except `pip`
+itself, which the Dockerfile now upgrades.
+
+JWTs use PyJWT. `python-jose` was dropped: no fix exists for its open advisory and it drags
+in the unmaintained `ecdsa`. Ruff's `UP042` (`(str, Enum)` → `StrEnum`) is ignored on
+purpose — see `pyproject.toml`. The TestClient prints a one-off warning about moving from
+`httpx` to `httpx2`; it only concerns the tests.
+
 ### Production refuses to boot on unsafe settings
 `Settings.validate_production_setup` rejects, when `ENVIRONMENT=production`: `DEBUG=true`
 (Starlette would return full tracebacks past our error handler, and SQLAlchemy echoes

@@ -48,19 +48,19 @@ def create_linked_transfer(
     """
     if amount <= 0:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="A transfer amount must be positive",
         )
     if from_account.id == to_account.id:
         # The legs would cancel out in the balance sum, leaving funding
         # unchanged while the allocation ledger still consumed the quota.
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Source and destination accounts must differ",
         )
     if from_account.currency != to_account.currency:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 f"Cross-currency transfers are not supported yet "
                 f"({from_account.currency} -> {to_account.currency})"
@@ -76,7 +76,7 @@ def create_linked_transfer(
         rate = get_rate(db, from_account.currency, user.base_currency, on_date)
     except ExchangeRateUnavailable as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
 
     def _leg(account: Account, signed: Decimal) -> Transaction:

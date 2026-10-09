@@ -88,7 +88,7 @@ def get_owned_leaf_category(
 
     if category.type != expected_type:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 f"Category type '{category.type}' does not match "
                 f"transaction type '{expected_type}'"
@@ -103,7 +103,7 @@ def get_owned_leaf_category(
     )
     if has_active_children:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "This category has subcategories — "
                 "assign the transaction to a subcategory instead"

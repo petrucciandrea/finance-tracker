@@ -67,7 +67,7 @@ async def validation_exception_handler(
         for err in exc.errors()
     ]
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content={
             "error": {
                 "code": "VALIDATION_ERROR",
@@ -96,7 +96,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
 @app.exception_handler(CsvImportError)
 async def csv_import_error_handler(request: Request, exc: CsvImportError) -> JSONResponse:
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content={"error": {"code": "CSV_IMPORT_ERROR", "message": str(exc), "details": []}},
     )
 
@@ -124,7 +124,7 @@ def _code_for_status(status_code: int) -> str:
         status.HTTP_403_FORBIDDEN: "FORBIDDEN",
         status.HTTP_404_NOT_FOUND: "NOT_FOUND",
         status.HTTP_409_CONFLICT: "CONFLICT",
-        status.HTTP_422_UNPROCESSABLE_ENTITY: "UNPROCESSABLE_ENTITY",
+        status.HTTP_422_UNPROCESSABLE_CONTENT: "UNPROCESSABLE_ENTITY",
         status.HTTP_429_TOO_MANY_REQUESTS: "RATE_LIMITED",
     }.get(status_code, "ERROR")
 

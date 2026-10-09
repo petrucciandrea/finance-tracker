@@ -6,8 +6,10 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml poetry.lock* ./
-RUN pip install --no-cache-dir poetry \
+# poetry.lock is required (no `*`): without it the build resolves whatever is
+# newest that day, so two builds of the same commit could differ.
+COPY pyproject.toml poetry.lock ./
+RUN pip install --no-cache-dir --upgrade pip poetry \
     && poetry config virtualenvs.create false \
     && poetry install --no-interaction --no-root
 

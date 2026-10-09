@@ -16,7 +16,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
-from jose import JWTError
+from jwt import PyJWTError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -97,7 +97,7 @@ def _ensure_known_currency(db: Session, code: str) -> None:
     # An unknown code would reach the FK as a 500 and make up FX lookups.
     if db.get(Currency, code) is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Unknown currency {code!r}"
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"Unknown currency {code!r}"
         )
 
 
@@ -243,7 +243,7 @@ def login(payload: UserLogin, db: Session = Depends(get_db)) -> TokenPair:
 def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> TokenPair:
     try:
         token_data = decode_token(payload.refresh_token, expected_type="refresh")
-    except (JWTError, ValueError):
+    except (PyJWTError, ValueError):
         # `from None` for the same reason as deps.get_current_user: one
         # opaque 401 regardless of how the token was malformed.
         raise HTTPException(
@@ -369,7 +369,7 @@ def change_password(
 def _user_from_token(db: Session, token: str, token_type: str):
     try:
         token_data = decode_token(token, expected_type=token_type)
-    except (JWTError, ValueError):
+    except (PyJWTError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired link"
         ) from None
@@ -482,7 +482,7 @@ def delete_my_account(
 def _user_from_approval_token(db: Session, token: str) -> User:
     try:
         token_data = decode_token(token, expected_type="approval")
-    except (JWTError, ValueError):
+    except (PyJWTError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired link"
         ) from None

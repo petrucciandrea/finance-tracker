@@ -83,7 +83,7 @@ def create_budget(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
     if category.type != "expense":
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Budgets can only be set on expense categories",
         )
 

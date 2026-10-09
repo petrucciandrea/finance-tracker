@@ -207,7 +207,7 @@ def create_asset_transaction(
     account = get_owned_account(db, payload.account_id, current_user)
     if account.type not in ("investment", "crypto_wallet"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Asset transactions can only be logged on investment or crypto wallet accounts",
         )
     ensure_account_open_on(account, payload.date)
@@ -225,14 +225,14 @@ def create_asset_transaction(
         asset_prices_service.get_price(db, asset, date_.today())
     except AssetPriceUnavailable as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
 
     if payload.type == AssetTransactionType.sell:
         held = _current_quantity(db, account.id, asset.id)
         if payload.quantity > held:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Cannot sell {payload.quantity} — only {held} currently held",
             )
 
@@ -240,7 +240,7 @@ def create_asset_transaction(
         rate = get_rate(db, asset.currency, current_user.base_currency, payload.date)
     except ExchangeRateUnavailable as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
 
     gross = payload.quantity * payload.price
@@ -295,13 +295,13 @@ def update_asset_transaction(
     )
     if transaction.type == "sell" and new_quantity > held:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Cannot sell {new_quantity} — only {held} currently held",
         )
     # The mirror case: shrinking a buy that later sells already drew on.
     if transaction.type == "buy" and held + new_quantity < 0:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Cannot lower this buy to {new_quantity} — {-held} already sold",
         )
 
@@ -318,7 +318,7 @@ def update_asset_transaction(
             )
         except ExchangeRateUnavailable as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
         gross = transaction.quantity * transaction.price
         total = gross + transaction.fee if transaction.type == "buy" else gross - transaction.fee
@@ -352,7 +352,7 @@ def delete_asset_transaction(
         )
         if held < 0:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Cannot delete this buy — later sells rely on it ({-held} oversold)",
             )
     transaction.deleted_at = datetime.now(UTC)
@@ -378,7 +378,7 @@ def asset_transaction_import_preview(
     account = get_owned_account(db, account_id, current_user)
     if account.type not in ("investment", "crypto_wallet"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Asset transactions can only be imported into investment or crypto "
             "wallet accounts",
         )
@@ -430,7 +430,7 @@ def asset_transaction_import_confirm(
     account = get_owned_account(db, preview.account_id, current_user)
     if account.type not in ("investment", "crypto_wallet"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Asset transactions can only be imported into investment or crypto "
             "wallet accounts",
         )

@@ -81,7 +81,7 @@ def _check_can_close(db: Session, account: Account, closed_at: date_, user: User
     """
     if closed_at > date_.today():
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="The closing date can't be in the future",
         )
 
@@ -137,7 +137,7 @@ def create_account(
     currency_exists = db.get(Currency, payload.currency)
     if currency_exists is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Unknown currency code: {payload.currency}",
         )
 
@@ -152,7 +152,7 @@ def create_account(
         except ExchangeRateUnavailable as exc:
             db.rollback()
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
 
     account = Account(

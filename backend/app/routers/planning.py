@@ -46,7 +46,7 @@ def _validate_percentages(update_data: dict) -> None:
 
     if len(provided) != len(_PERCENTAGE_FIELDS):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "All four percentages must be sent together "
                 "(pct_primary, pct_useful, pct_discretionary, pct_savings)"
@@ -56,7 +56,7 @@ def _validate_percentages(update_data: dict) -> None:
     total = sum(update_data[field] for field in _PERCENTAGE_FIELDS)
     if total != 100:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"The four percentages must sum to 100 (got {total})",
         )
 
@@ -66,7 +66,7 @@ def _validate_cuts(db: Session, request: SimulationRequest, user: User) -> None:
     for cut in request.cuts:
         if (cut.category_id is None) == (cut.necessity_level is None):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Each cut must target exactly one of necessity_level or category_id",
             )
 
@@ -75,7 +75,7 @@ def _validate_cuts(db: Session, request: SimulationRequest, user: User) -> None:
             # Two cuts on the same target have no defined winner, and
             # silently picking one would quietly change the answer.
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Duplicate cut for target '{key}'",
             )
         seen.add(key)
@@ -96,7 +96,7 @@ def _validate_cuts(db: Session, request: SimulationRequest, user: User) -> None:
                 )
             if category.type != "expense":
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Only expense categories can be cut",
                 )
 

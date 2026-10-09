@@ -6,7 +6,7 @@ from collections.abc import Generator
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError
+from jwt import PyJWTError
 from sqlalchemy.orm import Session
 
 from app.core.security import decode_token
@@ -43,7 +43,7 @@ def get_current_user(
 
     try:
         payload = decode_token(credentials.credentials, expected_type="access")
-    except (JWTError, ValueError):
+    except (PyJWTError, ValueError):
         # `from None`, not `from exc`: the 401 is deliberate and identical
         # for every decode failure, and chaining the JWT error would leak
         # which part of the token was wrong into logs and tracebacks.

@@ -46,12 +46,12 @@ def _validate_parent(db: Session, parent_id: UUID | None, user: User, category_t
     parent = _get_owned_category(db, parent_id, user)
     if parent.type != category_type:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="A category's parent must have the same type (expense/income)",
         )
     if parent.parent_id is not None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="A subcategory cannot itself be used as a parent category",
         )
 
@@ -81,19 +81,19 @@ def _validate_necessity_fields(
     """
     if necessity_provided and necessity_level is not None and category_type != "expense":
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="necessity_level can only be set on expense categories",
         )
 
     if exclusion_provided:
         if excluded_from_income_base is None:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="excluded_from_income_base cannot be null",
             )
         if excluded_from_income_base and category_type != "income":
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="excluded_from_income_base can only be set on income categories",
             )
 
@@ -176,7 +176,7 @@ def update_category(
         new_parent_id = update_data["parent_id"]
         if new_parent_id == category.id:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="A category cannot be its own parent",
             )
         _validate_parent(db, new_parent_id, current_user, category.type)

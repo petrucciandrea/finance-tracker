@@ -65,7 +65,7 @@ def _validate_necessity_override(transaction_type: str, override: object) -> Non
     """
     if override is not None and transaction_type != "expense":
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="necessity_level_override can only be set on expense transactions",
         )
 
@@ -292,7 +292,7 @@ def create_transaction(
         rate = get_rate(db, payload.currency, current_user.base_currency, payload.date)
     except ExchangeRateUnavailable as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
 
     transaction = Transaction(
@@ -493,7 +493,7 @@ def update_transaction(
             rate = get_rate(db, transaction.currency, current_user.base_currency, transaction.date)
         except ExchangeRateUnavailable as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
         transaction.exchange_rate = rate
         transaction.amount_base_currency = transaction.amount * rate

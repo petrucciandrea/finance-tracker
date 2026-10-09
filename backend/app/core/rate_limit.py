@@ -5,9 +5,8 @@ In-process on purpose: the app already runs a single worker (the CSV preview
 store has the same constraint). With more workers or replicas each would count
 separately, so move this to Redis together with that store, not before.
 
-The key is the client IP. Behind a reverse proxy uvicorn must run with
-`--proxy-headers --forwarded-allow-ips=<proxy>`, otherwise every request looks
-like it comes from the proxy and shares one bucket.
+The key is the client IP, see `client_ip`. Behind a reverse proxy the socket peer
+is the proxy itself, so TRUSTED_PROXY_COUNT must say how many proxies there are.
 """
 
 import time
@@ -15,8 +14,28 @@ from collections import defaultdict, deque
 
 from fastapi import HTTPException, Request, status
 
+from app.core.config import settings
+
 _hits: dict[str, deque[float]] = defaultdict(deque)
 _SWEEP_THRESHOLD = 10_000
+
+
+def client_ip(request: Request) -> str:
+    """
+    The caller's address. X-Forwarded-For is client-controlled except for what our
+    own proxies appended: each one adds the address that connected to it. So with
+    N trusted proxies the real client is the Nth entry from the right, and
+    everything to its left is attacker-chosen. Trusting the header wholesale (e.g.
+    uvicorn's --forwarded-allow-ips='*') lets anyone dodge the limiter by sending
+    a different fake address on every request.
+    """
+    hops = settings.trusted_proxy_count
+    if hops > 0:
+        header = request.headers.get("x-forwarded-for", "")
+        entries = [part.strip() for part in header.split(",") if part.strip()]
+        if len(entries) >= hops:
+            return entries[-hops]
+    return request.client.host if request.client else "unknown"
 
 
 def reset() -> None:
@@ -35,8 +54,7 @@ def rate_limit(name: str, limit: int, window_seconds: int):
 
     def dependency(request: Request) -> None:
         now = time.monotonic()
-        client = request.client.host if request.client else "unknown"
-        hits = _hits[f"{name}:{client}"]
+        hits = _hits[f"{name}:{client_ip(request)}"]
         while hits and now - hits[0] > window_seconds:
             hits.popleft()
         if len(hits) >= limit:

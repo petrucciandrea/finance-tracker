@@ -1,0 +1,134 @@
+# Render Blueprint: API + Postgres + nightly purge + static frontend, all in the
+# EU (Frankfurt). Values marked `sync: false` are asked for in the dashboard the
+# first time the Blueprint is applied, so no secret or personal detail lives here.
+# Step-by-step in DEPLOY.md.
+
+databases:
+  - name: finance-tracker-db
+    region: frankfurt
+    plan: basic-256mb # a free database is deleted after a short period: not for real data
+    postgresMajorVersion: "16"
+    databaseName: finance_tracker
+    user: finance_tracker
+    ipAllowList: [] # private network only: nothing outside Render can connect
+
+services:
+  # ---------------------------------------------------------------- API
+  - type: web
+    name: finance-tracker-api
+    runtime: docker
+    region: frankfurt
+    plan: starter # not free: a free web service sleeps, which also wipes the in-memory rate limiter
+    numInstances: 1 # exactly one: rate limiter and CSV preview live in process memory
+    dockerfilePath: ./backend/Dockerfile.prod
+    dockerContext: ./backend
+    healthCheckPath: /health
+    preDeployCommand: alembic upgrade head # migrations run before the new version takes traffic
+    autoDeploy: true
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: finance-tracker-db
+          property: connectionString
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: REGISTRATION_MODE
+        value: approval # switch to "open" to let anyone register
+      - key: TRUSTED_PROXY_COUNT
+        value: "1" # see DEPLOY.md: verify this after the first deploy
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: FRONTEND_BASE_URL
+        sync: false # https://<your frontend>
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false # JSON list, e.g. ["https://<your frontend>"]
+
+  # ------------------------------------------------- nightly retention job
+  - type: cron
+    name: finance-tracker-purge
+    runtime: docker
+    region: frankfurt
+    plan: starter
+    schedule: "17 3 * * *" # 03:17 UTC every day
+    dockerfilePath: ./backend/Dockerfile.prod
+    dockerContext: ./backend
+    dockerCommand: python -m app.purge
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: finance-tracker-db
+          property: connectionString
+      - key: JWT_SECRET_KEY # required by the settings, never used to sign anything here
+        generateValue: true
+      - key: REGISTRATION_MODE
+        value: open # the purge ignores it; "approval" would demand SMTP settings it doesn't need
+
+  # ------------------------------------------------------------ frontend
+  - type: web
+    name: finance-tracker-web
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    pullRequestPreviewsEnabled: false
+    envVars:
+      # Read at BUILD time and public by design: never put a secret in a VITE_ variable.
+      - key: VITE_API_BASE_URL
+        sync: false # https://<your api>/api/v1
+      - key: VITE_LEGAL_CONTROLLER
+        sync: false
+      - key: VITE_LEGAL_EMAIL
+        sync: false
+      - key: VITE_LEGAL_HOSTING
+        value: Render (Francoforte, Germania)
+      - key: VITE_LEGAL_ADDRESS
+        sync: false
+    routes:
+      - type: rewrite # single-page app: every path serves index.html
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: Permissions-Policy
+        value: camera=(), microphone=(), geolocation=()
+      - path: /*
+        name: Strict-Transport-Security
+        value: max-age=63072000; includeSubDomains
+      # connect-src must name the API origin. If your API is not at this URL, the
+      # app loads but every request is blocked: edit it here (see DEPLOY.md).
+      - path: /*
+        name: Content-Security-Policy
+        value: >-
+          default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
+          img-src 'self' data:; font-src 'self'; connect-src 'self' https://finance-tracker-api.onrender.com;
+          object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable

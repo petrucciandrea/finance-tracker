@@ -1,6 +1,9 @@
 """Auth endpoints throttle repeated calls from the same client."""
 
+import pytest
 from fastapi.testclient import TestClient
+
+from app.core.config import settings
 
 
 def test_login_is_throttled_after_too_many_attempts(client: TestClient) -> None:
@@ -50,3 +53,53 @@ def test_limits_are_per_route(client: TestClient) -> None:
     response = client.post("/api/v1/auth/refresh", json={"refresh_token": "x"})
 
     assert response.status_code == 401
+
+
+def _spoofed_logins(client: TestClient, count: int) -> list[int]:
+    creds = {"email": "nobody@example.com", "password": "wrong-password"}
+    return [
+        client.post(
+            "/api/v1/auth/login", json=creds, headers={"X-Forwarded-For": f"9.9.9.{i}"}
+        ).status_code
+        for i in range(count)
+    ]
+
+
+def test_forwarded_for_is_ignored_when_no_proxy_is_configured(client: TestClient) -> None:
+    # Default (0 proxies): the header is attacker-controlled, so it must not
+    # let anyone mint a fresh bucket per request.
+    assert _spoofed_logins(client, 11)[-1] == 429
+
+
+def test_with_one_trusted_proxy_the_rightmost_entry_is_the_client(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "trusted_proxy_count", 1)
+    creds = {"email": "nobody@example.com", "password": "wrong-password"}
+
+    # The proxy appends the real address; whatever the caller put to its left is ignored.
+    statuses = [
+        client.post(
+            "/api/v1/auth/login",
+            json=creds,
+            headers={"X-Forwarded-For": f"9.9.9.{i}, 203.0.113.7"},
+        ).status_code
+        for i in range(11)
+    ]
+
+    assert statuses[-1] == 429
+
+
+def test_distinct_real_clients_behind_the_proxy_get_separate_buckets(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "trusted_proxy_count", 1)
+    creds = {"email": "nobody@example.com", "password": "wrong-password"}
+    for _ in range(10):
+        client.post("/api/v1/auth/login", json=creds, headers={"X-Forwarded-For": "203.0.113.7"})
+
+    other = client.post(
+        "/api/v1/auth/login", json=creds, headers={"X-Forwarded-For": "198.51.100.9"}
+    )
+
+    assert other.status_code == 401  # not throttled with someone else's bucket

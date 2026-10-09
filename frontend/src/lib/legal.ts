@@ -1,6 +1,6 @@
 /**
  * Who the privacy policy and terms name as data controller. Set at build time
- * (Vercel env vars) so the real identity never lives in the repo:
+ * (Render env vars) so the real identity never lives in the repo:
  *   VITE_LEGAL_CONTROLLER  name of the person/entity running the service
  *   VITE_LEGAL_EMAIL       public contact for privacy requests (not the admin mailbox)
  *   VITE_LEGAL_ADDRESS     optional postal address / seat

@@ -53,3 +53,10 @@ def test_approval_mode_boots_once_email_is_configured() -> None:
 
 def test_development_is_not_restricted() -> None:
     assert _settings(environment="development", debug=True, jwt_secret_key="x")
+
+
+@pytest.mark.parametrize("scheme", ["postgres", "postgresql", "postgresql+psycopg"])
+def test_database_url_always_uses_the_psycopg_driver(scheme: str) -> None:
+    settings = _settings(database_url=f"{scheme}://u:p@db.example.com:5432/app")
+
+    assert str(settings.database_url).startswith("postgresql+psycopg://u:p@db.example.com")

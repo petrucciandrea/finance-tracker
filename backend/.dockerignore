@@ -1,0 +1,13 @@
+# Keep secrets and local noise out of the image: `COPY . .` would otherwise bake
+# the real .env into a layer.
+.env
+.env.*
+!.env.example
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+tests

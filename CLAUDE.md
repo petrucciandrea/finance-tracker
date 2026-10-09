@@ -150,7 +150,7 @@ the app up, no code change. The migration leaves every existing user `approved`.
 ### Retention: purge only what nothing points at
 `python -m app.purge` (`make purge`, `make purge-dry` to preview) applies
 `services/retention.py`; the app never runs it by itself, so the deployment must schedule it
-(cron). It removes old refresh tokens (7 days after expiry/revocation), soft-deleted rows older
+(on Render: the `finance-tracker-purge` cron job in `render.yaml`). It removes old refresh tokens (7 days after expiry/revocation), soft-deleted rows older
 than 30 days, rejected accounts after 30 days and never-confirmed ones after 14 (windows are
 `*_RETENTION_DAYS` settings).
 
@@ -179,17 +179,28 @@ purpose — see `pyproject.toml`. The TestClient prints a one-off warning about 
 (Starlette would return full tracebacks past our error handler, and SQLAlchemy echoes
 every statement with its parameters), a JWT secret under 32 characters or the
 `.env.example` placeholder, CORS `*`, and approval mode without admin email + SMTP. `/docs`,
-`/redoc` and `/openapi.json` are off in production. The frontend is built for Vercel
-(`frontend/vercel.json`); the backend is not: its rate limiter and CSV preview are
-in-memory, so it needs a long-lived single process, not serverless functions.
+`/redoc` and `/openapi.json` are off in production.
+
+Deployment is Render (`render.yaml`, steps in `DEPLOY.md`). The backend has to be one
+long-lived process (rate limiter and CSV preview are in memory), so no serverless and
+`numInstances: 1`. `Dockerfile` is the dev image (dev tools, `--reload` via compose);
+`Dockerfile.prod` is the one deployed: main dependencies only, non-root, no `.env`
+(`backend/.dockerignore`). `DATABASE_URL` is rewritten to the psycopg driver in `Settings`
+because hosts hand out `postgres://`. The static frontend sends a strict CSP, which is why
+the theme bootstrap is `public/theme-init.js` and not an inline script.
 
 ### Auth endpoints are rate limited, in memory, per client IP
 `core/rate_limit.py` (a dependency on register, login, refresh, password change and the
 approval endpoints) answers 429 with `Retry-After`. It is process-local like the CSV
 preview store: one worker only, otherwise each worker counts separately — move both to
-Redis together. Behind a reverse proxy uvicorn needs `--proxy-headers
---forwarded-allow-ips=<proxy>`, or every request shares the proxy's bucket. The counters
-are global, so `conftest.py` resets them before each test.
+Redis together. The counters are global, so `conftest.py` resets them before each test.
+
+**Client IP behind a proxy:** `client_ip()` trusts only the last `TRUSTED_PROXY_COUNT`
+entries of `X-Forwarded-For`, counted from the right (default 0: ignore the header). Do not
+use uvicorn's `--forwarded-allow-ips='*'` instead — everything left of what our own
+proxies appended is chosen by the caller, so trusting it lets anyone get a fresh bucket per
+request (we measured: 12 spoofed attempts, no 429). The right count depends on the host's
+proxy chain and has to be checked after deploying (`DEPLOY.md`).
 
 ### Sessions: single-use refresh, password change revokes the rest
 Rotation claims a refresh token with a conditional `UPDATE … WHERE revoked_at IS NULL`, so

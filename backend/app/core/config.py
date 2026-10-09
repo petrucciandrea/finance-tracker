@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     smtp_from: str | None = None
     smtp_starttls: bool = True
 
+    # How many reverse proxies sit in front of the app and append to
+    # X-Forwarded-For (0 = none: use the socket peer). Only this many entries,
+    # counted from the right, are trusted; anything further left is client-supplied.
+    trusted_proxy_count: int = 0
+
     # --- CORS ---
     cors_allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
 
@@ -85,6 +90,17 @@ class Settings(BaseSettings):
 
     # --- Default currency (used before a user sets their own) ---
     default_base_currency: str = "EUR"
+
+    @field_validator("database_url", "test_database_url", mode="before")
+    @classmethod
+    def use_psycopg_driver(cls, v: object) -> object:
+        # Hosts (Render, Heroku…) hand out `postgres://` or `postgresql://`, which
+        # SQLAlchemy resolves to psycopg2 — not installed here. Pin the driver we use.
+        if isinstance(v, str):
+            for prefix in ("postgres://", "postgresql://"):
+                if v.startswith(prefix):
+                    return "postgresql+psycopg://" + v[len(prefix) :]
+        return v
 
     @field_validator("environment")
     @classmethod

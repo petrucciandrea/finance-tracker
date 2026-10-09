@@ -5,19 +5,7 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Finanze</title>
-    <script>
-      // Applies the saved theme before first paint. Doing it from React
-      // instead would flash the light palette on every load in dark mode.
-      // Keep the storage key in sync with src/context/theme.ts.
-      (function () {
-        try {
-          var pref = localStorage.getItem('finance_tracker_theme')
-          var dark = pref === 'dark' ||
-            (pref !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
-          if (dark) document.documentElement.classList.add('dark')
-        } catch (e) { /* storage blocked: stay on the light default */ }
-      })()
-    </script>
+    <script src="/theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>

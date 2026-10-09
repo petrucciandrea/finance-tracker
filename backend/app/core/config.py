@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     require_email_verification: bool = True
     email_verification_expire_hours: int = 48
     password_reset_expire_minutes: int = 60
+    # --- Retention (see services/retention.py; run `make purge`) ---
+    refresh_token_retention_days: int = 7
+    soft_delete_retention_days: int = 30
+    rejected_account_retention_days: int = 30
+    unverified_account_retention_days: int = 14
     # Public URL of the frontend: the approval/login links in emails point here.
     frontend_base_url: str = "http://localhost:5173"
 

@@ -1,7 +1,7 @@
 # Convenience commands for local development.
 # Run `make help` to list them.
 
-.PHONY: help up down logs test test-cov migrate migrate-down lint fmt shell-backend shell-db
+.PHONY: help up down logs test test-cov migrate migrate-down purge purge-dry lint fmt shell-backend shell-db
 
 help:
 	@echo "up             - start all services (docker compose up -d)"
@@ -11,6 +11,8 @@ help:
 	@echo "test-cov       - run pytest with coverage report"
 	@echo "migrate        - apply Alembic migrations (upgrade head)"
 	@echo "migrate-down   - roll back the last migration"
+	@echo "purge          - apply the data retention rules (permanent)"
+	@echo "purge-dry      - show what purge would remove, change nothing"
 	@echo "lint           - run ruff + mypy on the backend"
 	@echo "fmt            - auto-format backend code with ruff"
 	@echo "shell-backend  - open a shell in the backend container"
@@ -50,6 +52,14 @@ test-reset-db:
 	docker compose up -d db_test
 	sleep 3
 	$(MAKE) migrate-test
+
+# Data retention (see backend/app/services/retention.py). Schedule `purge` on the
+# host (cron) — the app does not run it by itself.
+purge:
+	docker compose exec backend python -m app.purge
+
+purge-dry:
+	docker compose exec backend python -m app.purge --dry-run
 
 migrate-down:
 	docker compose exec backend alembic downgrade -1

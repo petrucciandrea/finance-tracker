@@ -147,6 +147,20 @@ the app up, no code change. The migration leaves every existing user `approved`.
 - Tests run with `registration_mode = "open"` (autouse fixture in `conftest.py`);
   `test_registration_approval.py` switches it back.
 
+### Retention: purge only what nothing points at
+`python -m app.purge` (`make purge`, `make purge-dry` to preview) applies
+`services/retention.py`; the app never runs it by itself, so the deployment must schedule it
+(cron). It removes old refresh tokens (7 days after expiry/revocation), soft-deleted rows older
+than 30 days, rejected accounts after 30 days and never-confirmed ones after 14 (windows are
+`*_RETENTION_DAYS` settings).
+
+A soft-deleted row is purged **only if no other row references it**. A deleted account or
+category that live transactions still point at stays, because those transactions keep the FK so
+history renders "deleted" (see Soft delete above). It walks `OWNED_TABLES` children-first, so
+freeing a parent happens in the same run; rows of the same table that point at each other (the
+two legs of a transfer) are purged together because a single `DELETE` is checked at the end.
+The privacy text states these windows: keep both in step.
+
 ### Dependencies are locked and audited
 `backend/poetry.lock` is committed and the Dockerfile copies it without a wildcard: a build
 must not resolve "whatever is newest today". After changing dependencies, rebuild the image

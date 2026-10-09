@@ -51,9 +51,12 @@ export function PrivacyPage() {
 
       <h2>4. Per quanto tempo li conserviamo</h2>
       <p>
-        Finché il tuo account è attivo. Se chiedi la cancellazione, eliminiamo i tuoi dati. Le copie di backup vengono
-        sovrascritte alla loro naturale rotazione. I log tecnici sono conservati per il tempo necessario alla
-        sicurezza.
+        Finché il tuo account è attivo. Se elimini un elemento (un movimento, un conto…) resta recuperabile in modo
+        interno per 30 giorni e poi viene cancellato definitivamente, a meno che sia ancora collegato ad altri tuoi
+        dati. Le sessioni scadute o chiuse sono rimosse dopo 7 giorni. Le registrazioni rifiutate sono cancellate
+        dopo 30 giorni e quelle mai confermate via email dopo 14. Se elimini l&apos;account (o ce lo chiedi), tutti i
+        tuoi dati vengono cancellati subito. Le copie di backup vengono sovrascritte alla loro naturale rotazione. I
+        log tecnici sono conservati per il tempo necessario alla sicurezza.
       </p>
 
       <h2>5. A chi vengono comunicati</h2>

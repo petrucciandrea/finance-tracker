@@ -150,7 +150,8 @@ the app up, no code change. The migration leaves every existing user `approved`.
 ### Retention: purge only what nothing points at
 `python -m app.purge` (`make purge`, `make purge-dry` to preview) applies
 `services/retention.py`; the app never runs it by itself, so the deployment must schedule it
-(on Render: the `finance-tracker-purge` cron job in `render.yaml`). It removes old refresh tokens (7 days after expiry/revocation), soft-deleted rows older
+(on Render: the `finance-tracker-purge` cron job in `render.yaml`, commented out while on the
+free tier — cron jobs are paid-only). It removes old refresh tokens (7 days after expiry/revocation), soft-deleted rows older
 than 30 days, rejected accounts after 30 days and never-confirmed ones after 14 (windows are
 `*_RETENTION_DAYS` settings).
 
@@ -181,7 +182,12 @@ every statement with its parameters), a JWT secret under 32 characters or the
 `.env.example` placeholder, CORS `*`, and approval mode without admin email + SMTP. `/docs`,
 `/redoc` and `/openapi.json` are off in production.
 
-Deployment is Render (`render.yaml`, steps in `DEPLOY.md`). The backend has to be one
+Deployment is Render (`render.yaml`, steps in `DEPLOY.md`), currently on the **free tier as a
+trial**: free web services block outbound SMTP on ports 25/465/587 (use a provider with
+another port, e.g. 2525), have no pre-deploy command (so `dockerCommand` runs
+`alembic upgrade head` at start), and the free Postgres expires after 30 days with no
+backups. Cron jobs have no free plan, so the purge job is commented out in `render.yaml`.
+The backend has to be one
 long-lived process (rate limiter and CSV preview are in memory), so no serverless and
 `numInstances: 1`. `Dockerfile` is the dev image (dev tools, `--reload` via compose);
 `Dockerfile.prod` is the one deployed: main dependencies only, non-root, no `.env`

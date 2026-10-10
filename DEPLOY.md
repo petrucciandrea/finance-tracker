@@ -27,7 +27,7 @@ secrets below exist the workflow skips itself with a notice instead of failing.
 1. **Neon.** Create a project in an EU region (Frankfurt). Copy the **direct** connection
    string (the one without `-pooler`).
 2. **Render.** New → Blueprint, pick the repo, apply `render.yaml`. It asks for two
-   values: `DATABASE_URL` (the Neon string) and `TRUSTED_PROXY_COUNT` (enter `2`). Once the
+   values: `DATABASE_URL` (the Neon string) and `TRUSTED_PROXY_COUNT` (enter `1`). Once the
    service exists, open its Settings and copy the **Deploy Hook** URL (the service's, not the
    Blueprint's sync hook). The service starts by itself on creation; the schema is created by
    the first Deploy run in step 5.
@@ -70,14 +70,25 @@ secrets below exist the workflow skips itself with a notice instead of failing.
   after a sleep takes about a minute). The site loads, has no "Crea account", and
   `/privacy` shows your name.
 - Log in with the account you created.
-- **Rate limiter and proxies.** `TRUSTED_PROXY_COUNT` must equal how many proxies sit in
-  front of the app (here Vercel's rewrite and Render's, probably 2). Through the **Vercel**
-  domain send 11 wrong logins, each with a different `X-Forwarded-For`:
-  `for i in $(seq 1 11); do curl -s -o /dev/null -w '%{http_code} ' -X POST https://<vercel domain>/api/v1/auth/login -H "X-Forwarded-For: 9.9.9.$i" -H 'content-type: application/json' -d '{"email":"x@example.com","password":"wrong-password"}'; done`
-  The 11th must be `429`. If it stays `401` the count is too high (the app reads a value
-  you control): lower it. If different people on different networks get throttled
-  together, it is too low (everyone looks like a proxy): raise it. Change it in Render's
-  dashboard and repeat.
+- **Rate limiter.** `TRUSTED_PROXY_COUNT` is how many entries, counted from the right of
+  `X-Forwarded-For`, belong to proxies we trust. **Use `1`.** What we measured on this setup:
+  - Render appends the address of its own edge; it does not document the chain, and what it
+    appends is one of a few edge addresses, not the visitor's. So the limiter's key is that
+    address: attempts are counted per Render edge address, shared by many visitors.
+  - A caller-supplied `X-Forwarded-For` is ignored, which is what matters: inventing an
+    address no longer buys fresh attempts. (Trusting the header wholesale, or a count that
+    reaches into it, lets anyone do exactly that.)
+  - Through Vercel the real client address does not reach the app at all (Vercel's proxy
+    stands in between), so there too the limit is shared.
+  To re-check after changing anything proxy-related, send 25 wrong logins to the **API
+  address**, each with a different `X-Forwarded-For`, right after a restart (a restart
+  empties the counters):
+  `for i in $(seq 1 25); do curl -s -o /dev/null -w '%{http_code} ' -X POST https://<api>/api/v1/auth/login -H "X-Forwarded-For: 6.6.6.$i" -H 'content-type: application/json' -d '{"email":"x@example.com","password":"wrong-password"}'; done`
+  Expect at most about 20 `401`s (10 per edge address) and then `429`s. All 25 `401` means
+  the header is being trusted: lower the count.
+  The practical effect is a login limit shared by everyone. Fine for one user and closed
+  registration; before opening registration move to calling the API directly from the
+  browser (CORS), or limit per account, so one bad actor can't lock the others out.
 - Unsafe settings (debug on, short JWT secret…) make the API refuse to start: read the
   deploy log if it won't come up.
 

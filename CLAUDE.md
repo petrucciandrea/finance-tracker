@@ -231,8 +231,12 @@ Redis together. The counters are global, so `conftest.py` resets them before eac
 entries of `X-Forwarded-For`, counted from the right (default 0: ignore the header). Do not
 use uvicorn's `--forwarded-allow-ips='*'` instead — everything left of what our own
 proxies appended is chosen by the caller, so trusting it lets anyone get a fresh bucket per
-request (we measured: 12 spoofed attempts, no 429). The right count depends on the host's
-proxy chain and has to be checked after deploying (`DEPLOY.md`).
+request (we measured: 12 spoofed attempts, no 429). On Render the right value is **1**: it
+appends the address of its own edge (a few values, not the visitor's), so the limit is shared
+among visitors but a forged header buys nothing — verified with 25 spoofed attempts
+(19 passed, i.e. two buckets of 10). Through Vercel's rewrite the real client address never
+reaches the app. Fine for one user; before opening registration call the API directly (CORS)
+or limit per account (`DEPLOY.md` has the re-check).
 
 ### Sessions: single-use refresh, password change revokes the rest
 Rotation claims a refresh token with a conditional `UPDATE … WHERE revoked_at IS NULL`, so

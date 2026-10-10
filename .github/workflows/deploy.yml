@@ -25,19 +25,37 @@ jobs:
     env:
       DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
+      # Until the secrets are configured (DEPLOY.md) there is nothing to deploy to: say so
+      # and finish green, instead of failing on every push.
+      - name: Check the deploy secrets exist
+        id: secrets
+        env:
+          DATABASE: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$DATABASE" ] || [ -z "$HOOK" ]; then
+            echo "::notice::Deploy skipped: PRODUCTION_DATABASE_URL and RENDER_DEPLOY_HOOK_URL are not both set in the 'production' environment (see DEPLOY.md)."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v7
+        if: steps.secrets.outputs.ready == 'true'
         with:
           ref: ${{ env.DEPLOY_SHA }}
       - uses: actions/setup-python@v7
+        if: steps.secrets.outputs.ready == 'true'
         with:
           python-version: "3.12"
       - name: Install the backend (runtime dependencies only)
+        if: steps.secrets.outputs.ready == 'true'
         working-directory: backend
         run: |
           pip install --upgrade pip poetry
           poetry config virtualenvs.create false
           poetry install --no-interaction --no-root --only main
       - name: Migrate the production database
+        if: steps.secrets.outputs.ready == 'true'
         working-directory: backend
         env:
           DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
@@ -45,6 +63,7 @@ jobs:
           JWT_SECRET_KEY: migration-only-not-a-real-secret-0123456789abcdef
         run: alembic upgrade head
       - name: Deploy this exact commit on Render
+        if: steps.secrets.outputs.ready == 'true'
         env:
           RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
         run: |

@@ -16,10 +16,15 @@ logger = logging.getLogger(__name__)
 
 def send_email(to: str, subject: str, body: str) -> None:
     if not settings.smtp_host or not settings.smtp_from:
-        # Development: the message (links included) goes to the log instead.
-        # In production the settings validator refuses to boot without SMTP
-        # when approval mode needs it, so this branch is not a silent drop.
-        logger.warning("SMTP not configured, email not sent. To: %s | %s\n%s", to, subject, body)
+        if settings.is_production:
+            # The body carries sign-in/reset links, which are credentials: a
+            # production log must never hold them, so only note that it was dropped.
+            logger.warning("SMTP not configured, email not sent. To: %s | %s", to, subject)
+        else:
+            # Development: the message (links included) goes to the log instead.
+            logger.warning(
+                "SMTP not configured, email not sent. To: %s | %s\n%s", to, subject, body
+            )
         return
 
     message = EmailMessage()

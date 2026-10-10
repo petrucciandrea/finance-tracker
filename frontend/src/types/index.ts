@@ -60,6 +60,12 @@ export interface ApprovalRequestInfo {
   created_at: string
 }
 
+/** What the login/register pages may offer: closed registration and no email hide dead ends. */
+export interface PublicConfig {
+  registration_mode: 'closed' | 'approval' | 'open'
+  email_enabled: boolean
+}
+
 export interface RegisterPayload {
   email: string
   password: string

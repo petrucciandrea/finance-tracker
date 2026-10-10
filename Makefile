@@ -1,7 +1,7 @@
 # Convenience commands for local development.
 # Run `make help` to list them.
 
-.PHONY: help up down logs test test-cov migrate migrate-down purge purge-dry lint fmt shell-backend shell-db
+.PHONY: help up down logs test test-cov migrate migrate-down purge purge-dry create-user lint fmt shell-backend shell-db
 
 help:
 	@echo "up             - start all services (docker compose up -d)"
@@ -13,6 +13,7 @@ help:
 	@echo "migrate-down   - roll back the last migration"
 	@echo "purge          - apply the data retention rules (permanent)"
 	@echo "purge-dry      - show what purge would remove, change nothing"
+	@echo "create-user    - create an account: make create-user EMAIL=you@example.com"
 	@echo "lint           - run ruff + mypy on the backend"
 	@echo "fmt            - auto-format backend code with ruff"
 	@echo "shell-backend  - open a shell in the backend container"
@@ -60,6 +61,11 @@ purge:
 
 purge-dry:
 	docker compose exec backend python -m app.purge --dry-run
+
+# Registration can be closed, so this is how an account comes to exist. Asks for the
+# password interactively. For production: docker compose exec -e DATABASE_URL=... (DEPLOY.md).
+create-user:
+	docker compose exec backend python -m app.create_user $(EMAIL)
 
 migrate-down:
 	docker compose exec backend alembic downgrade -1

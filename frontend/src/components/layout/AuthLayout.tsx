@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { CheckIcon, MoonIcon, SunIcon } from '@/components/ui/Icon'
 import { LegalFooter } from '@/components/layout/LegalFooter'
+import { usePublicConfig } from '@/hooks/usePublicConfig'
 import { useTheme } from '@/hooks/useTheme'
 
 const POINTS = [
@@ -23,6 +24,7 @@ const tabClass = ({ isActive }: { isActive: boolean }) =>
 export function AuthLayout({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
   const { resolved, setPreference } = useTheme()
   const next = resolved === 'dark' ? 'light' : 'dark'
+  const { registrationOpen } = usePublicConfig()
 
   return (
     <div className="flex min-h-screen flex-wrap">
@@ -51,14 +53,16 @@ export function AuthLayout({ title, subtitle, children }: { title: string; subti
 
       <main className="grid flex-[1_1_520px] place-items-center px-4 py-12 sm:px-6">
         <div className="w-full max-w-[420px]">
-          <nav aria-label="Accesso" className="grid grid-cols-2 gap-0.5 rounded-xl border border-line bg-card-2 p-1">
-            <NavLink to="/login" className={tabClass}>
-              Accedi
-            </NavLink>
-            <NavLink to="/register" className={tabClass}>
-              Crea account
-            </NavLink>
-          </nav>
+          {registrationOpen && (
+            <nav aria-label="Accesso" className="grid grid-cols-2 gap-0.5 rounded-xl border border-line bg-card-2 p-1">
+              <NavLink to="/login" className={tabClass}>
+                Accedi
+              </NavLink>
+              <NavLink to="/register" className={tabClass}>
+                Crea account
+              </NavLink>
+            </nav>
+          )}
 
           <h1 className="mt-7 mb-1 text-[26px] font-extrabold tracking-[-0.02em]">{title}</h1>
           <p className="text-[15px] text-ink-2">{subtitle}</p>

@@ -147,6 +147,15 @@ the app up, no code change. The migration leaves every existing user `approved`.
 - Tests run with `registration_mode = "open"` (autouse fixture in `conftest.py`);
   `test_registration_approval.py` switches it back.
 
+### Registration can be closed; accounts then come from a command
+`REGISTRATION_MODE=closed` makes `POST /auth/register` answer 403 `REGISTRATION_CLOSED`. A
+public deploy starts like that, with no SMTP settings at all, and accounts are made with
+`make create-user EMAIL=…` (`app/create_user.py`: password asked interactively, never as an
+argument; the account is created approved and email-confirmed). `GET /auth/config` tells the
+frontend what is on (`registration_mode`, `email_enabled` = SMTP configured) so the login page
+hides "Crea account" and "Password dimenticata?" instead of offering dead ends. Without SMTP
+`send_email` logs only "not sent" in production: the body holds links that are credentials.
+
 ### Retention: purge only what nothing points at
 `python -m app.purge` (`make purge`, `make purge-dry` to preview) applies
 `services/retention.py`; the app never runs it by itself, so the deployment must schedule it

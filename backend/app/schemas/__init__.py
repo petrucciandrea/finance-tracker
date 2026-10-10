@@ -268,6 +268,13 @@ class User(ORMBase):
     created_at: datetime
 
 
+class PublicConfig(BaseModel):
+    """What the login/register pages need to know to show only what works."""
+
+    registration_mode: Literal["closed", "approval", "open"]
+    email_enabled: bool
+
+
 class EmailRequest(BaseModel):
     email: LowerEmail
 

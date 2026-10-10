@@ -10,6 +10,7 @@ import { ErrorBlock, Notice } from '@/components/ui/EmptyState'
 import { Field } from '@/components/ui/Field'
 import { PasswordInput } from '@/components/ui/PasswordInput'
 import { useAuth } from '@/hooks/useAuth'
+import { usePublicConfig } from '@/hooks/usePublicConfig'
 import { CURRENCIES, CURRENCY_NAMES } from '@/lib/currencies'
 import type { ApiErrorResponse, User } from '@/types'
 
@@ -24,6 +25,7 @@ type RegisterFormValues = z.infer<typeof registerSchema>
 
 export function RegisterPage() {
   const { register: registerUser } = useAuth()
+  const { registrationClosed } = usePublicConfig()
   const navigate = useNavigate()
   const [serverError, setServerError] = useState<string | null>(null)
   const [created, setCreated] = useState<User | null>(null)
@@ -55,6 +57,19 @@ export function RegisterPage() {
         setServerError('Si è verificato un errore. Riprova.')
       }
     }
+  }
+
+  if (registrationClosed) {
+    return (
+      <AuthLayout title="Registrazioni chiuse" subtitle="Al momento non si possono creare nuovi account.">
+        <div className="mt-6 flex flex-col gap-4">
+          <Notice tone="info">Registrazioni chiuse</Notice>
+          <Link to="/login" className="link">
+            Vai al login
+          </Link>
+        </div>
+      </AuthLayout>
+    )
   }
 
   if (created) {

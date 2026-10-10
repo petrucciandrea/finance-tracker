@@ -25,30 +25,15 @@ services:
         sync: false # Neon's DIRECT connection string (no "-pooler"); the driver prefix is fixed in Settings
       - key: JWT_SECRET_KEY
         generateValue: true
+      # Nobody can register and no email is sent: accounts are made with
+      # `make create-user`. To open up later see DEPLOY.md ("Turning email and
+      # registration on"): that is where ADMIN_EMAIL, SMTP_* and the rest come in.
       - key: REGISTRATION_MODE
-        value: approval # switch to "open" to let anyone register
+        value: closed
       # How many proxies sit in front of the app: Vercel's rewrite and Render's own.
       # Start at 2 and verify (DEPLOY.md); wrong in either direction breaks the rate limiter.
       - key: TRUSTED_PROXY_COUNT
         sync: false
-      - key: ADMIN_EMAIL
-        sync: false
-      - key: SMTP_HOST
-        sync: false
-      # Free web services cannot connect out on ports 25, 465 or 587, so Gmail's SMTP
-      # does not work here: use a provider with another port (e.g. 2525).
-      - key: SMTP_PORT
-        sync: false
-      - key: SMTP_USERNAME
-        sync: false
-      - key: SMTP_PASSWORD
-        sync: false
-      - key: SMTP_FROM
-        sync: false
-      - key: FRONTEND_BASE_URL
-        sync: false # https://<your Vercel domain>
-      - key: CORS_ALLOWED_ORIGINS
-        sync: false # JSON list, e.g. ["https://<your Vercel domain>"]
 
 # The nightly purge (`python -m app.purge`) needs a cron job, and Render's cron
 # jobs have no free plan. Until then run `make purge` by hand. On a paid plan add:

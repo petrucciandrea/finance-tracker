@@ -39,11 +39,12 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 30
 
     # --- Registration ---
+    # "closed": nobody can register (accounts are made with `make create-user`).
     # "approval": a new account is created pending and can't log in until the
     # admin approves it from the link emailed to `admin_email`. "open": anyone
-    # can register and is approved immediately. Defaults to the closed mode so
-    # a deploy that forgets to configure it is not accidentally open.
-    registration_mode: Literal["approval", "open"] = "approval"
+    # can register and is approved immediately. Defaults to approval so a deploy
+    # that forgets to configure it is never open; a public deploy sets "closed".
+    registration_mode: Literal["closed", "approval", "open"] = "approval"
     admin_email: str | None = None
     approval_token_expire_days: int = 14
     # Version of the privacy policy + terms a new account accepts. Bump it when
@@ -134,6 +135,10 @@ class Settings(BaseSettings):
         if problems:
             raise ValueError("Unsafe production configuration: " + "; ".join(problems))
         return self
+
+    @property
+    def email_enabled(self) -> bool:
+        return bool(self.smtp_host and self.smtp_from)
 
     @property
     def is_production(self) -> bool:

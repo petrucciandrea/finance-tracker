@@ -9,12 +9,14 @@ import { AuthLayout } from '@/components/layout/AuthLayout'
 import { Button } from '@/components/ui/Button'
 import { ErrorBlock, Notice } from '@/components/ui/EmptyState'
 import { Field } from '@/components/ui/Field'
+import { usePublicConfig } from '@/hooks/usePublicConfig'
 
 const schema = z.object({ email: z.string().email('Inserisci un indirizzo email valido') })
 type Values = z.infer<typeof schema>
 
 export function ForgotPasswordPage() {
   const [sent, setSent] = useState(false)
+  const { emailEnabled, isLoading } = usePublicConfig()
   const [error, setError] = useState<string | null>(null)
   const {
     register,
@@ -38,7 +40,11 @@ export function ForgotPasswordPage() {
 
   return (
     <AuthLayout title="Password dimenticata" subtitle="Ti mandiamo un link per sceglierne una nuova.">
-      {sent ? (
+      {!isLoading && !emailEnabled ? (
+        <div className="mt-6">
+          <Notice>Il recupero della password via email non è disponibile.</Notice>
+        </div>
+      ) : sent ? (
         <div className="mt-6 flex flex-col gap-4">
           <Notice tone="info">Controlla la tua email</Notice>
           <p className="text-[15px] text-ink-2">

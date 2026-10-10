@@ -1,6 +1,7 @@
 import { apiClient } from './client'
 import type {
   ApprovalRequestInfo,
+  PublicConfig,
   LoginPayload,
   PasswordChangePayload,
   RegisterPayload,
@@ -82,4 +83,9 @@ export async function requestPasswordReset(email: string): Promise<void> {
 
 export async function confirmPasswordReset(token: string, newPassword: string): Promise<void> {
   await apiClient.post('/auth/password-reset/confirm', { token, new_password: newPassword })
+}
+
+export async function getPublicConfig(): Promise<PublicConfig> {
+  const { data } = await apiClient.get<PublicConfig>('/auth/config')
+  return data
 }

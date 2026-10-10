@@ -11,6 +11,7 @@ import { Field } from '@/components/ui/Field'
 import { PasswordInput } from '@/components/ui/PasswordInput'
 import * as authApi from '@/api/auth'
 import { useAuth } from '@/hooks/useAuth'
+import { usePublicConfig } from '@/hooks/usePublicConfig'
 import type { ApiErrorResponse } from '@/types'
 
 const loginSchema = z.object({
@@ -22,6 +23,7 @@ type LoginFormValues = z.infer<typeof loginSchema>
 
 export function LoginPage() {
   const { login } = useAuth()
+  const { registrationOpen, emailEnabled } = usePublicConfig()
   const navigate = useNavigate()
   const [serverError, setServerError] = useState<string | null>(null)
   const [needsVerification, setNeedsVerification] = useState(false)
@@ -100,9 +102,11 @@ export function LoginPage() {
           />
         </Field>
 
-        <Link to="/password-dimenticata" className="link -mt-2 self-start text-[14px]">
-          Password dimenticata?
-        </Link>
+        {emailEnabled && (
+          <Link to="/password-dimenticata" className="link -mt-2 self-start text-[14px]">
+            Password dimenticata?
+          </Link>
+        )}
 
         {serverError && <ErrorBlock>{serverError}</ErrorBlock>}
         {needsVerification && (
@@ -116,12 +120,14 @@ export function LoginPage() {
         </Button>
       </form>
 
-      <p className="mt-5 text-center text-[14px] text-ink-2">
-        Non hai un account?{' '}
-        <Link to="/register" className="link">
-          Registrati
-        </Link>
-      </p>
+      {registrationOpen && (
+        <p className="mt-5 text-center text-[14px] text-ink-2">
+          Non hai un account?{' '}
+          <Link to="/register" className="link">
+            Registrati
+          </Link>
+        </p>
+      )}
     </AuthLayout>
   )
 }

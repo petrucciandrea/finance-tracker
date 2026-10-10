@@ -45,6 +45,7 @@ from app.schemas import (
     EmailRequest,
     PasswordChangeRequest,
     PasswordResetConfirm,
+    PublicConfig,
     RefreshRequest,
     TokenPair,
     TokenRequest,
@@ -163,6 +164,9 @@ def _notify_admin_of_registration(user_id: UUID, user_email: str) -> None:
 def register(
     payload: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
 ) -> User:
+    if settings.registration_mode == "closed":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="REGISTRATION_CLOSED")
+
     existing = db.query(User).filter(User.email == payload.email).first()
     if existing:
         raise HTTPException(
@@ -200,6 +204,15 @@ def register(
     elif settings.require_email_verification:
         background_tasks.add_task(_send_verification_email, user.id, user.email)
     return user
+
+
+@router.get("/config", response_model=PublicConfig)
+def public_config() -> PublicConfig:
+    # Public on purpose and harmless: it only tells the UI whether to offer sign-up
+    # and "forgot password", which would otherwise be dead ends.
+    return PublicConfig(
+        registration_mode=settings.registration_mode, email_enabled=settings.email_enabled
+    )
 
 
 @router.post("/login", response_model=TokenPair, dependencies=[_LIMIT_LOGIN])

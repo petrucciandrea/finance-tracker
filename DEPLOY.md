@@ -26,10 +26,11 @@ secrets below exist the workflow skips itself with a notice instead of failing.
 
 1. **Neon.** Create a project in an EU region (Frankfurt). Copy the **direct** connection
    string (the one without `-pooler`).
-2. **Render.** New → Blueprint, pick the repo, apply `render.yaml`. It asks for
-   `TRUSTED_PROXY_COUNT`: enter `2`. Then in the service's **Environment** add
-   `DATABASE_URL` = the Neon string. In Settings, copy the service's **Deploy Hook** URL
-   (not the Blueprint's sync hook).
+2. **Render.** New → Blueprint, pick the repo, apply `render.yaml`. It asks for two
+   values: `DATABASE_URL` (the Neon string) and `TRUSTED_PROXY_COUNT` (enter `2`). Once the
+   service exists, open its Settings and copy the **Deploy Hook** URL (the service's, not the
+   Blueprint's sync hook). The service starts by itself on creation; the schema is created by
+   the first Deploy run in step 5.
 3. **GitHub.** Settings → Environments → `production`, add the secrets
    `PRODUCTION_DATABASE_URL` (the same Neon string) and `RENDER_DEPLOY_HOOK_URL`. Set them
    from a terminal so they stay out of your history, pasting the value at the prompt

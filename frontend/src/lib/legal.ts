@@ -4,7 +4,7 @@
  *   VITE_LEGAL_CONTROLLER  name of the person/entity running the service
  *   VITE_LEGAL_EMAIL       public contact for privacy requests (not the admin mailbox)
  *   VITE_LEGAL_ADDRESS     optional postal address / seat
- *   VITE_LEGAL_HOSTING     optional: where the data is hosted, e.g. "Hetzner (Germania)"
+ *   VITE_LEGAL_HOSTING     optional: who hosts it, e.g. "Render (Francoforte), Neon (Francoforte), Vercel"
  */
 const env = import.meta.env
 

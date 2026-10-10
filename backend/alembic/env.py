@@ -24,7 +24,9 @@ config = context.config
 
 # Override the sqlalchemy.url from alembic.ini with the one from our app
 # settings, so a single .env is the source of truth for the DB connection.
-config.set_main_option("sqlalchemy.url", str(settings.database_url))
+# `%` is the config parser's interpolation character, so a percent-encoded password
+# (`p%40ss`) would crash it; doubling the percent signs keeps the URL intact.
+config.set_main_option("sqlalchemy.url", str(settings.database_url).replace("%", "%%"))
 
 # Interpret the config file for Python logging (loggers defined in alembic.ini)
 if config.config_file_name is not None:

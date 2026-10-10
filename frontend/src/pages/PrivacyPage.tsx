@@ -62,8 +62,9 @@ export function PrivacyPage() {
       <h2>5. A chi vengono comunicati</h2>
       <ul>
         <li>
-          <strong>Hosting:</strong> {LEGAL.hosting || '[fornitore di hosting da indicare]'}, che ospita
-          l&apos;applicazione e il database in qualità di responsabile del trattamento.
+          <strong>Hosting:</strong> {LEGAL.hosting || '[fornitori di hosting da indicare]'}. Ospitano
+          l&apos;applicazione, il database e il sito, e le richieste che invii all&apos;applicazione transitano dalla
+          loro infrastruttura: sono responsabili del trattamento.
         </li>
         <li>
           <strong>Invio email:</strong> il servizio di posta usato per le email di conferma dell&apos;indirizzo, di approvazione e di reimpostazione della password.

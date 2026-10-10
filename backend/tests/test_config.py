@@ -60,3 +60,16 @@ def test_database_url_always_uses_the_psycopg_driver(scheme: str) -> None:
     settings = _settings(database_url=f"{scheme}://u:p@db.example.com:5432/app")
 
     assert str(settings.database_url).startswith("postgresql+psycopg://u:p@db.example.com")
+
+
+def test_alembic_accepts_a_database_url_with_a_percent_encoded_password() -> None:
+    # A Neon/Render password may contain characters that get percent-encoded; the
+    # config parser would otherwise reject the URL and block every migration.
+    from alembic.config import Config
+
+    url = str(_settings(database_url="postgresql://u:p%40ss@db.example.com/app").database_url)
+    config = Config()
+
+    config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
+
+    assert config.get_main_option("sqlalchemy.url") == url

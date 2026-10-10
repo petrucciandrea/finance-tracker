@@ -1,0 +1,53 @@
+name: Deploy
+
+# Runs only after CI is green on main. Order matters: the database schema first,
+# then the code. A migration must therefore stay compatible with the version still
+# running while it is applied (add columns/tables first, drop things in a later release).
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: # first deploy, or re-running one by hand (deploys the selected branch's head)
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false # let a running migration finish
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: production # holds PRODUCTION_DATABASE_URL and RENDER_DEPLOY_HOOK_URL
+    env:
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install the backend (runtime dependencies only)
+        working-directory: backend
+        run: |
+          pip install --upgrade pip poetry
+          poetry config virtualenvs.create false
+          poetry install --no-interaction --no-root --only main
+      - name: Migrate the production database
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          # Settings insists on a JWT secret even though migrations never sign anything.
+          JWT_SECRET_KEY: migration-only-not-a-real-secret-0123456789abcdef
+        run: alembic upgrade head
+      - name: Deploy this exact commit on Render
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          # The hook URL already carries ?key=…, so the commit is appended with &.
+          curl --fail --silent --show-error -X POST "${RENDER_DEPLOY_HOOK_URL}&ref=${DEPLOY_SHA}" > /dev/null
+          echo "Triggered a Render deploy of ${DEPLOY_SHA}"

@@ -44,13 +44,25 @@ secrets below exist the workflow skips itself with a notice instead of failing.
    `https://finance-tracker-api.onrender.com`, edit the rewrite in `frontend/vercel.json`.
 5. **Deploy.** Actions → Deploy → *Run workflow* (or push to `main`). Both the migration
    step and the Render step must be green.
-6. **Create your account** (registration is closed, so by command). From your machine,
-   with the Neon string in a variable that never touches your shell history:
-   ```
-   read -s NEON_URL
-   docker compose exec -e DATABASE_URL="$NEON_URL" backend python -m app.create_user you@example.com
-   ```
-   It asks for the password twice. Do not put the password or the URL in the command line.
+6. **Bring your account over** (registration is closed, so there is no sign-up). The Neon
+   database is empty until step 5 has migrated it, so do this after step 5. Two ways, from
+   your machine, keeping the Neon string in a variable that never touches your shell history
+   or the command line:
+   - **Copy your existing account and data** from the local database (same password, same
+     data; sessions are not copied, you log in again). Preview first with `--dry-run`:
+     ```
+     read -s NEON_URL
+     docker compose exec -e TARGET_DATABASE_URL="$NEON_URL" backend python -m app.transfer_user you@example.com --dry-run
+     docker compose exec -e TARGET_DATABASE_URL="$NEON_URL" backend python -m app.transfer_user you@example.com
+     ```
+     It copies only that one user (not the test users), everything in one transaction, and
+     refuses to overwrite a user that already exists. Cached market prices are not copied:
+     they are fetched again the first time you open the portfolio.
+   - **Or start empty** with a brand-new account:
+     ```
+     docker compose exec -e DATABASE_URL="$NEON_URL" backend python -m app.create_user you@example.com
+     ```
+     It asks for the password twice.
 
 ## Check after the first deploy
 

@@ -156,6 +156,17 @@ frontend what is on (`registration_mode`, `email_enabled` = SMTP configured) so 
 hides "Crea account" and "Password dimenticata?" instead of offering dead ends. Without SMTP
 `send_email` logs only "not sent" in production: the body holds links that are credentials.
 
+### Moving a personal account to production: `app/transfer_user.py`
+`TARGET_DATABASE_URL=… python -m app.transfer_user EMAIL [--dry-run]` copies **one** user and
+all they own from the app's own database into another (the target URL comes from the
+environment, never argv). It walks `OWNED_TABLES` in reverse (parents first), copies the
+shared `assets` rows the user's holdings point at, and leaves out refresh tokens. Rows that
+point at rows of their own table (subcategories, the two legs of a transfer) go in with
+those links empty and get them back at the end, since any insertion order can hit a
+cycle. The target must be at the same Alembic revision; the copy is one transaction and an
+existing user is refused, not overwritten. Cached prices and rates are not copied.
+`test_transfer_user.py` runs it against a throw-away database on the test server.
+
 ### Retention: purge only what nothing points at
 `python -m app.purge` (`make purge`, `make purge-dry` to preview) applies
 `services/retention.py`; the app never runs it by itself, so the deployment must schedule it

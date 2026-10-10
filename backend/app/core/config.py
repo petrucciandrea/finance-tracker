@@ -12,6 +12,16 @@ from pydantic import Field, PostgresDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def to_psycopg_url(value: object) -> object:
+    """Hosts hand out `postgres://` or `postgresql://`, which SQLAlchemy resolves to
+    psycopg2 — not installed here. Pin the driver we use."""
+    if isinstance(value, str):
+        for prefix in ("postgres://", "postgresql://"):
+            if value.startswith(prefix):
+                return "postgresql+psycopg://" + value[len(prefix) :]
+    return value
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -95,13 +105,7 @@ class Settings(BaseSettings):
     @field_validator("database_url", "test_database_url", mode="before")
     @classmethod
     def use_psycopg_driver(cls, v: object) -> object:
-        # Hosts (Render, Heroku…) hand out `postgres://` or `postgresql://`, which
-        # SQLAlchemy resolves to psycopg2 — not installed here. Pin the driver we use.
-        if isinstance(v, str):
-            for prefix in ("postgres://", "postgresql://"):
-                if v.startswith(prefix):
-                    return "postgresql+psycopg://" + v[len(prefix) :]
-        return v
+        return to_psycopg_url(v)
 
     @field_validator("environment")
     @classmethod

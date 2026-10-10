@@ -30,8 +30,8 @@ services:
       # registration on"): that is where ADMIN_EMAIL, SMTP_* and the rest come in.
       - key: REGISTRATION_MODE
         value: closed
-      # How many proxies sit in front of the app: Vercel's rewrite and Render's own.
-      # Start at 2 and verify (DEPLOY.md); wrong in either direction breaks the rate limiter.
+      # How many entries at the right of X-Forwarded-For are trusted. Measured on Render:
+      # 1 (its own proxy). 2 would make a caller-chosen header the key. See DEPLOY.md.
       - key: TRUSTED_PROXY_COUNT
         sync: false
 

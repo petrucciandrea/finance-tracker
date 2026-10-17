@@ -36,6 +36,12 @@ export async function deleteTransaction(id: string): Promise<void> {
   await apiClient.delete(`/transactions/${id}`)
 }
 
+// Expenses that still have money fronted for others to come back.
+export async function listOpenCredits(): Promise<Transaction[]> {
+  const { data } = await apiClient.get<Transaction[]>('/transactions/open-credits')
+  return data
+}
+
 export async function getSummary(params: TransactionSummaryParams = {}): Promise<TransactionSummaryResponse> {
   const { data } = await apiClient.get<TransactionSummaryResponse>('/transactions/summary', { params })
   return data

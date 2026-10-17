@@ -377,6 +377,11 @@ class TransactionCreate(BaseModel):
     type: TransactionType
     # Overrides the category's (or its parent's) level for this one row.
     necessity_level_override: NecessityLevel | None = None
+    # Expense only: the part paid on behalf of others (same currency as the
+    # expense). The spend counts only the rest.
+    lent_amount: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=8)
+    # Income only: the expense this pays back.
+    repays_transaction_id: UUID | None = None
 
 
 class TransferCreate(BaseModel):
@@ -400,6 +405,9 @@ class TransactionUpdate(BaseModel):
     date: date_ | None = None
     description: str | None = Field(default=None, max_length=500)
     necessity_level_override: NecessityLevel | None = None
+    # Explicit null clears it, which is why these are read from the unset fields.
+    lent_amount: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=8)
+    repays_transaction_id: UUID | None = None
 
 
 class Transaction(ORMBase):
@@ -415,6 +423,12 @@ class Transaction(ORMBase):
     type: TransactionType
     source: TransactionSource
     necessity_level_override: NecessityLevel | None = None
+    # Expense: the share paid for others, and how much of it has come back.
+    # `repaid_amount` is null whenever `lent_amount` is.
+    lent_amount: Decimal | None = None
+    repaid_amount: Decimal | None = None
+    # Income that pays back an expense; it is not income in any total.
+    repays_transaction_id: UUID | None = None
     # The other leg of a giroconto, when there is one. Null on every
     # opening balance and portfolio cash leg — read it as "may have".
     counterpart_transaction_id: UUID | None = None
@@ -814,6 +828,9 @@ class NetWorthSummary(BaseModel):
     # subtracted from net worth. Negative = a credit (advances paid ahead of
     # the income they prepay).
     total_tax_liability: Decimal
+    # Money fronted for others and not yet paid back: part of net worth, never
+    # of cash (it can't be spent until it comes back).
+    total_credits_value: Decimal
     accounts: list[AccountBalance]
     holdings: list[HoldingWithValue]
     physical_assets: list[PhysicalAssetWithValue]
@@ -832,6 +849,7 @@ class PortfolioHistoryPoint(BaseModel):
     total_holdings_value_base_currency: Decimal
     total_cash_balance_base_currency: Decimal
     total_physical_assets_value_base_currency: Decimal
+    total_credits_base_currency: Decimal
     total_liabilities_base_currency: Decimal
     total_net_worth: Decimal
 

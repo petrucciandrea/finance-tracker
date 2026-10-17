@@ -15,6 +15,9 @@ Personal finance tracker, built in phases:
    profile's "Lavoro" section. Only `flat_rate` unlocks a section so far ("Fatture"):
    invoices issued → collected, taxes and INPS on a cash basis, F24 deadlines and payments,
    the suggested provision rate, and the accounts/holdings the provision sits in
+7. **Credits** — spend fronted for other people (a dinner on your card, friends pay you back
+   in cash): `transactions.lent_amount` on the expense, `repays_transaction_id` on the income
+   that pays it back
 
 Single-user-per-account app; multi-user capable but built for personal use.
 
@@ -53,7 +56,7 @@ finance-tracker/
 │   │   │                     # flat_rate
 │   │   └── services/         # exchange_rates, csv_import, asset_prices, net_worth,
 │   │                         # necessity, planning, waterfall, transfers, periods,
-│   │                         # ownership, physical_assets, flat_rate
+│   │                         # ownership, physical_assets, flat_rate, credits
 │   └── tests/
 └── frontend/
     └── src/
@@ -120,7 +123,7 @@ funds a goal. A non-zero balance is **not** refused — it stays in the totals r
 silently vanishing; the UI warns instead.
 
 ### Every expense/income transaction has a category
-If no `category_id` is supplied, the backend assigns (creating on first use) a **"Varie"** category of the matching type. Applies to manual creation, CSV import, and PATCH that clears the category. `type: transfer` is exempt — a transfer between your own accounts isn't a categorizable spend.
+If no `category_id` is supplied, the backend assigns (creating on first use) a **"Varie"** category of the matching type. Applies to manual creation, CSV import, and PATCH that clears the category. `type: transfer` is exempt — a transfer between your own accounts isn't a categorizable spend. An income with `repays_transaction_id` (see Credits) falls back to **"Rimborsi"** instead of "Varie".
 
 ### Refresh tokens are stored and rotated
 `refresh_tokens` holds a SHA-256 hash of each issued refresh token. `/auth/refresh` revokes the used token and issues a new pair, so a stolen refresh token is single-use. This is what makes `/auth/logout` a real revocation rather than a client-side forget.
@@ -422,6 +425,43 @@ fund a waterfall rung.
   one-sided `transfer` via `services/transfers.py:create_cash_leg` — the same helper the
   portfolio's buy/sell cash leg uses. Same-currency only (422 otherwise). Editing a
   vehicle's price/date moves its leg; deleting an asset or a movement retires its legs.
+
+### Credits: the spend is netted when it is booked, the rest is an asset
+An expense can carry `lent_amount` (same currency, `0 < lent_amount <= abs(amount)`, CHECK):
+the share paid on behalf of others. Two things follow, both in `services/credits.py`:
+
+- **The spend counts only the user's own share, immediately, in the month of the expense.**
+  `net_expense_base()` is the SQL expression (same frozen rate, so no live rate is read) used
+  by budgets, `spend_by_necessity*` and `/transactions/summary`; client side `ownShareBase`
+  mirrors it. The alternative, netting when the money comes back, was rejected on purpose: it
+  rewrites months already closed, or leaves a month with negative spend.
+- **What hasn't come back is a credit**: `total_credits_value` in net worth and
+  `total_credits_base_currency` in `/history`, valued at the expense's frozen rate. Never in
+  `total_cash_balance`: like a car, it doesn't extend the survival budget's runway or fund a
+  waterfall rung. Cash is untouched by all this: balances always sum the real movements, so
+  the dinner takes 100 out of the card and net worth only 25.
+
+The repayment is an `income` with `repays_transaction_id`. With no category chosen it files
+itself under **"Rimborsi"** (`ownership.get_or_create_refunds_category`: an existing income
+category of that name is reused, a new one is created with `excluded_from_income_base`);
+linking an existing income moves it there unless the same edit picks a category, and unlinking
+moves it out of "Rimborsi" to "Varie", since that category is kept out of the income base. It
+moves cash and closes the credit but is **not income**: `income_total`, `income_by_category`, the summary and the invoice
+candidates all filter `repays_transaction_id IS NULL`, and net worth and spend don't change when
+it arrives. This is a different thing from the "Rimborsi" income category flagged
+`excluded_from_income_base`, which stays for money back from third parties (a returned
+purchase) that nobody fronted.
+
+Rules, all in `routers/transactions.py` / `services/credits.py`: a repayment is positive, in the
+**same currency** as the expense (credit is valued at the expense's rate; a second conversion
+would be needed otherwise), dated no earlier than it, and the repayments of an expense can't
+exceed `lent_amount` (422). An expense with live repayments can't be deleted, have its
+`lent_amount` cleared or lowered below what was repaid, or be moved after one (409). An income
+already collecting an invoice can't become a repayment, nor the reverse (409). A CSV-imported
+income becomes a repayment through PATCH `repays_transaction_id`. `repaid_amount` on an expense
+isn't a column: `attach_repaid` sets it per response, so every response with an expense must go
+through it. No "write-off": a credit that won't be paid is closed by lowering `lent_amount` down to
+what came back, which does change that month's spend, explicitly.
 
 ### P.IVA forfettaria: cash basis, frozen years, two different debts
 Everything filters on `invoices.collected_on`, never the issue date: an invoice issued in

@@ -174,6 +174,12 @@ export interface Transaction {
   // Expense transactions only. Wins over the category's level and the one
   // inherited from its parent.
   necessity_level_override: NecessityLevel | null
+  // Expense: the share paid for others (the spend counts only the rest) and how
+  // much of it has come back. `repaid_amount` is null whenever `lent_amount` is.
+  lent_amount: string | null
+  repaid_amount: string | null
+  // Income that pays back an expense: cash, not income, in every total.
+  repays_transaction_id: string | null
   // The other leg of a giroconto, when there is one. Null on every opening
   // balance and portfolio cash leg — read it as "may have".
   counterpart_transaction_id: string | null
@@ -192,6 +198,8 @@ export interface TransactionCreatePayload {
   description?: string | null
   type: TransactionType
   necessity_level_override?: NecessityLevel | null
+  lent_amount?: string | null
+  repays_transaction_id?: string | null
 }
 
 // A giroconto: the backend writes both legs (negative out, positive in) and
@@ -212,6 +220,9 @@ export interface TransactionUpdatePayload {
   date?: string
   description?: string | null
   necessity_level_override?: NecessityLevel | null
+  // null clears it (refused while repayments exist).
+  lent_amount?: string | null
+  repays_transaction_id?: string | null
 }
 
 export interface TransactionListParams {
@@ -429,6 +440,8 @@ export interface NetWorthSummary {
   // Taxes accrued on collected P.IVA income, net of F24 payments; already
   // subtracted from total_net_worth. Negative = a credit (advances paid ahead).
   total_tax_liability: string
+  // Money fronted for others and not yet paid back: in net worth, never in cash.
+  total_credits_value: string
   accounts: AccountBalance[]
   holdings: HoldingWithValue[]
   physical_assets: PhysicalAssetWithValue[]
@@ -439,6 +452,7 @@ export interface PortfolioHistoryPoint {
   total_holdings_value_base_currency: string
   total_cash_balance_base_currency: string
   total_physical_assets_value_base_currency: string
+  total_credits_base_currency: string
   total_liabilities_base_currency: string
   total_net_worth: string
 }

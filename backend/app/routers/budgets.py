@@ -33,6 +33,7 @@ from app.schemas import (
     BudgetStatus,
     BudgetUpdate,
 )
+from app.services.credits import net_expense_base
 from app.services.periods import period_bounds
 
 router = APIRouter(prefix="/api/v1/budgets", tags=["budgets"])
@@ -162,7 +163,7 @@ def budgets_status(
         db.query(
             func.coalesce(category.parent_id, category.id).label("budget_category_id"),
             Transaction.date.label("date"),
-            func.sum(Transaction.amount_base_currency).label("total"),
+            func.sum(net_expense_base()).label("total"),
         )
         .join(Account, Account.id == Transaction.account_id)
         .join(category, category.id == Transaction.category_id)

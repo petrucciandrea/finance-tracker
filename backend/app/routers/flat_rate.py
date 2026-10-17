@@ -529,6 +529,11 @@ def _linkable_transaction(db: Session, user: User, transaction_id: UUID) -> Tran
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
     if transaction.type != "income":
         raise _unprocessable("Only an income movement can collect an invoice")
+    if transaction.repays_transaction_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This movement repays money fronted for others — it is not a client's payment",
+        )
     other = (
         db.query(Invoice)
         .filter(Invoice.transaction_id == transaction.id, Invoice.deleted_at.is_(None))
@@ -587,6 +592,8 @@ def collection_candidates(
             Account.deleted_at.is_(None),
             Transaction.deleted_at.is_(None),
             Transaction.type == "income",
+            # A repayment of money fronted for others isn't a client's payment.
+            Transaction.repays_transaction_id.is_(None),
             Transaction.currency == service.CURRENCY,
             func.abs(Transaction.amount - total) <= _CANDIDATE_TOLERANCE,
             Transaction.date >= invoice.issue_date - before,

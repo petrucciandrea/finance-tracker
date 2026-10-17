@@ -40,6 +40,7 @@ from app.schemas import (
     AssetTransaction as AssetTransactionSchema,
 )
 from app.services import asset_prices as asset_prices_service
+from app.services import credits as credits_service
 from app.services import csv_import as csv_import_service
 from app.services import flat_rate as flat_rate_service
 from app.services import physical_assets as physical_assets_service
@@ -517,6 +518,7 @@ def net_worth(
     total_tax_liability = flat_rate_service.liability_in_base_currency(
         db, current_user, flat_rate_service.tax_liability(ledger, today), today
     )
+    total_credits_value = credits_service.load_credit_ledger(db, current_user).value_on(today)
     db.commit()  # persist the price/rate cache rows filled in above
 
     total_cash_balance = sum((a.balance_base_currency for a in accounts), Decimal("0"))
@@ -538,12 +540,14 @@ def net_worth(
             total_cash_balance
             + total_holdings_value
             + total_physical_assets_value
+            + total_credits_value
             - total_tax_liability
         ),
         total_cash_balance=total_cash_balance,
         total_holdings_value=total_holdings_value,
         total_physical_assets_value=total_physical_assets_value,
         total_tax_liability=total_tax_liability,
+        total_credits_value=total_credits_value,
         accounts=accounts,
         holdings=holdings,
         physical_assets=physical_assets,
@@ -585,6 +589,7 @@ def portfolio_history(
     physical_assets = physical_assets_service.user_physical_assets_query(db, current_user).all()
     # Loaded once; the tax liability on each sample date is then pure math.
     ledger = flat_rate_service.load_ledger(db, current_user)
+    credit_ledger = credits_service.load_credit_ledger(db, current_user)
 
     earliest_dates = (
         [tx.date for tx in asset_transactions]
@@ -716,14 +721,19 @@ def portfolio_history(
             * rate_on(flat_rate_service.CURRENCY, sample_date)
         )
 
+        credits_base = credit_ledger.value_on(sample_date)
+
         points.append(
             PortfolioHistoryPoint(
                 date=sample_date,
                 total_holdings_value_base_currency=holdings_base,
                 total_cash_balance_base_currency=cash_base,
                 total_physical_assets_value_base_currency=physical_base,
+                total_credits_base_currency=credits_base,
                 total_liabilities_base_currency=liabilities_base,
-                total_net_worth=cash_base + holdings_base + physical_base - liabilities_base,
+                total_net_worth=(
+                    cash_base + holdings_base + physical_base + credits_base - liabilities_base
+                ),
             )
         )
 

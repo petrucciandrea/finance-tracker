@@ -10,10 +10,10 @@ import { Field } from '@/components/ui/Field'
 import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { useAccounts } from '@/hooks/useAccounts'
 import { useCategories } from '@/hooks/useCategories'
-import { useCreateTransaction, useCreateTransfer, useUpdateTransaction } from '@/hooks/useTransactions'
+import { useCreateTransaction, useCreateTransfer, useOpenCredits, useUpdateTransaction } from '@/hooks/useTransactions'
 import { apiErrorMessage } from '@/lib/apiError'
 import { NECESSITY_LABELS } from '@/lib/categories'
-import { toISODate } from '@/lib/format'
+import { formatAmount, toISODate, toNumber } from '@/lib/format'
 import type { NecessityLevel, Transaction, TransactionType } from '@/types'
 
 const TYPE_OPTIONS: { value: TransactionType; label: string }[] = [
@@ -39,12 +39,30 @@ const baseSchema = z.object({
   // Expense only — the backend 422s an override on income/transfer, since a
   // necessity level has no meaning there.
   necessity_level_override: z.enum(['primary', 'useful', 'discretionary']).or(z.literal('')).optional(),
+  // Expense only: part of it paid on behalf of others. The spend counts only
+  // the rest; what comes back later is a credit, not income.
+  lent_enabled: z.boolean().optional(),
+  lent_amount: z.string().optional(),
+  // Income only: the expense this pays back ('' = a plain income).
+  repays_transaction_id: z.string().optional(),
 })
 
 type FormValues = z.infer<typeof baseSchema>
 
+function parseAmount(value: string | undefined): number {
+  return Number((value ?? '').replace(',', '.'))
+}
+
 function makeSchema(editing: boolean) {
   return baseSchema.superRefine((values, ctx) => {
+    if (values.type === 'expense' && values.lent_enabled) {
+      const lent = parseAmount(values.lent_amount)
+      if (!Number.isFinite(lent) || lent <= 0) {
+        ctx.addIssue({ code: 'custom', path: ['lent_amount'], message: 'Inserisci quanto hai anticipato per altri' })
+      } else if (lent > parseAmount(values.amount)) {
+        ctx.addIssue({ code: 'custom', path: ['lent_amount'], message: 'Non può superare l’importo della spesa' })
+      }
+    }
     if (editing || values.type !== 'transfer') return
     if (!values.to_account_id) {
       ctx.addIssue({ code: 'custom', path: ['to_account_id'], message: 'Seleziona il conto di destinazione' })
@@ -74,9 +92,25 @@ function initialValues(transaction?: Transaction | null): FormValues {
       date: transaction.date,
       description: transaction.description ?? '',
       necessity_level_override: transaction.necessity_level_override ?? '',
+      lent_enabled: transaction.lent_amount !== null,
+      lent_amount: transaction.lent_amount !== null ? String(Number(transaction.lent_amount)) : '',
+      repays_transaction_id: transaction.repays_transaction_id ?? '',
     }
   }
-  return { type: 'expense', account_id: '', to_account_id: '', category_id: '', amount: '', currency: '', date: toISODate(new Date()), description: '', necessity_level_override: '' }
+  return {
+    type: 'expense',
+    account_id: '',
+    to_account_id: '',
+    category_id: '',
+    amount: '',
+    currency: '',
+    date: toISODate(new Date()),
+    description: '',
+    necessity_level_override: '',
+    lent_enabled: false,
+    lent_amount: '',
+    repays_transaction_id: '',
+  }
 }
 
 function TransactionForm({ transaction, onDone }: { transaction?: Transaction | null; onDone: () => void }) {
@@ -99,6 +133,14 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
 
   const type = useWatch({ control, name: 'type' })
   const fromAccountId = useWatch({ control, name: 'account_id' })
+  const lentEnabled = useWatch({ control, name: 'lent_enabled' })
+  const lentAmount = useWatch({ control, name: 'lent_amount' })
+  const amountValue = useWatch({ control, name: 'amount' })
+  const repaysId = useWatch({ control, name: 'repays_transaction_id' })
+  const { data: openCredits } = useOpenCredits(type === 'income')
+  const isRepayment = type === 'income' && !!repaysId
+  // Own share, shown while typing so nobody has to subtract by hand.
+  const ownShare = parseAmount(amountValue) - parseAmount(lentAmount)
   // Closed accounts refuse new movements dated after the close; a back-dated
   // fix is rare enough that reopening the account first is the way in.
   const activeAccounts = (accounts ?? []).filter((a) => !a.deleted_at && !a.closed_at)
@@ -119,12 +161,25 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
     const negative = transaction?.type === 'transfer' ? Number(transaction.amount) < 0 : values.type === 'expense'
     const amount = negative ? `-${magnitude}` : String(magnitude)
     const override = values.type === 'expense' && values.necessity_level_override ? values.necessity_level_override : null
+    const lent = values.type === 'expense' && values.lent_enabled ? String(parseAmount(values.lent_amount)) : null
+    const repays = values.type === 'income' && values.repays_transaction_id ? values.repays_transaction_id : null
     try {
       if (transaction) {
         await updateTransaction.mutateAsync({
           id: transaction.id,
           payload: {
-            category_id: values.category_id || null,
+            // A repayment files itself under "Rimborsi" on the backend: sending the
+            // (hidden, empty) field would only ask it to pick that again.
+            // Same when it stops being one and the category is still the one it was
+            // given: the backend then moves it out of "Rimborsi" (kept out of the
+            // income base) into "Varie".
+            ...(repays || (transaction.repays_transaction_id && (values.category_id || null) === transaction.category_id)
+              ? {}
+              : { category_id: values.category_id || null }),
+            ...(transaction.type === 'expense' && (transaction.lent_amount === null ? null : Number(transaction.lent_amount)) !== (lent === null ? null : Number(lent))
+              ? { lent_amount: lent }
+              : {}),
+            ...(transaction.type === 'income' && (transaction.repays_transaction_id ?? null) !== repays ? { repays_transaction_id: repays } : {}),
             // Only send what changed: touching amount/date recomputes the frozen
             // rate, and on a paired giroconto leg it's a 409.
             ...(Number(transaction.amount) !== Number(amount) ? { amount } : {}),
@@ -145,13 +200,15 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
       } else {
         await createTransaction.mutateAsync({
           account_id: values.account_id,
-          category_id: values.category_id || null,
+          category_id: repays ? null : values.category_id || null, // a repayment gets "Rimborsi"
           amount,
           currency: values.currency.toUpperCase(),
           date: values.date,
           description: values.description || null,
           type: values.type,
           necessity_level_override: override,
+          ...(lent !== null ? { lent_amount: lent } : {}),
+          ...(repays !== null ? { repays_transaction_id: repays } : {}),
         })
       }
       onDone()
@@ -172,6 +229,8 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
           onChange={(next) => {
             setValue('type', next)
             setValue('category_id', '')
+            setValue('lent_enabled', false)
+            setValue('repays_transaction_id', '')
           }}
           className="self-start"
         />
@@ -246,16 +305,18 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
 
         {/* Optional on a transfer, and no "Varie" fallback: it only organises
             giroconti, it never counts as spend. */}
-        <Field label="Categoria" htmlFor="tx-category" hint={type === 'transfer' ? 'Facoltativa: resta fuori da totali e piano.' : 'Se la lasci vuota finisce in “Varie”.'}>
-          <CategorySelect
-            id="tx-category"
-            aria-describedby="tx-category-msg"
-            categories={categories}
-            type={type}
-            emptyLabel={type === 'transfer' ? 'Nessuna' : 'Nessuna (Varie)'}
-            {...register('category_id')}
-          />
-        </Field>
+        {!isRepayment && (
+          <Field label="Categoria" htmlFor="tx-category" hint={type === 'transfer' ? 'Facoltativa: resta fuori da totali e piano.' : 'Se la lasci vuota finisce in “Varie”.'}>
+            <CategorySelect
+              id="tx-category"
+              aria-describedby="tx-category-msg"
+              categories={categories}
+              type={type}
+              emptyLabel={type === 'transfer' ? 'Nessuna' : 'Nessuna (Varie)'}
+              {...register('category_id')}
+            />
+          </Field>
+        )}
 
         {type === 'expense' && (
           <Field label="Livello di necessità" htmlFor="tx-necessity" hint="Solo per le eccezioni, es. una cena di lavoro sotto “Ristoranti”.">
@@ -264,6 +325,75 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
               {(Object.keys(NECESSITY_LABELS) as NecessityLevel[]).map((level) => (
                 <option key={level} value={level}>
                   {NECESSITY_LABELS[level]}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
+
+        {type === 'expense' && (
+          <div className="flex flex-col gap-3 sm:col-span-2">
+            <label className="flex items-center gap-2 text-[14px] font-bold text-ink">
+              <input type="checkbox" className="h-4 w-4" {...register('lent_enabled')} />
+              Ho anticipato per altri
+            </label>
+            {lentEnabled && (
+              <Field
+                label="Quota anticipata per altri"
+                htmlFor="tx-lent"
+                error={errors.lent_amount?.message}
+                hint={
+                  ownShare >= 0 && parseAmount(lentAmount) > 0
+                    ? `La tua quota è ${formatAmount(ownShare, getValues('currency') || undefined)}: è l’unica che conta come spesa. Il resto resta un credito nel patrimonio finché non te lo restituiscono.`
+                    : 'La parte che non è tua: conta come spesa solo il resto.'
+                }
+              >
+                <input
+                  id="tx-lent"
+                  inputMode="decimal"
+                  placeholder="0,00"
+                  aria-invalid={!!errors.lent_amount}
+                  aria-describedby="tx-lent-msg"
+                  className="field tabular-nums"
+                  {...register('lent_amount')}
+                />
+              </Field>
+            )}
+          </div>
+        )}
+
+        {type === 'income' && (
+          <Field
+            label="È il rimborso di…"
+            htmlFor="tx-repays"
+            className="sm:col-span-2"
+            hint="Facoltativo. Se scelto, finisce in “Rimborsi”, non conta come entrata e non cambia la spesa: chiude il credito di quella spesa."
+          >
+            <select
+              id="tx-repays"
+              aria-describedby="tx-repays-msg"
+              className="field"
+              {...register('repays_transaction_id', {
+                onChange: (event) => {
+                  const picked = (openCredits ?? []).find((t) => t.id === event.target.value)
+                  if (!picked) return
+                  // Same currency as the spend (the backend 422s otherwise), and the
+                  // open amount as a starting point — the usual case is "all of it".
+                  setValue('currency', picked.currency)
+                  if (!getValues('amount')) {
+                    setValue('amount', String(toNumber(picked.lent_amount) - toNumber(picked.repaid_amount)))
+                  }
+                },
+              })}
+            >
+              <option value="">Nessuna: è una normale entrata</option>
+              {/* The expense this already repays may be fully paid, hence not in the open list. */}
+              {transaction?.repays_transaction_id && !(openCredits ?? []).some((t) => t.id === transaction.repays_transaction_id) && (
+                <option value={transaction.repays_transaction_id}>Spesa collegata</option>
+              )}
+              {(openCredits ?? []).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {`${t.description || 'Spesa'} · ${t.date} · da incassare ${formatAmount(toNumber(t.lent_amount) - toNumber(t.repaid_amount), t.currency)} ${t.currency}`}
                 </option>
               ))}
             </select>

@@ -102,6 +102,30 @@ function SourceBadge({ t }: { t: Transaction }) {
   )
 }
 
+/**
+ * What a row means for credits: an expense with a share fronted for others
+ * says how much is still to come back; a repayment says it isn't income.
+ */
+function CreditBadge({ t }: { t: Transaction }) {
+  if (t.repays_transaction_id) {
+    return (
+      <span title="Restituisce soldi anticipati: non è un'entrata" className="rounded bg-card-2 px-1.5 py-px text-[10px] font-extrabold tracking-[0.04em] text-ink-3">
+        RIMBORSO
+      </span>
+    )
+  }
+  if (t.lent_amount === null) return null
+  const open = Number(t.lent_amount) - Number(t.repaid_amount ?? 0)
+  return (
+    <span
+      title="La spesa conta solo la tua quota; il resto è un credito nel patrimonio finché non viene restituito"
+      className="rounded bg-card-2 px-1.5 py-px text-[10px] font-extrabold text-ink-3"
+    >
+      {`anticipati ${formatAmount(t.lent_amount, t.currency)} · ${open > 0 ? `da incassare ${formatAmount(open, t.currency)}` : 'rimborsati'}`}
+    </span>
+  )
+}
+
 interface DayGroup {
   date: string
   rows: Transaction[]
@@ -182,6 +206,7 @@ function TransactionTable({
                     <div className="flex items-center gap-2 font-bold">
                       {t.description || '—'}
                       <SourceBadge t={t} />
+                      <CreditBadge t={t} />
                     </div>
                   </td>
                   <td className="border-t border-line px-3 py-2.5">
@@ -227,6 +252,7 @@ function TransactionTable({
                     <div className="flex items-center gap-1.5 font-bold">
                       <span className="truncate">{t.description || '—'}</span>
                       <SourceBadge t={t} />
+                      <CreditBadge t={t} />
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1.5">
                       <CategoryCell t={t} lookups={lookups} onAssign={() => onEdit(t)} />
@@ -471,6 +497,9 @@ export function TransactionsPage() {
           { label: 'Movimenti', value: String(sum.count), tone: 'text-ink' },
           { label: 'Entrate', value: `${formatAmount(sum.income, baseCurrency, { sign: 'always' })}`, tone: 'text-pos' },
           { label: 'Uscite', value: formatAmount(sum.expense, baseCurrency), tone: 'text-ink' },
+          // Cash that came back for fronted money: neither income nor spend, but
+          // it is what makes these figures differ from the accounts' movements.
+          ...(sum.repaidCount > 0 ? [{ label: 'Rimborsi incassati', value: formatAmount(sum.repaid, baseCurrency, { sign: 'always' }), tone: 'text-ink-3' }] : []),
           { label: 'Trasferimenti', value: `⇄ ${sum.transferCount}`, tone: 'text-ink-3' },
           { label: 'Saldo', value: formatAmount(sum.net, baseCurrency, { sign: 'always' }), tone: sum.net < 0 ? 'text-neg' : 'text-ink' },
         ].map((item) => (

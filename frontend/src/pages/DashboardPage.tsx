@@ -238,6 +238,16 @@ export function DashboardPage() {
           },
         ]
       : []),
+    // Money fronted for others and not yet paid back: part of net worth, not of cash.
+    ...(nw && Number(nw.total_credits_value) > 0
+      ? [
+          {
+            label: 'Crediti',
+            value: formatAmount(nw.total_credits_value, base),
+            sub: <Link to="/transactions" className="link">anticipati per altri</Link>,
+          },
+        ]
+      : []),
     // Taxes accrued on P.IVA income, already netted out of net worth.
     ...(nw && Number(nw.total_tax_liability) !== 0
       ? [

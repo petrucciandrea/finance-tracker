@@ -377,8 +377,8 @@ export function AccountsPage() {
       })),
     {
       label: `Variazione in ${formatMonthName(today)}`,
-      value: <Delta value={monthTotals.net} currency={base} className="font-extrabold" />,
-      sub: 'entrate − uscite, giroconti esclusi',
+      value: <Delta value={monthTotals.cashNet} currency={base} className="font-extrabold" />,
+      sub: 'movimenti reali, giroconti esclusi',
     },
   ]
 

@@ -10,7 +10,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session, selectinload
 
 from app.deps import get_current_user, get_db
@@ -42,11 +42,15 @@ from app.schemas import (
 from app.schemas import (
     Transaction as TransactionSchema,
 )
+from app.services import credits as credits_service
 from app.services import csv_import as csv_import_service
+from app.services.credits import net_expense_base
 from app.services.exchange_rates import ExchangeRateUnavailable, get_rate
 from app.services.ownership import (
+    REFUNDS_CATEGORY_NAME,
     ensure_account_open_on,
     get_or_create_misc_category,
+    get_or_create_refunds_category,
     get_owned_account,
     get_owned_leaf_category,
 )
@@ -67,6 +71,27 @@ def _validate_necessity_override(transaction_type: str, override: object) -> Non
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="necessity_level_override can only be set on expense transactions",
+        )
+
+
+def _validate_credit_fields(
+    transaction_type: str, lent_amount: object, repays_transaction_id: object
+) -> None:
+    """
+    `lent_amount` is the share of a spend fronted for others, so it only means
+    something on an expense; `repays_transaction_id` is somebody paying it back,
+    so it only means something on an income. Same reasoning, and same 422, as
+    the necessity override.
+    """
+    if lent_amount is not None and transaction_type != "expense":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="lent_amount can only be set on expense transactions",
+        )
+    if repays_transaction_id is not None and transaction_type != "income":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="repays_transaction_id can only be set on income transactions",
         )
 
 
@@ -210,6 +235,78 @@ def _soft_delete_with_counterpart(db: Session, transaction: Transaction) -> None
         allocation.deleted_at = now
 
 
+def _apply_credit_rules(
+    db: Session, user: User, transaction: Transaction, update_data: dict[str, Any]
+) -> None:
+    """
+    The PATCH side of services/credits.py: everything that keeps an expense
+    and the repayments pointing at it consistent. Mutates `update_data` only to
+    move an income's category when it becomes a repayment ("Rimborsi") or stops
+    being one ("Varie").
+    """
+    _validate_credit_fields(
+        transaction.type,
+        update_data.get("lent_amount"),
+        update_data.get("repays_transaction_id"),
+    )
+
+    if transaction.type == "expense" and not set(update_data) & {"amount", "lent_amount", "date"}:
+        return
+
+    if transaction.type == "expense":
+        new_amount = update_data.get("amount", transaction.amount)
+        new_lent = update_data.get("lent_amount", transaction.lent_amount)
+        credits_service.ensure_expense_keeps_covering_repayments(
+            db, transaction, new_amount=new_amount, new_lent_amount=new_lent
+        )
+        if "date" in update_data:
+            credits_service.ensure_date_precedes_repayments(db, transaction, update_data["date"])
+        return
+
+    if transaction.type != "income":
+        return
+
+    repays = update_data.get("repays_transaction_id", transaction.repays_transaction_id)
+    if repays is None:
+        # Just released from a repayment: it is a plain income again, so it
+        # leaves "Rimborsi" (which is kept out of the income base) for "Varie".
+        if "repays_transaction_id" in update_data and "category_id" not in update_data:
+            category = transaction.category
+            if category is None or (
+                category.type == "income" and category.name == REFUNDS_CATEGORY_NAME
+            ):
+                update_data["category_id"] = get_or_create_misc_category(db, user, "income").id
+        return
+
+    if "repays_transaction_id" in update_data:
+        invoice = (
+            db.query(Invoice)
+            .filter(Invoice.transaction_id == transaction.id, Invoice.deleted_at.is_(None))
+            .first()
+        )
+        if invoice is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"This movement collects the invoice to «{invoice.client}» — "
+                "it is not a repayment",
+            )
+        # Becoming a repayment files it under "Rimborsi" unless the same edit
+        # picks a category.
+        if "category_id" not in update_data:
+            update_data["category_id"] = get_or_create_refunds_category(db, user).id
+
+    if set(update_data) & {"repays_transaction_id", "amount", "date"}:
+        credits_service.validate_repayment(
+            db,
+            user,
+            expense_id=repays,
+            amount=update_data.get("amount", transaction.amount),
+            currency=transaction.currency,
+            on_date=update_data.get("date", transaction.date),
+            exclude_id=transaction.id,
+        )
+
+
 # ---------------------------------------------------------------------------
 # CRUD
 # ---------------------------------------------------------------------------
@@ -253,6 +350,7 @@ def list_transactions(
         .limit(params.page_size)
         .all()
     )
+    credits_service.attach_repaid(db, rows)
 
     return TransactionListResponse(
         # ORM rows; `Transaction` is a from_attributes model, so Pydantic
@@ -276,12 +374,31 @@ def create_transaction(
     account = get_owned_account(db, payload.account_id, current_user)
     ensure_account_open_on(account, payload.date)
     _validate_necessity_override(payload.type.value, payload.necessity_level_override)
+    _validate_credit_fields(payload.type.value, payload.lent_amount, payload.repays_transaction_id)
+    if payload.lent_amount is not None and payload.lent_amount > abs(payload.amount):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="The amount fronted for others cannot exceed the expense",
+        )
 
     category_id = payload.category_id
+    if payload.repays_transaction_id is not None:
+        credits_service.validate_repayment(
+            db,
+            current_user,
+            expense_id=payload.repays_transaction_id,
+            amount=payload.amount,
+            currency=payload.currency,
+            on_date=payload.date,
+        )
     if category_id:
         category_id = get_owned_leaf_category(
             db, category_id, current_user, payload.type.value
         ).id
+    elif payload.repays_transaction_id is not None:
+        # Nobody categorizes the friends paying back a dinner: it goes to
+        # "Rimborsi" on its own, the way an uncategorized income goes to "Varie".
+        category_id = get_or_create_refunds_category(db, current_user).id
     elif payload.type in ("expense", "income"):
         # No category given for a spend/income transaction — fall back to
         # "Varie" instead of allowing an uncategorized expense/income to
@@ -311,10 +428,13 @@ def create_transaction(
             if payload.necessity_level_override is not None
             else None
         ),
+        lent_amount=payload.lent_amount,
+        repays_transaction_id=payload.repays_transaction_id,
     )
     db.add(transaction)
     db.commit()
     db.refresh(transaction)
+    credits_service.attach_repaid(db, [transaction])
     return transaction
 
 
@@ -378,7 +498,14 @@ def summary(
     # picked at runtime from `group_by`.
     month_col = func.to_char(Transaction.date, "YYYY-MM").label("month")
     columns: list[Any] = [
-        func.sum(Transaction.amount_base_currency).label("total"),
+        # An expense counts only the user's own share; the part fronted for
+        # others is a credit (services/credits.py).
+        func.sum(
+            case(
+                (Transaction.type == "expense", net_expense_base()),
+                else_=Transaction.amount_base_currency,
+            )
+        ).label("total"),
         func.count(Transaction.id).label("count"),
     ]
     group_cols: list[Any] = []
@@ -403,6 +530,9 @@ def summary(
             # income/expense summary. Same rule budgets.py's status query
             # already applies with its own `type == "expense"` filter.
             Transaction.type != "transfer",
+            # Somebody paying back money fronted for them moves cash but is
+            # neither income nor spend: the spend was netted when booked.
+            Transaction.repays_transaction_id.is_(None),
         )
     )
 
@@ -431,13 +561,24 @@ def summary(
     return TransactionSummaryResponse(data=items)
 
 
+@router.get("/open-credits", response_model=list[TransactionSchema])
+def open_credits(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[Transaction]:
+    """Expenses that still have money fronted for others to come back."""
+    return credits_service.open_credit_expenses(db, current_user)
+
+
 @router.get("/{transaction_id}", response_model=TransactionSchema)
 def get_transaction(
     transaction_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Transaction:
-    return _get_owned_transaction(db, transaction_id, current_user)
+    transaction = _get_owned_transaction(db, transaction_id, current_user)
+    credits_service.attach_repaid(db, [transaction])
+    return transaction
 
 
 @router.patch("/{transaction_id}", response_model=TransactionSchema)
@@ -460,7 +601,16 @@ def update_transaction(
             # Explicitly clearing the category on an expense/income transaction
             # falls back to "Varie", same rule as creation — never leave one
             # uncategorized.
-            if transaction.type in ("expense", "income"):
+            # Clearing falls back to "Varie", or to "Rimborsi" for a repayment.
+            is_repayment = (
+                update_data.get("repays_transaction_id", transaction.repays_transaction_id)
+                is not None
+            )
+            if is_repayment:
+                update_data["category_id"] = get_or_create_refunds_category(
+                    db, current_user
+                ).id
+            elif transaction.type in ("expense", "income"):
                 misc_category = get_or_create_misc_category(db, current_user, transaction.type)
                 update_data["category_id"] = misc_category.id
         else:
@@ -470,6 +620,8 @@ def update_transaction(
 
     if "necessity_level_override" in update_data:
         _validate_necessity_override(transaction.type, update_data["necessity_level_override"])
+
+    _apply_credit_rules(db, current_user, transaction, update_data)
 
     # If amount or date changes, the frozen conversion must be recomputed —
     # otherwise amount_base_currency would silently drift out of sync.
@@ -500,6 +652,7 @@ def update_transaction(
 
     db.commit()
     db.refresh(transaction)
+    credits_service.attach_repaid(db, [transaction])
     return transaction
 
 
@@ -512,6 +665,14 @@ def delete_transaction(
     transaction = _get_owned_transaction(db, transaction_id, current_user)
     _reject_if_linked_to_asset_transaction(db, transaction.id)
     _reject_if_linked_to_flat_rate(db, transaction.id)
+    if transaction.type == "expense" and credits_service.has_live_repayments(db, transaction.id):
+        # The repayments would keep pointing at a spend that no longer exists:
+        # they'd be neither income nor a netted spend, and the money would
+        # vanish from every report.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This expense has repayments — delete them first",
+        )
     _soft_delete_with_counterpart(db, transaction)
     db.commit()
 

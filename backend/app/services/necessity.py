@@ -31,6 +31,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, aliased
 
 from app.models import Account, Category, Transaction, User
+from app.services.credits import net_expense_base
 
 # The bucket key used for spend whose category carries no necessity level
 # (and whose parent carries none either). Kept as an explicit constant
@@ -54,7 +55,8 @@ def spend_by_necessity(
 ) -> dict[str | None, Decimal]:
     """
     Total expense per necessity bucket over an inclusive date range, in the
-    user's base currency, as positive amounts. Buckets with no spend are
+    user's base currency, as positive amounts. Only the user's own share: what
+    was fronted for others (`lent_amount`) is a credit, not spend. Buckets with no spend are
     absent; unclassified spend is keyed by `UNCLASSIFIED`.
     """
     category = aliased(Category)
@@ -64,7 +66,7 @@ def spend_by_necessity(
     rows = (
         db.query(
             bucket,
-            func.coalesce(func.sum(Transaction.amount_base_currency), 0).label("total"),
+            func.coalesce(func.sum(net_expense_base()), 0).label("total"),
         )
         .join(Account, Account.id == Transaction.account_id)
         .outerjoin(category, category.id == Transaction.category_id)
@@ -108,7 +110,7 @@ def spend_by_necessity_and_category(
         db.query(
             bucket,
             Transaction.category_id.label("category_id"),
-            func.coalesce(func.sum(Transaction.amount_base_currency), 0).label("total"),
+            func.coalesce(func.sum(net_expense_base()), 0).label("total"),
         )
         .join(Account, Account.id == Transaction.account_id)
         .outerjoin(category, category.id == Transaction.category_id)
@@ -160,6 +162,8 @@ def income_total(db: Session, user: User, *, date_from: date_, date_to: date_) -
             Account.user_id == user.id,
             Transaction.deleted_at.is_(None),
             Transaction.type == "income",
+            # Somebody paying back money fronted for them is cash, not income.
+            Transaction.repays_transaction_id.is_(None),
             Transaction.date >= date_from,
             Transaction.date <= date_to,
             # A transaction with no category can't be opted out, so NULL
@@ -196,6 +200,7 @@ def income_by_category(
             Account.user_id == user.id,
             Transaction.deleted_at.is_(None),
             Transaction.type == "income",
+            Transaction.repays_transaction_id.is_(None),
             Transaction.date >= date_from,
             Transaction.date <= date_to,
         )

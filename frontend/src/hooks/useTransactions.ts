@@ -38,6 +38,14 @@ export function useTransactionSummary(params: TransactionSummaryParams) {
   })
 }
 
+export function useOpenCredits(enabled = true) {
+  return useQuery({
+    queryKey: [...TRANSACTIONS_KEY, 'open-credits'],
+    queryFn: transactionsApi.listOpenCredits,
+    enabled,
+  })
+}
+
 export function useTransactionsList(params: TransactionListParams, enabled = true) {
   return useQuery({
     queryKey: [...TRANSACTIONS_KEY, 'list', params],

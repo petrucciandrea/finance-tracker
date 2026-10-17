@@ -144,3 +144,42 @@ def get_or_create_misc_category(db: Session, user: User, category_type: str) -> 
     # alongside the transaction that needed it
     db.flush()
     return category
+
+
+REFUNDS_CATEGORY_NAME = "Rimborsi"
+
+
+def get_or_create_refunds_category(db: Session, user: User) -> Category:
+    """
+    The category every repayment of money fronted for others lands in when the
+    client picks none (see services/credits.py), created on first use. An
+    existing income category of that name is reused, so a user who already
+    keeps a "Rimborsi" doesn't get a second one.
+
+    New ones are flagged `excluded_from_income_base`: a repayment is already
+    left out of income by its link, and the flag keeps the same meaning for an
+    income that is later unlinked while still filed here.
+    """
+    existing = (
+        db.query(Category)
+        .filter(
+            Category.user_id == user.id,
+            Category.name == REFUNDS_CATEGORY_NAME,
+            Category.type == "income",
+            Category.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if existing is not None:
+        return existing
+
+    category = Category(
+        user_id=user.id,
+        name=REFUNDS_CATEGORY_NAME,
+        type="income",
+        parent_id=None,
+        excluded_from_income_base=True,
+    )
+    db.add(category)
+    db.flush()
+    return category

@@ -13,6 +13,7 @@ Notes:
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
+from typing import ClassVar
 
 from sqlalchemy import (
     Boolean,
@@ -248,6 +249,23 @@ class Transaction(Base, TimestampMixin, SoftDeleteMixin):
         PG_UUID(as_uuid=True), ForeignKey("transactions.id"), nullable=True
     )
 
+    # Expense only: the part of this spend fronted for other people, in the
+    # expense's own currency. The spend counts only the rest (see
+    # services/credits.py), and what hasn't been paid back yet is a credit
+    # that belongs in net worth, never in cash.
+    lent_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+
+    # Income only: this entry is somebody paying back a `lent_amount`. It moves
+    # cash and closes the credit, but it is not income — the spend was already
+    # netted when it was booked.
+    repays_transaction_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("transactions.id"), nullable=True, index=True
+    )
+
+    # Not a column: how much of `lent_amount` has come back. Set on the instances
+    # of a response by services.credits.attach_repaid, None until then.
+    repaid_amount: ClassVar[Decimal | None] = None
+
     account: Mapped["Account"] = relationship(back_populates="transactions")
     category: Mapped["Category | None"] = relationship(back_populates="transactions")
     # View-only: the pair is written by setting the FK columns after both
@@ -275,6 +293,16 @@ class Transaction(Base, TimestampMixin, SoftDeleteMixin):
         CheckConstraint(
             "counterpart_transaction_id IS NULL OR counterpart_transaction_id <> id",
             name="ck_transactions_counterpart_not_self",
+        ),
+        CheckConstraint(
+            "lent_amount IS NULL OR "
+            "(type = 'expense' AND lent_amount > 0 AND lent_amount <= abs(amount))",
+            name="ck_transactions_lent_amount",
+        ),
+        CheckConstraint(
+            "repays_transaction_id IS NULL OR "
+            "(type = 'income' AND repays_transaction_id <> id)",
+            name="ck_transactions_repays_income_only",
         ),
     )
 

@@ -26,6 +26,13 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, aliased
 
 from app.models import Account, Transaction, User
+from app.services.exchange_rates import ExchangeRateUnavailable, get_rate
+from app.services.ownership import (
+    ensure_account_open_on,
+    get_or_create_misc_category,
+    get_or_create_refunds_category,
+    get_owned_leaf_category,
+)
 
 
 def net_expense_base() -> Any:
@@ -169,6 +176,87 @@ def validate_repayment(
             f"{expense.lent_amount - already} is still open"
         )
     return expense
+
+
+def create_offset(
+    db: Session,
+    user: User,
+    *,
+    credit_expense_id: UUID,
+    account: Account,
+    amount: Decimal,
+    on_date: date_,
+    description: str | None,
+    category_id: UUID | None,
+    necessity_level_override: str | None,
+) -> tuple[Transaction, Transaction]:
+    """
+    Settle part of a credit in kind and return (spend, repayment). Flushes but
+    does not commit — the caller owns the transaction.
+
+    The friend paid for something of the user's own instead of handing cash
+    back: the user's share of that is a real spend, and it closes that much
+    credit. Nothing moves in cash, so both legs go on one account at the same
+    rate and cancel out exactly. The repayment is the usual one (same cap, same
+    currency, "Rimborsi", not income); the spend is a plain expense with no
+    `lent_amount`.
+    """
+    expense = validate_repayment(
+        db,
+        user,
+        expense_id=credit_expense_id,
+        amount=amount,
+        currency=account.currency,
+        on_date=on_date,
+    )
+    ensure_account_open_on(account, on_date)
+
+    if category_id is not None:
+        spend_category_id = get_owned_leaf_category(db, category_id, user, "expense").id
+    else:
+        spend_category_id = get_or_create_misc_category(db, user, "expense").id
+    repayment_category_id = get_or_create_refunds_category(db, user).id
+
+    # Resolved before the first db.add(): a cache miss must not leave one leg.
+    try:
+        rate = get_rate(db, account.currency, user.base_currency, on_date)
+    except ExchangeRateUnavailable as exc:
+        raise _unprocessable(str(exc)) from exc
+
+    label = description or f"Compensazione: {expense.description or 'credito'}"
+
+    def _leg(signed: Decimal, **fields: Any) -> Transaction:
+        return Transaction(
+            account_id=account.id,
+            amount=signed,
+            currency=account.currency,
+            amount_base_currency=signed * rate,
+            exchange_rate=rate,
+            date=on_date,
+            description=label,
+            source="manual",
+            **fields,
+        )
+
+    spend = _leg(
+        -amount,
+        type="expense",
+        category_id=spend_category_id,
+        necessity_level_override=necessity_level_override,
+    )
+    repayment = _leg(
+        amount,
+        type="income",
+        category_id=repayment_category_id,
+        repays_transaction_id=expense.id,
+    )
+    db.add_all([spend, repayment])
+    db.flush()  # assigns both ids so they can reference each other
+
+    spend.offset_transaction_id = repayment.id
+    repayment.offset_transaction_id = spend.id
+    db.flush()
+    return spend, repayment
 
 
 def ensure_expense_keeps_covering_repayments(

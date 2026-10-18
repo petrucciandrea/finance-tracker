@@ -384,6 +384,23 @@ class TransactionCreate(BaseModel):
     repays_transaction_id: UUID | None = None
 
 
+class CreditOffsetCreate(BaseModel):
+    """
+    Settle (part of) a credit in kind: the friend paid for something of the
+    user's instead of handing cash back. Written as the user's own spend plus
+    the repayment closing the credit, on one account, so cash doesn't move.
+    `amount` is a positive magnitude, in the account's (= the expense's) currency.
+    """
+    credit_transaction_id: UUID
+    account_id: UUID
+    # An expense category for the user's own share; none falls back to "Varie".
+    category_id: UUID | None = None
+    amount: Decimal = Field(gt=0, max_digits=18, decimal_places=8)
+    date: date_
+    description: str | None = Field(default=None, max_length=500)
+    necessity_level_override: NecessityLevel | None = None
+
+
 class TransferCreate(BaseModel):
     """
     A giroconto between two of the user's own accounts. Written as two
@@ -429,6 +446,8 @@ class Transaction(ORMBase):
     repaid_amount: Decimal | None = None
     # Income that pays back an expense; it is not income in any total.
     repays_transaction_id: UUID | None = None
+    # The other leg of a credit settled in kind (spend ↔ repayment).
+    offset_transaction_id: UUID | None = None
     # The other leg of a giroconto, when there is one. Null on every
     # opening balance and portfolio cash leg — read it as "may have".
     counterpart_transaction_id: UUID | None = None

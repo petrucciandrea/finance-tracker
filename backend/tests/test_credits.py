@@ -7,7 +7,7 @@ friends. The spend is 25 from the day it is booked; the other 75 is a credit
 in net worth until the friends hand it back in cash.
 """
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -546,3 +546,175 @@ def test_repayment_and_invoice_collection_exclude_each_other(
         headers=headers,
     )
     assert link.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Settled in kind: the friend pays the next time, no cash changes hands
+# ---------------------------------------------------------------------------
+
+def _offset(
+    client: TestClient,
+    headers: dict,
+    account: dict,
+    expense: dict,
+    *,
+    amount: str = "75.00",
+    on: str = "2026-10-24",
+    **extra,
+):
+    return client.post(
+        f"{TRANSACTIONS}/credit-offsets",
+        json={
+            "credit_transaction_id": expense["id"],
+            "account_id": account["id"],
+            "amount": amount,
+            "date": on,
+            **extra,
+        },
+        headers=headers,
+    )
+
+
+def test_offset_closes_the_credit_without_cash_or_income(
+    client: TestClient,
+    headers: dict,
+    registered_user: dict,
+    db_session: Session,
+    card: dict,
+    restaurants: dict,
+) -> None:
+    expense = _dinner(client, headers, card, restaurants, on=date.today().isoformat())
+    before = client.get(NET_WORTH, headers=headers).json()
+
+    response = _offset(
+        client, headers, card, expense, on=date.today().isoformat(),
+        category_id=restaurants["id"], necessity_level_override="useful",
+    )
+
+    assert response.status_code == 201, response.text
+    spend, repayment = response.json()
+    assert (spend["type"], Decimal(spend["amount"])) == ("expense", Decimal("-75"))
+    assert spend["lent_amount"] is None
+    assert spend["category_id"] == restaurants["id"]
+    assert spend["necessity_level_override"] == "useful"
+    assert (repayment["type"], Decimal(repayment["amount"])) == ("income", Decimal("75"))
+    assert repayment["repays_transaction_id"] == expense["id"]
+    assert _category_name(client, headers, repayment["category_id"]) == "Rimborsi"
+    assert spend["offset_transaction_id"] == repayment["id"]
+    assert repayment["offset_transaction_id"] == spend["id"]
+
+    after = client.get(NET_WORTH, headers=headers).json()
+    # The two legs cancel: no cash moved, the credit is gone, and the spend is
+    # real consumption, so net worth fell by exactly that.
+    assert after["total_cash_balance"] == before["total_cash_balance"]
+    assert Decimal(after["total_credits_value"]) == Decimal("0")
+    assert Decimal(after["total_net_worth"]) == Decimal(before["total_net_worth"]) - 75
+
+    user = db_session.query(User).filter_by(email=registered_user["email"]).one()
+    assert income_total(
+        db_session, user, date_from=date.today().replace(day=1), date_to=date.today()
+    ) == Decimal("0")
+    fetched = client.get(f"{TRANSACTIONS}/{expense['id']}", headers=headers).json()
+    assert Decimal(fetched["repaid_amount"]) == Decimal("75")
+    assert client.get(f"{TRANSACTIONS}/open-credits", headers=headers).json() == []
+
+
+def test_offset_spend_lands_in_the_month_of_the_offset(
+    client: TestClient, headers: dict, card: dict, restaurants: dict
+) -> None:
+    expense = _dinner(client, headers, card, restaurants, on="2026-09-10")
+    offset = _offset(client, headers, card, expense, amount="40.00", on="2026-10-24")
+    assert offset.status_code == 201, offset.text
+
+    september = _summary(client, headers, date_from="2026-09-01", date_to="2026-09-30")
+    october = _summary(client, headers, date_from="2026-10-01", date_to="2026-10-31")
+
+    assert Decimal(september[0]["total_amount_base_currency"]) == Decimal("-25.00")
+    assert Decimal(october[0]["total_amount_base_currency"]) == Decimal("-40.00")
+
+
+def test_offset_without_a_category_falls_back_to_varie_and_can_be_partial(
+    client: TestClient, headers: dict, card: dict, restaurants: dict
+) -> None:
+    expense = _dinner(client, headers, card, restaurants)
+
+    first = _offset(client, headers, card, expense, amount="30.00")
+    second = _offset(client, headers, card, expense, amount="45.00")
+
+    assert first.status_code == 201 and second.status_code == 201
+    assert _category_name(client, headers, first.json()[0]["category_id"]) == "Varie"
+    assert client.get(f"{TRANSACTIONS}/open-credits", headers=headers).json() == []
+
+
+def test_offset_cannot_exceed_the_open_credit_or_change_currency(
+    client: TestClient, headers: dict, card: dict, restaurants: dict
+) -> None:
+    expense = _dinner(client, headers, card, restaurants)
+
+    assert _offset(client, headers, card, expense, amount="75.01").status_code == 422
+    assert _offset(client, headers, card, expense, on="2026-10-09").status_code == 422
+    usd = client.post(
+        "/api/v1/accounts",
+        json={"name": "Dollari", "type": "checking", "currency": "USD"},
+        headers=headers,
+    ).json()
+    assert _offset(client, headers, usd, expense).status_code == 422
+    plain = _dinner(client, headers, card, restaurants, lent=None)
+    assert _offset(client, headers, card, plain).status_code == 422
+    # Nothing was written by the refusals.
+    still_open = client.get(f"{TRANSACTIONS}/open-credits", headers=headers).json()
+    assert Decimal(still_open[0]["repaid_amount"]) == 0
+
+
+def test_offset_respects_a_closed_account(
+    client: TestClient, headers: dict, card: dict, restaurants: dict
+) -> None:
+    expense = _dinner(client, headers, card, restaurants)
+    # The opening balance is dated today, so that is the earliest possible close.
+    closed = client.patch(
+        f"/api/v1/accounts/{card['id']}",
+        json={"closed_at": date.today().isoformat()},
+        headers=headers,
+    )
+    assert closed.status_code == 200, closed.text
+
+    after_close = (date.today() + timedelta(days=1)).isoformat()
+    assert _offset(client, headers, card, expense, on=after_close).status_code == 409
+
+
+def test_offset_legs_are_deleted_together_and_keep_amount_and_date(
+    client: TestClient, headers: dict, card: dict, restaurants: dict
+) -> None:
+    expense = _dinner(client, headers, card, restaurants)
+    spend, repayment = _offset(client, headers, card, expense).json()
+
+    assert client.patch(
+        f"{TRANSACTIONS}/{spend['id']}", json={"amount": "-50.00"}, headers=headers
+    ).status_code == 409
+    assert client.patch(
+        f"{TRANSACTIONS}/{repayment['id']}", json={"date": "2026-10-25"}, headers=headers
+    ).status_code == 409
+    assert client.patch(
+        f"{TRANSACTIONS}/{repayment['id']}",
+        json={"repays_transaction_id": None},
+        headers=headers,
+    ).status_code == 409
+    # Description and category stay free, and are not mirrored onto the other leg.
+    renamed = client.patch(
+        f"{TRANSACTIONS}/{spend['id']}",
+        json={"description": "Pizza", "category_id": restaurants["id"]},
+        headers=headers,
+    )
+    assert renamed.status_code == 200, renamed.text
+    other = client.get(f"{TRANSACTIONS}/{repayment['id']}", headers=headers).json()
+    assert other["description"] != "Pizza"
+    assert _category_name(client, headers, other["category_id"]) == "Rimborsi"
+
+    # The credit cannot be deleted while the offset stands, and deleting one
+    # leg retires both and reopens the credit.
+    assert client.delete(f"{TRANSACTIONS}/{expense['id']}", headers=headers).status_code == 409
+    assert client.delete(f"{TRANSACTIONS}/{repayment['id']}", headers=headers).status_code == 204
+    assert client.get(f"{TRANSACTIONS}/{spend['id']}", headers=headers).status_code == 404
+    reopened = client.get(f"{TRANSACTIONS}/open-credits", headers=headers).json()
+    assert [t["id"] for t in reopened] == [expense["id"]]
+    assert Decimal(reopened[0]["repaid_amount"]) == 0

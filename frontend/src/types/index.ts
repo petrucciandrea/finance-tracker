@@ -180,6 +180,8 @@ export interface Transaction {
   repaid_amount: string | null
   // Income that pays back an expense: cash, not income, in every total.
   repays_transaction_id: string | null
+  // The other leg of a credit settled in kind (spend ↔ repayment), when there is one.
+  offset_transaction_id: string | null
   // The other leg of a giroconto, when there is one. Null on every opening
   // balance and portfolio cash leg — read it as "may have".
   counterpart_transaction_id: string | null
@@ -200,6 +202,20 @@ export interface TransactionCreatePayload {
   necessity_level_override?: NecessityLevel | null
   lent_amount?: string | null
   repays_transaction_id?: string | null
+}
+
+// A credit settled in kind (the friend paid the next time): the backend writes
+// the user's own spend and the repayment closing the credit, on one account, so
+// cash doesn't move. Returns [spend, repayment]; `amount` is the positive magnitude.
+export interface CreditOffsetCreatePayload {
+  credit_transaction_id: string
+  account_id: string
+  // An expense category for the user's share; none falls back to "Varie".
+  category_id?: string | null
+  amount: string
+  date: string
+  description?: string | null
+  necessity_level_override?: NecessityLevel | null
 }
 
 // A giroconto: the backend writes both legs (negative out, positive in) and

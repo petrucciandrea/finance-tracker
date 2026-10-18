@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { CategorySelect } from '@/components/transactions/CategorySelect'
+import { CreditOffsetDialog } from '@/components/transactions/CreditOffsetDialog'
 import { TransactionFormDialog } from '@/components/transactions/TransactionFormDialog'
 import { TransactionImport } from '@/components/transactions/TransactionImport'
 import { Amount } from '@/components/ui/Amount'
@@ -107,6 +108,13 @@ function SourceBadge({ t }: { t: Transaction }) {
  * says how much is still to come back; a repayment says it isn't income.
  */
 function CreditBadge({ t }: { t: Transaction }) {
+  if (t.offset_transaction_id) {
+    return (
+      <span title="Credito chiuso senza contanti: la tua quota è una spesa, il rimborso la compensa. Si eliminano insieme" className="rounded bg-card-2 px-1.5 py-px text-[10px] font-extrabold tracking-[0.04em] text-ink-3">
+        COMPENSAZIONE
+      </span>
+    )
+  }
   if (t.repays_transaction_id) {
     return (
       <span title="Restituisce soldi anticipati: non è un'entrata" className="rounded bg-card-2 px-1.5 py-px text-[10px] font-extrabold tracking-[0.04em] text-ink-3">
@@ -156,18 +164,24 @@ function TransactionTable({
   lookups,
   onEdit,
   onDelete,
+  onOffset,
 }: {
   groups: DayGroup[]
   dayTotals: Map<string, number>
   lookups: Lookups
   onEdit: (t: Transaction) => void
   onDelete: (t: Transaction) => void
+  onOffset: (t: Transaction) => void
 }) {
   const menu = (t: Transaction) => (
     <RowMenu
       label={`Azioni per ${t.description || 'movimento'}`}
       items={[
         { label: 'Modifica', onSelect: () => onEdit(t) },
+        // Only a credit with something left to come back can be settled in kind.
+        ...(t.lent_amount !== null && Number(t.lent_amount) - Number(t.repaid_amount ?? 0) > 0
+          ? [{ label: 'Compensa con una spesa', onSelect: () => onOffset(t) }]
+          : []),
         { label: 'Elimina', tone: 'danger', onSelect: () => onDelete(t) },
       ]}
     />
@@ -299,6 +313,7 @@ export function TransactionsPage() {
   const filters = readFilters(params)
   const [today] = useState(() => new Date())
   const [editing, setEditing] = useState<Transaction | null>(null)
+  const [offsetting, setOffsetting] = useState<Transaction | null>(null)
   const [deleting, setDeleting] = useState<Transaction | null>(null)
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
@@ -548,6 +563,7 @@ export function TransactionsPage() {
             dayTotals={dayTotals}
             lookups={lookups}
             onEdit={setEditing}
+            onOffset={setOffsetting}
             onDelete={(t) => {
               setDeleteError(null)
               setDeleting(t)
@@ -569,6 +585,7 @@ export function TransactionsPage() {
 
       <TransactionFormDialog open={creating} onClose={() => update({ new: null }, { keepPage: true })} />
       <TransactionFormDialog open={!!editing} onClose={() => setEditing(null)} transaction={editing} />
+      <CreditOffsetDialog credit={offsetting} onClose={() => setOffsetting(null)} />
       <ConfirmDialog
         open={!!deleting}
         title="Eliminare questo movimento?"
@@ -582,6 +599,9 @@ export function TransactionsPage() {
         {deleting && ` · ${formatAmount(deleting.amount, deleting.currency)} ${deleting.currency}`}
         {deleting?.counterpart_transaction_id && (
           <p className="mt-2">È un giroconto: verrà eliminato anche il movimento collegato sull'altro conto.</p>
+        )}
+        {deleting?.offset_transaction_id && (
+          <p className="mt-2">È una compensazione: verrà eliminata anche l'altra riga e il credito tornerà aperto.</p>
         )}
       </ConfirmDialog>
     </>

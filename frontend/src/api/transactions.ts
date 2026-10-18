@@ -1,5 +1,6 @@
 import { apiClient } from './client'
 import type {
+  CreditOffsetCreatePayload,
   Transaction,
   TransactionCreatePayload,
   TransactionImportPreview,
@@ -24,6 +25,12 @@ export async function createTransaction(payload: TransactionCreatePayload): Prom
 // Returns both legs: [outgoing, incoming].
 export async function createTransfer(payload: TransferCreatePayload): Promise<Transaction[]> {
   const { data } = await apiClient.post<Transaction[]>('/transactions/transfers', payload)
+  return data
+}
+
+// Returns both legs: [spend, repayment].
+export async function createCreditOffset(payload: CreditOffsetCreatePayload): Promise<Transaction[]> {
+  const { data } = await apiClient.post<Transaction[]>('/transactions/credit-offsets', payload)
   return data
 }
 

@@ -4,6 +4,7 @@ import { BUDGETS_STATUS_KEY } from '@/hooks/useBudgets'
 import { PLANNING_KEY } from '@/hooks/usePlanning'
 import { NET_WORTH_KEY } from '@/hooks/usePortfolio'
 import type {
+  CreditOffsetCreatePayload,
   TransactionCreatePayload,
   TransactionListParams,
   TransactionSummaryParams,
@@ -93,6 +94,14 @@ export function useCreateTransfer() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (payload: TransferCreatePayload) => transactionsApi.createTransfer(payload),
+    onSuccess: () => invalidateTransactionsAndDerived(queryClient),
+  })
+}
+
+export function useCreateCreditOffset() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: CreditOffsetCreatePayload) => transactionsApi.createCreditOffset(payload),
     onSuccess: () => invalidateTransactionsAndDerived(queryClient),
   })
 }

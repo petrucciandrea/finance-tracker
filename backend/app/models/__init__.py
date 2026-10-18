@@ -262,6 +262,16 @@ class Transaction(Base, TimestampMixin, SoftDeleteMixin):
         PG_UUID(as_uuid=True), ForeignKey("transactions.id"), nullable=True, index=True
     )
 
+    # The other leg of a credit settled in kind (the friend paid the next dinner
+    # instead of handing cash back): an expense for the user's own share and the
+    # repayment that closes the credit, on one account, cancelling out in cash.
+    # Kept apart from `counterpart_transaction_id` on purpose: a giroconto is
+    # listed as one row and mirrors category/description onto its other leg,
+    # which would put an expense category on an income.
+    offset_transaction_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("transactions.id"), nullable=True, index=True
+    )
+
     # Not a column: how much of `lent_amount` has come back. Set on the instances
     # of a response by services.credits.attach_repaid, None until then.
     repaid_amount: ClassVar[Decimal | None] = None
@@ -303,6 +313,10 @@ class Transaction(Base, TimestampMixin, SoftDeleteMixin):
             "repays_transaction_id IS NULL OR "
             "(type = 'income' AND repays_transaction_id <> id)",
             name="ck_transactions_repays_income_only",
+        ),
+        CheckConstraint(
+            "offset_transaction_id IS NULL OR offset_transaction_id <> id",
+            name="ck_transactions_offset_not_self",
         ),
     )
 

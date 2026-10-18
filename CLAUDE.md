@@ -463,6 +463,21 @@ isn't a column: `attach_repaid` sets it per response, so every response with an 
 through it. No "write-off": a credit that won't be paid is closed by lowering `lent_amount` down to
 what came back, which does change that month's spend, explicitly.
 
+**Settled in kind** (the friend pays the *next* dinner instead of handing cash back):
+`POST /transactions/credit-offsets` → `credits.create_offset` writes, on one account and in one
+commit, the user's own share as an `expense` plus a repayment of the same amount, linked by
+`transactions.offset_transaction_id` (each leg points at the other). The legs cancel in cash
+(same rate, same account), the spend lands in the month of the offset with the category/necessity
+chosen (no category → "Varie"), and the credit closes; it is not income, as with any repayment.
+It reuses `validate_repayment`, so the cap, same-currency and date rules are the same, and a
+closed account refuses it. Not `counterpart_transaction_id` on purpose: that pair is listed as
+one row (the positive leg is hidden) and mirrors category/description onto the other leg, which
+would put an expense category on an income. Deleting either leg retires both; amount/date edits
+and re-pointing the repayment are 409 (description and category stay free and are not mirrored).
+Known limits: the two rows show in the account but not on the bank statement (they net to zero),
+one credit per offset, and if the user's share exceeds the open credit the amount is capped at
+it (what the user owes the friend isn't modelled: record that as a normal expense when paid).
+
 ### P.IVA forfettaria: cash basis, frozen years, two different debts
 Everything filters on `invoices.collected_on`, never the issue date: an invoice issued in
 December and paid in January is taxed in January's year (and listed under both).

@@ -25,6 +25,7 @@ from app.models import (
     User,
 )
 from app.schemas import (
+    CreditOffsetCreate,
     PaginationMeta,
     SummaryGroupBy,
     TransactionCreate,
@@ -190,17 +191,23 @@ def _reject_amount_or_date_edit_on_a_linked_leg(
     amount or date would silently desynchronise them, so the answer is
     delete and recreate — unlike a portfolio cash leg, which has another
     screen that owns it, a plain giroconto has nowhere else to be edited.
-    `category_id`/`description` stay free, as they do there.
+    `category_id`/`description` stay free, as they do there. The same goes for
+    the two legs of a credit settled in kind.
     """
-    if transaction.counterpart_transaction_id is None:
+    if transaction.counterpart_transaction_id is None and transaction.offset_transaction_id is None:
         return
     if not changed_fields & {"amount", "date"}:
         return
 
+    what = (
+        "a linked giroconto"
+        if transaction.counterpart_transaction_id is not None
+        else "a credit settled in kind"
+    )
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail=(
-            "This transfer is one leg of a linked giroconto — "
+            f"This movement is one leg of {what} — "
             "delete it and create a new one instead of editing amount or date"
         ),
     )
@@ -215,10 +222,12 @@ def _soft_delete_with_counterpart(db: Session, transaction: Transaction) -> None
     now = datetime.now(UTC)
     legs = [transaction]
 
-    if transaction.counterpart_transaction_id is not None:
-        counterpart = db.get(Transaction, transaction.counterpart_transaction_id)
-        if counterpart is not None and counterpart.deleted_at is None:
-            legs.append(counterpart)
+    # A giroconto's other leg, or the other half of a credit settled in kind.
+    other_id = transaction.counterpart_transaction_id or transaction.offset_transaction_id
+    if other_id is not None:
+        other = db.get(Transaction, other_id)
+        if other is not None and other.deleted_at is None:
+            legs.append(other)
 
     for leg in legs:
         leg.deleted_at = now
@@ -265,6 +274,13 @@ def _apply_credit_rules(
 
     if transaction.type != "income":
         return
+
+    if transaction.offset_transaction_id is not None and "repays_transaction_id" in update_data:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This repayment settles a credit in kind — delete it and its "
+            "spend instead of pointing it elsewhere",
+        )
 
     repays = update_data.get("repays_transaction_id", transaction.repays_transaction_id)
     if repays is None:
@@ -473,6 +489,42 @@ def create_transfer(
     db.refresh(outgoing)
     db.refresh(incoming)
     return [outgoing, incoming]
+
+
+@router.post(
+    "/credit-offsets", response_model=list[TransactionSchema], status_code=status.HTTP_201_CREATED
+)
+def create_credit_offset(
+    payload: CreditOffsetCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[Transaction]:
+    """
+    Settle (part of) a credit without cash: the friend paid for the user next
+    time. Writes the user's own spend and the repayment closing the credit,
+    linked, on one account and in one commit — [spend, repayment].
+    """
+    account = get_owned_account(db, payload.account_id, current_user)
+    spend, repayment = credits_service.create_offset(
+        db,
+        current_user,
+        credit_expense_id=payload.credit_transaction_id,
+        account=account,
+        amount=payload.amount,
+        on_date=payload.date,
+        description=payload.description,
+        category_id=payload.category_id,
+        necessity_level_override=(
+            payload.necessity_level_override.value
+            if payload.necessity_level_override is not None
+            else None
+        ),
+    )
+    db.commit()
+    db.refresh(spend)
+    db.refresh(repayment)
+    credits_service.attach_repaid(db, [spend, repayment])
+    return [spend, repayment]
 
 
 @router.get("/summary", response_model=TransactionSummaryResponse)

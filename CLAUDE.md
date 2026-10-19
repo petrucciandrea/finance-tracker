@@ -170,6 +170,23 @@ cycle. The target must be at the same Alembic revision; the copy is one transact
 existing user is refused, not overwritten. Cached prices and rates are not copied.
 `test_transfer_user.py` runs it against a throw-away database on the test server.
 
+### Demo user: `make seed-demo`, real prices, never invented ones
+`app/seed_demo.py` (re)creates `demo@example.com` (password in the script, overridable with
+`DEMO_PASSWORD`) with six months of history over several current accounts, savings, cash and
+three investment accounts (EUR ETFs/stock, USD stocks, USD crypto), plus physical assets (car,
+motorcycle, gold coins and jewellery, silver bars; metal costs derive from the real spot). The
+user is on a P.IVA forfettaria opened in June 2025 (`work_type = flat_rate`, no salary): monthly
+invoices that grow from ~600 € to ~5,000 €, so the 2026 advances (computed on a small 2025)
+fall far short of 2026's taxes; a "Conto Tasse" provision source gets the suggested share of each
+collection and pays every F24 already due. Invoices collected and F24s paid before the six-month
+window have no movement; the provision they imply is the tax account's opening balance. It refuses
+`ENVIRONMENT=production`. Prices and FX come from the real providers through the normal cache
+services, because `asset_prices` / `exchange_rates` / `assets` are **shared by every user**:
+made-up quotes would corrupt the owner's real valuations. So it needs network, and any failed
+fetch aborts before the commit. Spending is seeded (`random.Random(2026)`) and the run is
+rejected, writing nothing, if any account would be overdrawn. `--reset` erases the demo user with
+`erase_user`; the dates are relative to today, so the window slides with each run.
+
 ### Retention: purge only what nothing points at
 `python -m app.purge` (`make purge`, `make purge-dry` to preview) applies
 `services/retention.py`; the app never runs it by itself, so the deployment must schedule it
@@ -503,7 +520,12 @@ Two debts, on purpose — don't merge them:
 - `tax_liability`: accrued on collected income minus every payment. **This** is what net
   worth and `/history` subtract. Advances paid ahead of the income make it negative (a
   credit). Counting next year's advances as debt would understate net worth by ~20% of
-  first-year income until next year's income absorbed them.
+  first-year income until next year's income absorbed them. It is also exposed split
+  (`tax_position`: `total_tax_debt` / `total_tax_credit`, two rows in one KPI cell), so an
+  advance paid doesn't vanish into a smaller debt. The year in progress stays gross (accrued
+  = debt, its advances = credit) until it closes; closed years are settled per fiscal year,
+  imposta + INPS together, and a surplus carries forward to the next closed year (the F24
+  compensation). `debt − credit` always equals the net.
 - `cash_requirement`: everything the F24s will still ask for income collected so far,
   next year's advances included. The provision is compared against this (the "gap").
 
@@ -511,6 +533,12 @@ The suggested provision rate is computed, not a fixed menu: each euro owes its y
 plus next year's advances on it, minus the share this year's advances (funded from last
 year) already prepay, spread over last year's revenue annualised on its months of activity.
 That reproduces 55% → 40% → 30% for a June start at 78%/5%/26.23% with the 15% margin.
+The second year's rate only lasts until the first declaration: from 1 July of that year
+(`provision_switch_date`, fixed at 30 June, not tied to a recorded F24) the suggestion is the
+steady one (load + margin, 30%), so the rate is per **issue date** (`provision_rate_on`), not
+per year — the issue date, not the collection: a December first-year invoice paid in January
+keeps its 55%, while its taxes still land in January's year. An explicit year rate (of the
+issue year) still covers the whole year.
 
 Collecting either links an existing income (`owns_transaction = false`, typically from
 CSV) or writes one (`true`); only an owned one is retired by uncollect/delete, and its

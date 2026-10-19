@@ -456,6 +456,10 @@ export interface NetWorthSummary {
   // Taxes accrued on collected P.IVA income, net of F24 payments; already
   // subtracted from total_net_worth. Negative = a credit (advances paid ahead).
   total_tax_liability: string
+  // The same, split (both ≥ 0, debt − credit = total_tax_liability). The year
+  // in progress stays gross (accrued = debt, its advances = credit) until it closes.
+  total_tax_debt: string
+  total_tax_credit: string
   // Money fronted for others and not yet paid back: in net worth, never in cash.
   total_credits_value: string
   accounts: AccountBalance[]
@@ -854,6 +858,10 @@ export interface FlatRateYear {
   needed_rate: string
   suggested_provision_rate: string
   effective_provision_rate: string
+  // Only in the activity's second year: after the first declaration (30 June)
+  // the suggestion drops to the steady rate. See lib/flatRate.ts:provisionRateOn.
+  provision_switch_date: string | null
+  suggested_provision_rate_after_switch: string | null
 }
 
 export interface FlatRateYearUpdatePayload {
@@ -1002,6 +1010,8 @@ export interface FlatRateSummary {
   // As of today, across every year: the net-worth liability (negative =
   // credit) and everything the F24s will still ask, next year's advances included.
   tax_liability: string
+  tax_debt: string // tax_liability split in two, both ≥ 0
+  tax_credit: string
   cash_requirement: string
   provision: ProvisionStatus
   gap: string

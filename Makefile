@@ -1,7 +1,7 @@
 # Convenience commands for local development.
 # Run `make help` to list them.
 
-.PHONY: help up down logs test test-cov migrate migrate-down purge purge-dry create-user lint fmt shell-backend shell-db
+.PHONY: help up down logs test test-cov migrate migrate-down purge purge-dry create-user seed-demo lint fmt shell-backend shell-db
 
 help:
 	@echo "up             - start all services (docker compose up -d)"
@@ -14,6 +14,7 @@ help:
 	@echo "purge          - apply the data retention rules (permanent)"
 	@echo "purge-dry      - show what purge would remove, change nothing"
 	@echo "create-user    - create an account: make create-user EMAIL=you@example.com"
+	@echo "seed-demo      - (re)create demo@example.com with 6 months of history (local only)"
 	@echo "lint           - run ruff + mypy on the backend"
 	@echo "fmt            - auto-format backend code with ruff"
 	@echo "shell-backend  - open a shell in the backend container"
@@ -66,6 +67,10 @@ purge-dry:
 # password interactively. For production: docker compose exec -e DATABASE_URL=... (DEPLOY.md).
 create-user:
 	docker compose exec backend python -m app.create_user $(EMAIL)
+
+# Local only (refuses ENVIRONMENT=production). Needs network: prices/rates are the real ones.
+seed-demo:
+	docker compose exec -e DEBUG=false backend python -m app.seed_demo --reset
 
 migrate-down:
 	docker compose exec backend alembic downgrade -1

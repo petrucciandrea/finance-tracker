@@ -1,5 +1,6 @@
+import { formatPercent, formatShortDate, toNumber } from '@/lib/format'
 import { parseLocaleNumber } from '@/lib/physicalAssets'
-import type { TaxComponent, TaxPaymentKind, WorkType } from '@/types'
+import type { FlatRateYear, TaxComponent, TaxPaymentKind, WorkType } from '@/types'
 
 export const WORK_TYPE_LABELS: Record<WorkType, string> = {
   employee: 'Dipendente',
@@ -53,6 +54,27 @@ export function isPercentInput(value: string, { max = 100 }: { max?: number } = 
   if (value.trim() === '') return false
   const n = Number(parseLocaleNumber(value))
   return Number.isFinite(n) && n >= 0 && n <= max
+}
+
+/**
+ * The share to set aside on an invoice issued on `day` (YYYY-MM-DD), with
+ * `year` being the issue year — mirrors services/flat_rate.py:provision_rate_on.
+ * An explicit rate covers the whole year; in the activity's second year the
+ * suggestion drops after the first declaration.
+ */
+export function provisionRateOn(year: FlatRateYear, day: string): string {
+  if (year.provision_rate !== null) return year.provision_rate
+  const after = year.suggested_provision_rate_after_switch
+  if (year.provision_switch_date && after !== null && day > year.provision_switch_date) return after
+  return year.suggested_provision_rate
+}
+
+/** "40%", or in the second year "40% fino al 30 giu, poi 30%". */
+export function provisionRateLabel(year: FlatRateYear): string {
+  const pct = (rate: string) => formatPercent(toNumber(rate) * 100, { digits: 0 })
+  const after = year.suggested_provision_rate_after_switch
+  if (year.provision_rate !== null || !year.provision_switch_date || after === null) return pct(year.effective_provision_rate)
+  return `${pct(year.effective_provision_rate)} fino al ${formatShortDate(year.provision_switch_date)}, poi ${pct(after)}`
 }
 
 export function autoStampDuty(amount: number, rivalsaRate: number): boolean {

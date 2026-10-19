@@ -65,11 +65,16 @@ def _mock_get_rate(monkeypatch: pytest.MonkeyPatch) -> None:
     # Same-currency conversions still short-circuit to 1 inside the real
     # get_rate — only patch it where a test needs a specific foreign rate.
     #
-    # Two patch targets because monkeypatch binds to the import site, and
-    # there are two: the router converts a buy/sell's cash leg, while
-    # holding valuation moved into services/net_worth.py when the planning
-    # engine started needing the same balances.
-    for target in ("app.routers.portfolio.get_rate", "app.services.net_worth.get_rate"):
+    # Several patch targets because monkeypatch binds to the import site: the
+    # router converts a buy/sell's cash leg, holding valuation moved into
+    # services/net_worth.py when the planning engine started needing the same
+    # balances, and some tests fund a USD account through POST /transactions —
+    # unpatched, that one went to Frankfurter and failed CI when it didn't answer.
+    for target in (
+        "app.routers.portfolio.get_rate",
+        "app.services.net_worth.get_rate",
+        "app.routers.transactions.get_rate",
+    ):
         monkeypatch.setattr(
             target, lambda db, from_currency, to_currency, on_date: Decimal("1")
         )

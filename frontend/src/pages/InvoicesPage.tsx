@@ -23,7 +23,7 @@ import {
   useUncollectInvoice,
 } from '@/hooks/useFlatRate'
 import { apiErrorMessage } from '@/lib/apiError'
-import { REVENUE_LIMIT, TAX_COMPONENT_LABELS, TAX_KIND_LABELS } from '@/lib/flatRate'
+import { provisionRateLabel, REVENUE_LIMIT, TAX_COMPONENT_LABELS, TAX_KIND_LABELS } from '@/lib/flatRate'
 import { formatAmount, formatFullDate, formatPercent, formatQuantity, formatShortDate, toNumber } from '@/lib/format'
 import type { F24Deadline, FlatRateSummary, Invoice, TaxPayment } from '@/types'
 
@@ -197,7 +197,7 @@ function YearBreakdown({ summary }: { summary: FlatRateSummary }) {
         <Line label="Tasse e contributi dell'anno" value={f.liability} strong />
         <Line label="Acconti dovuti per l'anno" value={f.advances_due} hint="Calcolati sull'anno precedente" />
         <Line label="Versato per l'anno" value={f.paid} />
-        <Line label="Da accantonare sulle fatture" value={f.to_provision} hint={`Al ${pct(p.effective_provision_rate)}${p.provision_rate === null ? ' consigliato' : ''}, salvo eccezioni per fattura`} />
+        <Line label="Da accantonare sulle fatture" value={f.to_provision} hint={`Al ${provisionRateLabel(p)}${p.provision_rate === null ? ' consigliato' : ''}, salvo eccezioni per fattura`} />
       </div>
     </Card>
   )
@@ -445,8 +445,10 @@ export function InvoicesPage() {
   const s = summary.data
   const revenue = toNumber(s?.figures.revenue)
   const limitShare = (revenue / REVENUE_LIMIT) * 100
-  const liability = toNumber(s?.tax_liability)
   const gap = toNumber(s?.gap)
+  // Collected this year but issued before it: provisioned at their issue
+  // year's rate, which the year's label doesn't show.
+  const issuedEarlier = (invoices.data ?? []).some((i) => i.fiscal_year === year && Number(i.issue_date.slice(0, 4)) < year)
 
   const kpis: Kpi[] = s
     ? [
@@ -464,12 +466,22 @@ export function InvoicesPage() {
         {
           label: 'Da accantonare',
           value: formatAmount(s.figures.to_provision, EUR),
-          sub: `al ${pct(s.params.effective_provision_rate)}${s.params.provision_rate === null ? ' consigliato' : ''}`,
+          sub: `al ${provisionRateLabel(s.params)}${s.params.provision_rate === null ? ' consigliato' : ''}${
+            issuedEarlier ? ` · le fatture emesse nel ${year - 1} alla loro %` : ''
+          }`,
         },
         {
-          label: liability < 0 ? 'Credito fiscale' : 'Debito fiscale',
-          value: formatAmount(Math.abs(liability), EUR),
-          sub: 'maturato sull’incassato, al netto dei versamenti',
+          // Two rows, as on the dashboard: the advances paid stay visible
+          // next to the taxes accrued.
+          label: 'Debito · Credito fiscale',
+          value: (
+            <>
+              <span className="block whitespace-nowrap">{formatAmount(0 - toNumber(s.tax_debt), EUR)}</span>
+              <span className="block whitespace-nowrap text-pos">{formatAmount(s.tax_credit, EUR, { sign: 'always' })}</span>
+            </>
+          ),
+          // The year in progress is gross: its advances meet its taxes only once it closes.
+          sub: 'maturato sull’incassato · acconti già versati',
         },
         {
           label: 'Da versare (F24)',

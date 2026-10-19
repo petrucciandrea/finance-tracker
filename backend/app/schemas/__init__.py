@@ -847,6 +847,11 @@ class NetWorthSummary(BaseModel):
     # subtracted from net worth. Negative = a credit (advances paid ahead of
     # the income they prepay).
     total_tax_liability: Decimal
+    # The same, split: what's owed and what was prepaid (both ≥ 0, their
+    # difference is total_tax_liability). The year in progress stays gross —
+    # its accrued taxes are debt, its advances credit — until it closes.
+    total_tax_debt: Decimal
+    total_tax_credit: Decimal
     # Money fronted for others and not yet paid back: part of net worth, never
     # of cash (it can't be spent until it comes back).
     total_credits_value: Decimal
@@ -1169,6 +1174,11 @@ class FlatRateYear(BaseModel):
     needed_rate: Decimal
     suggested_provision_rate: Decimal
     effective_provision_rate: Decimal
+    # Only in the activity's second year: from the day after the first
+    # declaration (30 June) the suggestion drops to the steady rate. The two
+    # rates above apply until then; an explicit provision_rate covers both.
+    provision_switch_date: date_ | None
+    suggested_provision_rate_after_switch: Decimal | None
 
 
 class FlatRateYearUpdate(BaseModel):
@@ -1355,6 +1365,8 @@ class FlatRateSummary(BaseModel):
     # net-worth liability; negative = credit) and everything the F24s will
     # still ask for income collected so far, next year's advances included.
     tax_liability: Decimal
+    tax_debt: Decimal  # tax_liability split in two, both ≥ 0
+    tax_credit: Decimal
     cash_requirement: Decimal
     provision: ProvisionStatus
     gap: Decimal  # provision − cash_requirement

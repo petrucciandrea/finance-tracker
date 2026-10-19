@@ -261,7 +261,6 @@ export function DashboardPage() {
                 <span className="block whitespace-nowrap text-pos">{formatAmount(nw.total_tax_credit, base, { sign: 'always' })}</span>
               </>
             ),
-            sub: <Link to="/invoices" className="link">già nel patrimonio netto</Link>,
           },
         ]
       : []),

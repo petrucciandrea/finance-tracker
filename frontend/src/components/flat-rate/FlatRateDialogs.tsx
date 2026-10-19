@@ -23,6 +23,8 @@ import {
   isPercentInput,
   percentInputToRate,
   previewInvoice,
+  provisionRateLabel,
+  provisionRateOn,
   rateToPercentInput,
   TAX_COMPONENT_LABELS,
   TAX_KIND_LABELS,
@@ -97,6 +99,10 @@ function InvoiceForm({ invoice, onClose }: { invoice: Invoice | null; onClose: (
   // then the issue year's parameters are the best guess.
   const fiscalYear = Number((collectedOn || issueDate).slice(0, 4)) || new Date().getFullYear()
   const { data: year } = useFlatRateYear(fiscalYear)
+  // The provision rate follows the issue date instead, so its year can differ
+  // (issued in December, collected in January).
+  const issueYear = Number(issueDate.slice(0, 4)) || fiscalYear
+  const { data: issuedYear } = useFlatRateYear(issueYear)
 
   const yearRivalsa = toNumber(year?.rivalsa_rate)
   const rivalsaOn = rivalsa ?? yearRivalsa > 0
@@ -105,7 +111,9 @@ function InvoiceForm({ invoice, onClose }: { invoice: Invoice | null; onClose: (
   const amountValue = isLocaleNumber(amount) ? Number(parseLocaleNumber(amount)) : 0
   const stampOn = stampDuty ?? autoStampDuty(amountValue, rivalsaRate)
   const provisionValid = provision.trim() === '' || isPercentInput(provision)
-  const provisionRate = provision.trim() !== '' && provisionValid ? Number(percentInputToRate(provision)) : toNumber(year?.effective_provision_rate)
+  // In the second year it drops after the first declaration.
+  const dayRate = issuedYear ? provisionRateOn(issuedYear, issueDate) : undefined
+  const provisionRate = provision.trim() !== '' && provisionValid ? Number(percentInputToRate(provision)) : toNumber(dayRate)
 
   const preview = year
     ? previewInvoice({
@@ -204,10 +212,8 @@ function InvoiceForm({ invoice, onClose }: { invoice: Invoice | null; onClose: (
         label="Accantonamento"
         htmlFor="inv-provision"
         hint={
-          year
-            ? `Vuoto = quello dell'anno, ${formatPercent(toNumber(year.effective_provision_rate) * 100, { digits: 0 })}${
-                year.provision_rate === null ? ' consigliato' : ''
-              }.`
+          issuedYear
+            ? `Vuoto = quello della data di emissione: ${provisionRateLabel(issuedYear)}${issuedYear.provision_rate === null ? ' consigliato' : ''}.`
             : undefined
         }
       >
@@ -216,7 +222,7 @@ function InvoiceForm({ invoice, onClose }: { invoice: Invoice | null; onClose: (
             id="inv-provision"
             inputMode="decimal"
             className="field pr-10 tabular-nums"
-            placeholder={year ? rateToPercentInput(year.effective_provision_rate) : ''}
+            placeholder={rateToPercentInput(dayRate)}
             value={provision}
             onChange={(e) => setProvision(e.target.value)}
           />

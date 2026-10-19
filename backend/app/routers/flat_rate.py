@@ -143,6 +143,7 @@ def _retire_transaction(db: Session, transaction_id: UUID | None) -> None:
 def _year_schema(ledger: service.Ledger, year: int) -> FlatRateYearSchema:
     params = ledger.params_for(year)
     suggestion = service.suggest_provision_rate(ledger, year)
+    switch = service.provision_switch_date(ledger, year)
     return FlatRateYearSchema(
         year=year,
         profitability_coefficient=params.profitability_coefficient,
@@ -161,25 +162,35 @@ def _year_schema(ledger: service.Ledger, year: int) -> FlatRateYearSchema:
             if params.provision_rate is not None
             else suggestion.suggested_rate
         ),
+        provision_switch_date=switch,
+        suggested_provision_rate_after_switch=(
+            service.steady_provision_rate(ledger, year).suggested_rate
+            if switch is not None
+            else None
+        ),
     )
 
 
 class _InvoiceView:
-    """Serialises invoices against one ledger, computing each year's rate once."""
+    """Serialises invoices against one ledger, computing each rate once."""
 
     def __init__(self, ledger: service.Ledger) -> None:
         self.ledger = ledger
-        self._rates: dict[int, Decimal] = {}
+        self._rates: dict[tuple[int, bool], Decimal] = {}
 
-    def year_rate(self, year: int) -> Decimal:
-        if year not in self._rates:
-            self._rates[year] = service.effective_provision_rate(self.ledger, year)
-        return self._rates[year]
+    def rate_on(self, day: date_) -> Decimal:
+        # The rate only changes by year, and once within the second one.
+        switch = service.provision_switch_date(self.ledger, day.year)
+        key = (day.year, switch is not None and day > switch)
+        if key not in self._rates:
+            self._rates[key] = service.provision_rate_on(self.ledger, day)
+        return self._rates[key]
 
     def __call__(self, invoice: Invoice) -> InvoiceSchema:
         year = service.fiscal_year_of(invoice)
+        # Taxes follow the collection, the provision rate the issue date.
         breakdown = service.invoice_breakdown(
-            invoice, self.ledger.params_for(year), self.year_rate(year)
+            invoice, self.ledger.params_for(year), self.rate_on(invoice.issue_date)
         )
         transaction = invoice.transaction
         return InvoiceSchema(
@@ -883,7 +894,7 @@ def summary(
         Decimal("0"),
     )
 
-    liability = service.tax_liability(ledger, today)
+    position = service.tax_position(ledger, today)
     requirement = service.cash_requirement(ledger, today)
     provision = service.provision_status(db, current_user)
     requirement_base = service.liability_in_base_currency(db, current_user, requirement, today)
@@ -907,7 +918,9 @@ def summary(
             outstanding=outstanding,
             invoice_count=len(issued),
         ),
-        tax_liability=liability,
+        tax_liability=position.net,
+        tax_debt=position.debt,
+        tax_credit=position.credit,
         cash_requirement=requirement,
         provision=provision,
         gap=provision.total_base_currency - requirement_base,

@@ -19,7 +19,7 @@ import {
 import { useHoldings } from '@/hooks/usePortfolio'
 import { apiErrorMessage } from '@/lib/apiError'
 import { COEFFICIENTS, isPercentInput, percentInputToRate, rateToPercentInput, TAX_RATES, WORK_TYPE_LABELS } from '@/lib/flatRate'
-import { formatAmount, formatPercent, toNumber } from '@/lib/format'
+import { formatAmount, formatPercent, formatShortDate, toNumber } from '@/lib/format'
 import type { FlatRateYear, WorkType } from '@/types'
 
 function Saved({ children }: { children: ReactNode }) {
@@ -288,10 +288,20 @@ function YearForm({ data }: { data: FlatRateYear }) {
         <p className="text-[13px] text-ink-2">
           Su ogni euro incassato: tasse e contributi dell'anno {pct(data.load_rate)}, acconti dell'anno dopo {pct(data.advance_rate)}. Al netto
           degli acconti già versati per il {data.year}, il fabbisogno è il <b className="text-ink">{pct(data.needed_rate)}</b>.
+          {data.provision_switch_date && (
+            <>
+              {' '}
+              Dopo la prima dichiarazione ({formatShortDate(data.provision_switch_date)}) restano solo tasse e contributi dell'anno: il{' '}
+              <b className="text-ink">{pct(data.load_rate)}</b>.
+            </>
+          )}
         </p>
         <label className="flex min-h-11 cursor-pointer items-center gap-2 text-[14px] font-semibold">
           <input type="radio" name="fr-provision" className="h-4 w-4" checked={!custom} onChange={() => setCustom(false)} />
-          Consigliato: {pct(data.suggested_provision_rate, 0)}
+          Consigliato:{' '}
+          {data.provision_switch_date && data.suggested_provision_rate_after_switch !== null
+            ? `${pct(data.suggested_provision_rate, 0)} fino al ${formatShortDate(data.provision_switch_date)}, poi ${pct(data.suggested_provision_rate_after_switch, 0)}`
+            : pct(data.suggested_provision_rate, 0)}
           <span className="font-normal text-ink-3">(fabbisogno + margine, arrotondato al 5%)</span>
         </label>
         <div className="flex flex-wrap items-center gap-2">

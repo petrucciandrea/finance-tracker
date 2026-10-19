@@ -24,6 +24,7 @@ Two different "debts" come out of this, on purpose:
   income hasn't come in yet make it negative — a credit, which is what they
   are. Counting next year's advances as debt instead would understate net
   worth by ~20% of first-year income until next year's income absorbed them.
+  `tax_position` splits it into the debt and the credit behind that net.
 - `cash_requirement`: everything the F24s will still ask for the income
   collected so far, next year's advances included. This is what the
   provision has to cover, and the page's gap compares against.
@@ -400,6 +401,50 @@ def tax_liability(ledger: Ledger, as_of: date_) -> Decimal:
     return accrued - paid(ledger, as_of=as_of)
 
 
+@dataclass(frozen=True)
+class TaxPosition:
+    debt: Decimal
+    credit: Decimal
+
+    @property
+    def net(self) -> Decimal:
+        return self.debt - self.credit
+
+
+def tax_position(ledger: Ledger, as_of: date_) -> TaxPosition:
+    """
+    `tax_liability` split into what is owed and what was prepaid, so an
+    advance paid for a year whose income hasn't come in yet stays visible
+    while an earlier year's balance is still due — the single net figure
+    would just show a smaller debt.
+
+    The year in progress stays gross: what it accrued so far is debt, the
+    advances paid for it are credit. They only meet once the year is closed
+    and its tax is settled — netting them earlier would make a June advance
+    vanish into the taxes the year's first months already accrued.
+
+    Closed years are settled per fiscal year, imposta and INPS together (an
+    F24 offsets them against each other). A closed year paid beyond what it
+    accrued carries the surplus forward to the next one, as the compensation
+    in its F24 would; a surplus nothing closed absorbs is credit. debt −
+    credit is always `tax_liability`.
+    """
+    years = ledger.collected_years() | {p.fiscal_year for p in ledger.payments}
+    debt = credit = carried = Decimal("0")
+    for year in sorted(years):
+        year_paid = paid(ledger, fiscal_year=year, as_of=as_of)
+        if year >= as_of.year:
+            if year == as_of.year:
+                debt += year_figures(ledger, year, as_of).liability
+            credit += year_paid
+            continue
+        net = year_figures(ledger, year, as_of).liability - year_paid - carried
+        if net > 0:
+            debt += net
+        carried = -net if net < 0 else Decimal("0")
+    return TaxPosition(debt=debt, credit=credit + carried)
+
+
 def tax_cost(ledger: Ledger, date_from: date_, date_to: date_) -> Decimal:
     """
     Imposta + INPS on the invoices collected in the range — the per-invoice
@@ -475,6 +520,9 @@ def suggest_provision_rate(ledger: Ledger, year: int) -> RateSuggestion:
     need setting aside again. Hence, with the defaults at 78% / 5% /
     26.23%: ~45% in a first year (55% with margin), ~33% the year after a
     7-month start (40%), and the plain ~24% load (30%) once steady.
+
+    For the second year this is the rate until the first declaration only:
+    see `provision_switch_date`.
     """
     params = ledger.params_for(year)
     load, advance = params.load_rate, params.advance_rate
@@ -492,6 +540,19 @@ def suggest_provision_rate(ledger: Ledger, year: int) -> RateSuggestion:
     else:
         needed = load + advance
 
+    return _suggestion(ledger, load, advance, needed)
+
+
+def steady_provision_rate(ledger: Ledger, year: int) -> RateSuggestion:
+    """The plain load plus margin: what a euro needs once the advances it
+    triggers are paid out of the income of the year they're for."""
+    params = ledger.params_for(year)
+    return _suggestion(ledger, params.load_rate, params.advance_rate, params.load_rate)
+
+
+def _suggestion(
+    ledger: Ledger, load: Decimal, advance: Decimal, needed: Decimal
+) -> RateSuggestion:
     suggested = _ceil_to_five_percent(needed * (1 + ledger.safety_margin))
     return RateSuggestion(
         load_rate=load.quantize(Decimal("0.0001")),
@@ -501,11 +562,42 @@ def suggest_provision_rate(ledger: Ledger, year: int) -> RateSuggestion:
     )
 
 
-def effective_provision_rate(ledger: Ledger, year: int) -> Decimal:
-    explicit = ledger.params_for(year).provision_rate
+def provision_switch_date(ledger: Ledger, year: int) -> date_ | None:
+    """
+    The first declaration: 30 June of the activity's second year, when the
+    first balance and the first advances fall due. From the day after, that
+    year's suggestion drops to the steady rate — the advances left to fund
+    from now on are the ones the year's own income triggers, as in any later
+    year. None for every other year.
+    """
+    start = ledger.activity_start
+    if start is None or year != start.year + 1:
+        return None
+    return date_(year, 6, 30)
+
+
+def suggested_rate_on(ledger: Ledger, day: date_) -> Decimal:
+    switch = provision_switch_date(ledger, day.year)
+    if switch is not None and day > switch:
+        return steady_provision_rate(ledger, day.year).suggested_rate
+    return suggest_provision_rate(ledger, day.year).suggested_rate
+
+
+def provision_rate_on(ledger: Ledger, day: date_) -> Decimal:
+    """
+    The share to set aside on an invoice issued on `day`: the year's
+    explicit rate if the user chose one (for the whole year), else the
+    suggestion.
+
+    The issue date, not the collection: it is the date the rate is known
+    on, when the invoice is written, and it doesn't move when the client
+    pays late. An invoice issued in December of the first year keeps its
+    55% even if collected in January. Taxes still follow the collection.
+    """
+    explicit = ledger.params_for(day.year).provision_rate
     if explicit is not None:
         return explicit
-    return suggest_provision_rate(ledger, year).suggested_rate
+    return suggested_rate_on(ledger, day)
 
 
 # ---------------------------------------------------------------------------

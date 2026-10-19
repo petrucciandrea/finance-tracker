@@ -326,6 +326,65 @@ def test_advances_paid_ahead_of_the_income_read_as_a_credit() -> None:
     liability = service.tax_liability(ledger, date(2026, 7, 1))
     assert liability == figures.liability - Decimal("2435.94") - Decimal("1636.75")
 
+    position = service.tax_position(ledger, date(2026, 7, 1))
+    assert (position.debt, position.credit) == (Decimal("0"), Decimal("1636.75"))
+    assert position.net == liability
+
+
+def test_a_balance_due_and_an_advance_paid_show_as_debt_and_credit() -> None:
+    ledger = _ledger(
+        [_collected("10000", date(2025, 3, 1))],
+        [_paid("1636.75", date(2026, 6, 30), 2026, "inps", "first_advance")],
+    )
+    # 2025's balance still unpaid, 2026's advance already in: the net alone
+    # would read as a smaller debt and hide the advance.
+    position = service.tax_position(ledger, date(2026, 7, 1))
+    assert position.debt == service.year_figures(ledger, 2025).liability
+    assert position.credit == Decimal("1636.75")
+    assert position.net == service.tax_liability(ledger, date(2026, 7, 1))
+
+
+def test_the_year_in_progress_keeps_its_advances_apart_from_its_taxes() -> None:
+    ledger = _ledger(
+        [_collected("10000", date(2026, 3, 1))],
+        [_paid("1000.00", date(2026, 6, 30), 2026, "inps", "first_advance")],
+    )
+    as_of = date(2026, 7, 1)
+    # 2026 has accrued more than the advance, but until it closes the
+    # advance is shown as what it is.
+    position = service.tax_position(ledger, as_of)
+    assert position.debt == service.year_figures(ledger, 2026, as_of).liability
+    assert position.credit == Decimal("1000.00")
+    assert position.net == service.tax_liability(ledger, as_of)
+
+    # Once closed, the advance is settled against the year's tax.
+    closed = service.tax_position(ledger, date(2027, 1, 15))
+    assert closed.debt == service.year_figures(ledger, 2026).liability - Decimal("1000.00")
+    assert closed.credit == Decimal("0")
+
+
+def test_a_closed_years_overpayment_carries_forward_to_the_next() -> None:
+    ledger = _ledger(
+        [_collected("10000", date(2025, 3, 1)), _collected("5000", date(2026, 3, 1))],
+        [_paid("3000.00", date(2025, 11, 30), 2025, "substitute_tax", "second_advance")],
+    )
+    surplus = Decimal("3000.00") - service.year_figures(ledger, 2025).liability
+    assert surplus > 0
+
+    # While 2026 is open the surplus is a credit of its own...
+    as_of = date(2026, 7, 1)
+    position = service.tax_position(ledger, as_of)
+    assert position.debt == service.year_figures(ledger, 2026, as_of).liability
+    assert position.credit == surplus
+    assert position.net == service.tax_liability(ledger, as_of)
+
+    # ...and once 2026 closes it lowers its balance, as the F24's compensation would.
+    as_of = date(2027, 2, 1)
+    position = service.tax_position(ledger, as_of)
+    assert position.debt == service.year_figures(ledger, 2026).liability - surplus
+    assert position.credit == Decimal("0")
+    assert position.net == service.tax_liability(ledger, as_of)
+
 
 def test_deadlines_split_balance_and_advances() -> None:
     ledger = _ledger([_collected("10000", date(2025, 3, 1))])
@@ -357,6 +416,63 @@ def test_suggested_rate_follows_the_spreadsheets_progression() -> None:
     assert service.suggest_provision_rate(ledger, 2028).suggested_rate == Decimal("0.30")
 
 
+def test_the_second_year_drops_to_the_steady_rate_after_the_first_declaration() -> None:
+    sales = [_collected("1000", date(2026, month, 15)) for month in range(6, 13)]
+    ledger = _ledger(sales, activity_start=date(2026, 6, 1))
+
+    assert service.provision_switch_date(ledger, 2027) == date(2027, 6, 30)
+    assert service.provision_switch_date(ledger, 2026) is None
+    assert service.provision_switch_date(ledger, 2028) is None
+    assert service.provision_rate_on(ledger, date(2026, 12, 31)) == Decimal("0.55")
+    assert service.provision_rate_on(ledger, date(2027, 6, 30)) == Decimal("0.40")
+    assert service.provision_rate_on(ledger, date(2027, 7, 1)) == Decimal("0.30")
+
+
+def test_an_explicit_rate_covers_the_whole_second_year() -> None:
+    ledger = _ledger([_collected("1000", date(2026, 7, 15))], activity_start=date(2026, 6, 1))
+    ledger.params[2027] = service.YearRow(
+        profitability_coefficient=YEAR_ROW.profitability_coefficient,
+        substitute_tax_rate=YEAR_ROW.substitute_tax_rate,
+        inps_rate=YEAR_ROW.inps_rate,
+        rivalsa_rate=YEAR_ROW.rivalsa_rate,
+        provision_rate=Decimal("0.45"),
+    )
+    assert service.provision_rate_on(ledger, date(2027, 3, 1)) == Decimal("0.45")
+    assert service.provision_rate_on(ledger, date(2027, 9, 1)) == Decimal("0.45")
+
+
+def test_the_provision_rate_follows_the_issue_date_not_the_collection(
+    client: TestClient, headers: dict
+) -> None:
+    response = client.patch(
+        f"{URL}/settings", json={"activity_start_date": "2024-06-01"}, headers=headers
+    )
+    assert response.status_code == 200, response.text
+    # A first year's income: the second year's rate is above the steady one.
+    first = _invoice(client, headers, issue_date="2024-07-01")
+    _collect(client, headers, first["id"], collected_on="2024-07-15")
+    year = client.get(f"{URL}/years/2025", headers=headers).json()
+    assert year["provision_switch_date"] == "2025-06-30"
+    assert Decimal(year["suggested_provision_rate_after_switch"]) == Decimal("0.30")
+    assert Decimal(year["effective_provision_rate"]) > Decimal("0.30")
+
+    # Issued on the declaration day, paid after it: still the second year's rate.
+    on_the_day = _invoice(client, headers, issue_date="2025-06-30")
+    on_the_day = _collect(client, headers, on_the_day["id"], collected_on="2025-07-20").json()
+    assert Decimal(on_the_day["applied_provision_rate"]) == Decimal(
+        year["effective_provision_rate"]
+    )
+    day_after = _invoice(client, headers, issue_date="2025-07-01")
+    assert Decimal(day_after["applied_provision_rate"]) == Decimal("0.30")
+
+    # Issued in the first year, paid in the second: the first year's 55%,
+    # though its taxes are 2025's.
+    december = _invoice(client, headers, issue_date="2024-12-20")
+    december = _collect(client, headers, december["id"], collected_on="2025-01-10").json()
+    assert december["fiscal_year"] == 2025
+    assert Decimal(december["applied_provision_rate"]) == Decimal("0.55")
+
+
 def test_an_explicit_rate_wins_over_the_suggestion(client: TestClient, headers: dict) -> None:
     year = client.patch(
         f"{URL}/years/2025", json={"provision_rate": "0.35"}, headers=headers
@@ -386,6 +502,8 @@ def test_collecting_lowers_net_worth_by_the_tax_share_only(
     liability = Decimal("40.64") + Decimal("213.19")
     assert Decimal(net_worth["total_cash_balance"]) == Decimal("1042.00")
     assert Decimal(net_worth["total_tax_liability"]) == liability
+    assert Decimal(net_worth["total_tax_debt"]) == liability
+    assert Decimal(net_worth["total_tax_credit"]) == Decimal("0")
     assert Decimal(net_worth["total_net_worth"]) == Decimal("1042.00") - liability
 
 
@@ -413,7 +531,42 @@ def test_paying_an_f24_leaves_net_worth_unchanged(
     after = _net_worth(client, headers)
     assert Decimal(after["total_net_worth"]) == before
     assert Decimal(after["total_tax_liability"]) == Decimal("213.19")
+    assert Decimal(after["total_tax_debt"]) == Decimal("213.19")
+    assert Decimal(after["total_tax_credit"]) == Decimal("0")
     assert _balance(client, headers, account["id"]) == Decimal("1001.36")
+
+
+def test_an_advance_paid_ahead_shows_next_to_the_debt(
+    client: TestClient, headers: dict, account: dict
+) -> None:
+    invoice = _invoice(client, headers)
+    _collect(client, headers, invoice["id"], collected_on="2025-03-15", account_id=account["id"])
+    before = Decimal(_net_worth(client, headers)["total_net_worth"])
+
+    # 2025's balance not paid yet, a 2026 advance already is (no 2026 income).
+    response = client.post(
+        f"{URL}/payments",
+        json={
+            "paid_on": "2026-06-30",
+            "fiscal_year": 2026,
+            "component": "inps",
+            "kind": "first_advance",
+            "amount": "100.00",
+            "account_id": account["id"],
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+
+    after = _net_worth(client, headers)
+    assert Decimal(after["total_tax_debt"]) == Decimal("253.83")
+    assert Decimal(after["total_tax_credit"]) == Decimal("100.00")
+    assert Decimal(after["total_tax_liability"]) == Decimal("153.83")
+    assert Decimal(after["total_net_worth"]) == before
+
+    summary = client.get(f"{URL}/summary?year=2026", headers=headers).json()
+    assert Decimal(summary["tax_debt"]) == Decimal("253.83")
+    assert Decimal(summary["tax_credit"]) == Decimal("100.00")
 
 
 def test_history_subtracts_the_liability(

@@ -515,9 +515,15 @@ def net_worth(
     holdings = holdings_with_value(db, current_user)
     physical_assets = physical_assets_with_value(db, current_user)
     ledger = flat_rate_service.load_ledger(db, current_user)
-    total_tax_liability = flat_rate_service.liability_in_base_currency(
-        db, current_user, flat_rate_service.tax_liability(ledger, today), today
+    tax_position = flat_rate_service.tax_position(ledger, today)
+    total_tax_debt = flat_rate_service.liability_in_base_currency(
+        db, current_user, tax_position.debt, today
     )
+    total_tax_credit = flat_rate_service.liability_in_base_currency(
+        db, current_user, tax_position.credit, today
+    )
+    # From the converted halves, so the three figures always add up.
+    total_tax_liability = total_tax_debt - total_tax_credit
     total_credits_value = credits_service.load_credit_ledger(db, current_user).value_on(today)
     db.commit()  # persist the price/rate cache rows filled in above
 
@@ -547,6 +553,8 @@ def net_worth(
         total_holdings_value=total_holdings_value,
         total_physical_assets_value=total_physical_assets_value,
         total_tax_liability=total_tax_liability,
+        total_tax_debt=total_tax_debt,
+        total_tax_credit=total_tax_credit,
         total_credits_value=total_credits_value,
         accounts=accounts,
         holdings=holdings,

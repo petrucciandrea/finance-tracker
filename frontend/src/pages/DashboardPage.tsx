@@ -248,13 +248,20 @@ export function DashboardPage() {
           },
         ]
       : []),
-    // Taxes accrued on P.IVA income, already netted out of net worth.
-    ...(nw && Number(nw.total_tax_liability) !== 0
+    // Taxes accrued on P.IVA income and advances paid ahead of it, already in
+    // net worth. Two rows, not their net: the year's advances would otherwise
+    // vanish into the taxes it has accrued so far.
+    ...(nw && (Number(nw.total_tax_debt) !== 0 || Number(nw.total_tax_credit) !== 0)
       ? [
           {
-            label: Number(nw.total_tax_liability) < 0 ? 'Credito fiscale' : 'Debito fiscale',
-            value: formatAmount(Math.abs(Number(nw.total_tax_liability)), base),
-            sub: <Link to="/invoices" className="link">già tolto dal patrimonio</Link>,
+            label: 'Debito · Credito fiscale',
+            value: (
+              <>
+                <span className="block whitespace-nowrap">{formatAmount(0 - Number(nw.total_tax_debt), base)}</span>
+                <span className="block whitespace-nowrap text-pos">{formatAmount(nw.total_tax_credit, base, { sign: 'always' })}</span>
+              </>
+            ),
+            sub: <Link to="/invoices" className="link">già nel patrimonio netto</Link>,
           },
         ]
       : []),

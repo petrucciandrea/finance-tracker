@@ -12,6 +12,8 @@ import {
   useCollectionCandidates,
   useCreateInvoice,
   useCreateTaxPayment,
+  useDebitCandidates,
+  useExecuteTaxPayment,
   useFlatRateYear,
   useInvoiceClients,
   useUpdateInvoice,
@@ -21,6 +23,7 @@ import { apiErrorMessage } from '@/lib/apiError'
 import {
   autoStampDuty,
   isPercentInput,
+  kindsFor,
   percentInputToRate,
   previewInvoice,
   provisionRateLabel,
@@ -28,10 +31,11 @@ import {
   rateToPercentInput,
   TAX_COMPONENT_LABELS,
   TAX_KIND_LABELS,
+  taxLineLabel,
 } from '@/lib/flatRate'
 import { formatAmount, formatFullDate, formatPercent, toISODate, toNumber } from '@/lib/format'
 import { isLocaleNumber, parseLocaleNumber } from '@/lib/physicalAssets'
-import type { Account, Invoice, TaxComponent, TaxPayment, TaxPaymentKind } from '@/types'
+import type { Account, Invoice, TaxComponent, TaxPayment, TaxPaymentKind, TaxPaymentStatus } from '@/types'
 
 const EUR = 'EUR'
 
@@ -91,6 +95,7 @@ function InvoiceForm({ invoice, onClose }: { invoice: Invoice | null; onClose: (
   const [rivalsa, setRivalsa] = useState<boolean | null>(invoice ? toNumber(invoice.rivalsa_rate) > 0 : null)
   // null = follow the €77,47 rule; a click makes it an explicit choice.
   const [stampDuty, setStampDuty] = useState<boolean | null>(invoice ? invoice.stamp_duty : null)
+  const [deliveredOn, setDeliveredOn] = useState(invoice?.sdi_delivered_on ?? '')
   const [provision, setProvision] = useState(rateToPercentInput(invoice?.provision_rate))
   const [notes, setNotes] = useState(invoice?.notes ?? '')
   const [error, setError] = useState<string | null>(null)
@@ -132,6 +137,7 @@ function InvoiceForm({ invoice, onClose }: { invoice: Invoice | null; onClose: (
     if (!isLocaleNumber(amount) || amountValue <= 0) return setError('Inserisci un importo valido')
     if (!provisionValid) return setError('La percentuale di accantonamento va da 0 a 100')
     if (invoice?.collected_on && !collectedOn) return setError("Inserisci la data di incasso, o annulla l'incasso dal menu della fattura")
+    if (stampOn && deliveredOn && deliveredOn < issueDate) return setError('Lo SdI non può consegnare la fattura prima della sua data')
     setError(null)
     const payload = {
       number: number.trim() || null,
@@ -140,6 +146,8 @@ function InvoiceForm({ invoice, onClose }: { invoice: Invoice | null; onClose: (
       amount: parseLocaleNumber(amount),
       rivalsa_rate: rivalsaRate.toFixed(4),
       stamp_duty: stampOn,
+      // Only meaningful with the bollo on: it picks the quarter it's paid in.
+      sdi_delivered_on: stampOn && deliveredOn ? deliveredOn : null,
       provision_rate: provision.trim() === '' ? null : percentInputToRate(provision),
       notes: notes.trim() || null,
     }
@@ -207,6 +215,15 @@ function InvoiceForm({ invoice, onClose }: { invoice: Invoice | null; onClose: (
           Bollo da 2 € addebitato al cliente
           {stampDuty === null && <span className="font-normal text-ink-3">(automatico sopra 77,47 €)</span>}
         </label>
+        {stampOn && (
+          <Field
+            label="Consegnata dallo SdI il"
+            htmlFor="inv-sdi"
+            hint="Facoltativa: vuota vuol dire la data della fattura. Decide il trimestre in cui versi il bollo (una fattura del 30/3 consegnata l'1/4 va nel secondo)."
+          >
+            <input id="inv-sdi" type="date" className="field" value={deliveredOn} min={issueDate} onChange={(e) => setDeliveredOn(e.target.value)} />
+          </Field>
+        )}
       </div>
       <Field
         label="Accantonamento"
@@ -411,6 +428,8 @@ export interface PaymentDraft {
   kind: TaxPaymentKind
   amount: string
   paid_on?: string
+  // Pre-selects "Programmato" (the date is the day the debit will be taken).
+  status?: TaxPaymentStatus
 }
 
 export function TaxPaymentDialog({
@@ -429,8 +448,8 @@ export function TaxPaymentDialog({
       open={open}
       onClose={onClose}
       size="md"
-      title={payment ? 'Modifica versamento F24' : 'Registra versamento F24'}
-      description="Una riga dell'F24: saldo o acconto, imposta o INPS. Pagarlo da un conto non è una spesa: riduce la liquidità e il debito fiscale insieme."
+      title={payment ? (payment.status === 'scheduled' ? 'Modifica pagamento programmato' : 'Modifica versamento F24') : 'Registra versamento F24'}
+      description="Una riga dell'F24: saldo o acconto di imposta o INPS, oppure il bollo di un trimestre. Pagarlo da un conto non è una spesa: riduce la liquidità e il debito fiscale insieme."
     >
       {open && <TaxPaymentForm key={payment?.id ?? 'new'} payment={payment} draft={draft} onClose={onClose} />}
     </Dialog>
@@ -442,28 +461,61 @@ function TaxPaymentForm({ payment, draft, onClose }: { payment: TaxPayment | nul
   const update = useUpdateTaxPayment()
   const { data: accounts } = useAccounts()
   const { data: categories } = useCategories()
+  const today = toISODate(new Date())
   const thisYear = new Date().getFullYear()
-  const [paidOn, setPaidOn] = useState(payment?.paid_on ?? draft?.paid_on ?? toISODate(new Date()))
+  const initialDate = payment?.paid_on ?? draft?.paid_on ?? today
+  const [status, setStatus] = useState<TaxPaymentStatus>(payment?.status ?? draft?.status ?? (initialDate > today ? 'scheduled' : 'paid'))
+  const [paidOn, setPaidOn] = useState(initialDate)
   const [fiscalYear, setFiscalYear] = useState(String(payment?.fiscal_year ?? draft?.fiscal_year ?? thisYear - 1))
   const [component, setComponent] = useState<TaxComponent>(payment?.component ?? draft?.component ?? 'substitute_tax')
   const [kind, setKind] = useState<TaxPaymentKind>(payment?.kind ?? draft?.kind ?? 'balance')
-  const [amount, setAmount] = useState(
-    payment ? payment.amount.replace('.', ',') : draft ? Number(draft.amount).toFixed(2).replace('.', ',') : '',
-  )
-  const [accountId, setAccountId] = useState('')
+  const [amount, setAmount] = useState(payment ? payment.amount.replace('.', ',') : draft ? Number(draft.amount).toFixed(2).replace('.', ',') : '')
+  const [accountId, setAccountId] = useState(payment?.account_id ?? '')
   const [categoryId, setCategoryId] = useState('')
   const [notes, setNotes] = useState(payment?.notes ?? '')
   const [error, setError] = useState<string | null>(null)
+  const scheduled = status === 'scheduled'
+  // Linked to a movement imported from the bank: account, amount and date are
+  // what the statement says (the backend 409s a change).
+  const linked = !!payment && payment.status === 'paid' && !!payment.transaction_id && !payment.owns_transaction
+  // Recorded without an account before one was required: it may stay so.
+  const accountOptional = !!payment && payment.account_id === null
+
+  function changeComponent(next: TaxComponent) {
+    setComponent(next)
+    if (!kindsFor(next).includes(kind)) setKind(kindsFor(next)[0])
+  }
 
   async function submit() {
     if (!isLocaleNumber(amount) || Number(parseLocaleNumber(amount)) <= 0) return setError('Inserisci un importo valido')
     const year = Number(fiscalYear)
     if (!Number.isInteger(year) || year < 2000 || year > 2100) return setError("Inserisci l'anno di competenza")
+    // Without an account the debt would drop and no balance would.
+    if (!accountId && !accountOptional) return setError(scheduled ? "Scegli il conto su cui verrà fatto l'addebito" : 'Scegli il conto da cui è stato pagato')
+    // A future date booked as paid would take the cash out today (see the backend).
+    if (!scheduled && paidOn > today) return setError('Con una data futura è un pagamento programmato: scegli «Programmato»')
     setError(null)
-    const common = { paid_on: paidOn, fiscal_year: year, component, kind, amount: parseLocaleNumber(amount), notes: notes.trim() || null }
+    const common = {
+      paid_on: paidOn,
+      fiscal_year: year,
+      component,
+      kind,
+      amount: parseLocaleNumber(amount),
+      notes: notes.trim() || null,
+    }
     try {
-      if (payment) await update.mutateAsync({ id: payment.id, payload: common })
-      else await create.mutateAsync({ ...common, account_id: accountId || null, category_id: accountId && categoryId ? categoryId : null })
+      if (payment)
+        await update.mutateAsync({
+          id: payment.id,
+          payload: accountId && accountId !== payment.account_id ? { ...common, account_id: accountId } : common,
+        })
+      else
+        await create.mutateAsync({
+          ...common,
+          status,
+          account_id: accountId,
+          category_id: !scheduled && categoryId ? categoryId : null,
+        })
       onClose()
     } catch (e) {
       setError(apiErrorMessage(e, 'Impossibile salvare il versamento.'))
@@ -473,9 +525,26 @@ function TaxPaymentForm({ payment, draft, onClose }: { payment: TaxPayment | nul
   const pending = create.isPending || update.isPending
   return (
     <div className="flex flex-col gap-4">
+      {!payment && (
+        <SegmentedControl<TaxPaymentStatus>
+          label="Stato del pagamento"
+          value={status}
+          onChange={setStatus}
+          options={[
+            { value: 'paid', label: 'Già pagato' },
+            { value: 'scheduled', label: 'Programmato' },
+          ]}
+        />
+      )}
+      {scheduled && (
+        <p className="rounded-[10px] bg-card-2 px-3 py-2.5 text-[13px] text-ink-2">
+          Un addebito autorizzato (sul portale Fatture e Corrispettivi o in banca) che non è ancora uscito dal conto. Finché non lo confermi non muove nulla: né
+          il saldo né il debito. Il conto viene controllato, e se non basta lo segnaliamo.
+        </p>
+      )}
       <div className="grid grid-cols-2 gap-2.5">
         <Field label="Tributo" htmlFor="pay-component">
-          <select id="pay-component" className="field" value={component} onChange={(e) => setComponent(e.target.value as TaxComponent)}>
+          <select id="pay-component" className="field" value={component} onChange={(e) => changeComponent(e.target.value as TaxComponent)}>
             {Object.entries(TAX_COMPONENT_LABELS).map(([value, label]) => (
               <option key={value} value={value}>
                 {label}
@@ -483,44 +552,73 @@ function TaxPaymentForm({ payment, draft, onClose }: { payment: TaxPayment | nul
             ))}
           </select>
         </Field>
-        <Field label="Tipo" htmlFor="pay-kind">
+        <Field label={component === 'stamp_duty' ? 'Trimestre' : 'Tipo'} htmlFor="pay-kind">
           <select id="pay-kind" className="field" value={kind} onChange={(e) => setKind(e.target.value as TaxPaymentKind)}>
-            {Object.entries(TAX_KIND_LABELS).map(([value, label]) => (
+            {kindsFor(component).map((value) => (
               <option key={value} value={value}>
-                {label}
+                {TAX_KIND_LABELS[value]}
               </option>
             ))}
           </select>
         </Field>
-        <Field label="Anno di competenza" htmlFor="pay-year" hint="Il saldo 2026 si versa nel 2027.">
+        <Field
+          label={component === 'stamp_duty' ? 'Anno del trimestre' : 'Anno di competenza'}
+          htmlFor="pay-year"
+          hint={component === 'stamp_duty' ? 'Il 4° trimestre 2026 si versa a febbraio 2027.' : 'Il saldo 2026 si versa nel 2027.'}
+        >
           <input id="pay-year" inputMode="numeric" className="field tabular-nums" value={fiscalYear} onChange={(e) => setFiscalYear(e.target.value)} />
         </Field>
-        <Field label="Data di pagamento" htmlFor="pay-date">
+        <Field
+          label={scheduled ? "Data dell'addebito" : 'Data di pagamento'}
+          htmlFor="pay-date"
+          hint={scheduled ? 'Di solito la scadenza: è il giorno in cui viene preso.' : undefined}
+        >
           <input id="pay-date" type="date" className="field" value={paidOn} onChange={(e) => setPaidOn(e.target.value)} />
         </Field>
       </div>
       <Field label="Importo" htmlFor="pay-amount">
         <MoneyInput id="pay-amount" value={amount} onChange={setAmount} />
       </Field>
-      {!payment && (
-        <>
-          <Field label="Pagato da" htmlFor="pay-account" hint="Facoltativo: registra l'uscita come giroconto sul conto scelto.">
-            <select id="pay-account" className="field" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-              <option value="">Nessun conto</option>
-              {eurAccounts(accounts).map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
+      <>
+        <Field
+          label={scheduled ? 'Addebito su' : 'Pagato da'}
+          htmlFor="pay-account"
+          hint={
+            linked
+              ? "È il conto del movimento importato dall'estratto conto: per cambiarlo, riporta prima il versamento a programmato."
+              : scheduled
+                ? "Il conto da cui uscirà: il suo saldo viene confrontato con l'addebito."
+                : payment
+                  ? "Cambiandolo, l'uscita si sposta sul nuovo conto."
+                  : "L'uscita è registrata come giroconto: scendono insieme il saldo e il debito fiscale."
+          }
+        >
+          <select id="pay-account" className="field" value={accountId} disabled={linked} onChange={(e) => setAccountId(e.target.value)}>
+            <option value="">Scegli un conto</option>
+            {/* The current one even if closed since, or the select would read empty. */}
+            {payment?.account_id && !eurAccounts(accounts).some((a) => a.id === payment.account_id) && (
+              <option value={payment.account_id}>{(accounts ?? []).find((a) => a.id === payment.account_id)?.name ?? 'Conto attuale'}</option>
+            )}
+            {eurAccounts(accounts).map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        {!scheduled && !payment && accountId && (
+          <Field label="Categoria del giroconto" htmlFor="pay-category">
+            <CategorySelect
+              id="pay-category"
+              categories={categories}
+              type="transfer"
+              emptyLabel="Nessuna categoria"
+              value={categoryId}
+              onChange={(e) => setCategoryId(e.target.value)}
+            />
           </Field>
-          {accountId && (
-            <Field label="Categoria del giroconto" htmlFor="pay-category">
-              <CategorySelect id="pay-category" categories={categories} type="transfer" emptyLabel="Nessuna categoria" value={categoryId} onChange={(e) => setCategoryId(e.target.value)} />
-            </Field>
-          )}
-        </>
-      )}
+        )}
+      </>
       <Field label="Note" htmlFor="pay-notes">
         <input id="pay-notes" className="field" value={notes} onChange={(e) => setNotes(e.target.value)} />
       </Field>
@@ -528,7 +626,156 @@ function TaxPaymentForm({ payment, draft, onClose }: { payment: TaxPayment | nul
       <div className="flex justify-end gap-2">
         <Button onClick={onClose}>Annulla</Button>
         <Button variant="primary" onClick={submit} disabled={pending}>
-          {pending ? 'Attendi…' : payment ? 'Salva' : 'Registra'}
+          {pending ? 'Attendi…' : payment ? 'Salva' : scheduled ? 'Programma' : 'Registra'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Confirm a scheduled debit
+// ---------------------------------------------------------------------------
+
+type ExecuteMode = 'link' | 'create'
+
+export function ExecutePaymentDialog({ payment, onClose }: { payment: TaxPayment | null; onClose: () => void }) {
+  return (
+    <Dialog
+      open={!!payment}
+      onClose={onClose}
+      size="md"
+      title={payment ? `Conferma addebito · ${taxLineLabel(payment)}` : ''}
+      description={
+        payment
+          ? `${formatAmount(payment.amount, EUR)} ${EUR} previsti il ${formatFullDate(payment.paid_on)}. Da qui in poi conta come pagato: scendono insieme il saldo del conto e il debito fiscale.`
+          : undefined
+      }
+    >
+      {payment && <ExecuteForm key={payment.id} payment={payment} onClose={onClose} />}
+    </Dialog>
+  )
+}
+
+function ExecuteForm({ payment, onClose }: { payment: TaxPayment; onClose: () => void }) {
+  const execute = useExecuteTaxPayment()
+  const { data: candidates, isLoading } = useDebitCandidates(payment.id)
+  const { data: accounts } = useAccounts()
+  const { data: categories } = useCategories()
+  const today = toISODate(new Date())
+  const [mode, setMode] = useState<ExecuteMode>('link')
+  // The debit is taken on its date; confirming early can't be "paid" yet.
+  const [paidOn, setPaidOn] = useState(payment.paid_on < today ? payment.paid_on : today)
+  const [transactionId, setTransactionId] = useState('')
+  const [categoryId, setCategoryId] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const accountsById = new Map((accounts ?? []).map((a) => [a.id, a]))
+  const accountName = payment.account_id ? (accountsById.get(payment.account_id)?.name ?? 'conto') : 'conto'
+
+  async function submit() {
+    if (mode === 'link' && !transactionId) return setError("Scegli il movimento dell'addebito, oppure registralo da qui")
+    if (paidOn > today) return setError("L'addebito non può essere confermato prima che avvenga")
+    setError(null)
+    try {
+      await execute.mutateAsync({
+        id: payment.id,
+        payload: {
+          paid_on: paidOn,
+          transaction_id: mode === 'link' ? transactionId : null,
+          category_id: mode === 'create' && categoryId ? categoryId : null,
+        },
+      })
+      onClose()
+    } catch (e) {
+      setError(apiErrorMessage(e, "Impossibile confermare l'addebito."))
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <SegmentedControl<ExecuteMode>
+        label="Movimento sul conto"
+        value={mode}
+        onChange={setMode}
+        options={[
+          { value: 'link', label: "Collega l'addebito importato" },
+          { value: 'create', label: 'Registralo da qui' },
+        ]}
+      />
+
+      {mode === 'link' &&
+        (isLoading ? (
+          <LoadingBlock className="h-20" />
+        ) : (candidates ?? []).length === 0 ? (
+          <p className="rounded-[10px] bg-card-2 px-3 py-2.5 text-[13px] text-ink-2">
+            Nessuna uscita da {formatAmount(payment.amount, EUR)} {EUR} vicina alla data prevista. Importa l&apos;estratto conto, oppure registra
+            l&apos;addebito da qui.
+          </p>
+        ) : (
+          <fieldset className="flex flex-col gap-1">
+            <legend className="mb-1.5 text-[14px] font-bold">Uscita corrispondente</legend>
+            {candidates!.map((t) => (
+              <label key={t.id} className="flex min-h-11 cursor-pointer items-center gap-3 rounded-[10px] border border-line px-3 py-2 hover:bg-card-2">
+                <input
+                  type="radio"
+                  name="debit-candidate"
+                  className="h-4 w-4"
+                  checked={transactionId === t.id}
+                  onChange={() => {
+                    setTransactionId(t.id)
+                    setPaidOn(t.date)
+                  }}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-bold">{t.description || 'Uscita'}</span>
+                  <span className="text-[12px] text-ink-3">
+                    {formatFullDate(t.date)} · {accountsById.get(t.account_id)?.name ?? 'Conto'}
+                  </span>
+                </span>
+                <span className="font-bold tabular-nums">
+                  {formatAmount(t.amount, t.currency)} <span className="ccy">{t.currency}</span>
+                </span>
+              </label>
+            ))}
+            <p className="mt-1 text-[12px] text-ink-3">Diventa un giroconto: non è una spesa, il costo era già contato come debito.</p>
+          </fieldset>
+        ))}
+
+      {mode === 'create' && (
+        <>
+          <p className="text-[13px] text-ink-2">
+            Scriviamo l&apos;uscita su {accountName}. Se poi importi l&apos;estratto conto, scarta quella riga come doppione.
+          </p>
+          <Field label="Categoria del giroconto" htmlFor="exec-category">
+            <CategorySelect
+              id="exec-category"
+              categories={categories}
+              type="transfer"
+              emptyLabel="Nessuna categoria"
+              value={categoryId}
+              onChange={(e) => setCategoryId(e.target.value)}
+            />
+          </Field>
+        </>
+      )}
+
+      <Field label="Data dell'addebito" htmlFor="exec-date" hint={mode === 'link' ? 'Quella del movimento collegato.' : undefined}>
+        <input
+          id="exec-date"
+          type="date"
+          className="field"
+          value={paidOn}
+          max={today}
+          disabled={mode === 'link' && !!transactionId}
+          onChange={(e) => setPaidOn(e.target.value)}
+        />
+      </Field>
+
+      {error && <ErrorBlock>{error}</ErrorBlock>}
+      <div className="flex justify-end gap-2">
+        <Button onClick={onClose}>Annulla</Button>
+        <Button variant="primary" onClick={submit} disabled={execute.isPending}>
+          {execute.isPending ? 'Attendi…' : 'Conferma addebito'}
         </Button>
       </div>
     </div>

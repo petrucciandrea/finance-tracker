@@ -11,12 +11,31 @@ export const WORK_TYPE_LABELS: Record<WorkType, string> = {
 export const TAX_COMPONENT_LABELS: Record<TaxComponent, string> = {
   substitute_tax: 'Imposta sostitutiva',
   inps: 'INPS',
+  stamp_duty: 'Bollo fatture',
 }
 
 export const TAX_KIND_LABELS: Record<TaxPaymentKind, string> = {
   balance: 'Saldo',
   first_advance: '1° acconto',
   second_advance: '2° acconto',
+  q1: '1° trimestre',
+  q2: '2° trimestre',
+  q3: '3° trimestre',
+  q4: '4° trimestre',
+}
+
+const QUARTER_KINDS: TaxPaymentKind[] = ['q1', 'q2', 'q3', 'q4']
+const TAX_KINDS: TaxPaymentKind[] = ['balance', 'first_advance', 'second_advance']
+
+/** The bollo is paid per quarter, the taxes per saldo/acconto (the backend 422s a mix). */
+export function kindsFor(component: TaxComponent): TaxPaymentKind[] {
+  return component === 'stamp_duty' ? QUARTER_KINDS : TAX_KINDS
+}
+
+/** "Saldo imposta sostitutiva 2025", "Bollo fatture 3° trimestre 2026". */
+export function taxLineLabel(line: { component: TaxComponent; kind: TaxPaymentKind; fiscal_year: number }): string {
+  if (line.component === 'stamp_duty') return `${TAX_COMPONENT_LABELS.stamp_duty} ${TAX_KIND_LABELS[line.kind]} ${line.fiscal_year}`
+  return `${TAX_KIND_LABELS[line.kind]} ${TAX_COMPONENT_LABELS[line.component].toLowerCase()} ${line.fiscal_year}`
 }
 
 // Coefficienti di redditività by ATECO group.

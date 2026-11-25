@@ -47,8 +47,11 @@ from app.schemas import (
     ProvisionStatus,
     TaxComponent,
     TaxPaymentCreate,
+    TaxPaymentExecute,
     TaxPaymentKind,
+    TaxPaymentStatus,
     TaxPaymentUpdate,
+    check_component_kind,
 )
 from app.schemas import FlatRateSettings as FlatRateSettingsSchema
 from app.schemas import FlatRateYear as FlatRateYearSchema
@@ -68,12 +71,6 @@ from app.services.transfers import create_cash_leg
 
 router = APIRouter(prefix="/api/v1/flat-rate", tags=["flat-rate"])
 
-_TAX_LABELS = {"substitute_tax": "imposta sostitutiva", "inps": "INPS"}
-_KIND_LABELS = {
-    "balance": "saldo",
-    "first_advance": "1° acconto",
-    "second_advance": "2° acconto",
-}
 # How far from the issue date an income movement may be to be offered as
 # the one that collected the invoice: a little before (an advance), up to
 # half a year after (slow payers).
@@ -204,6 +201,7 @@ class _InvoiceView:
             rivalsa_amount=breakdown.rivalsa_amount,
             stamp_duty=invoice.stamp_duty,
             stamp_duty_amount=breakdown.stamp_duty_amount,
+            sdi_delivered_on=invoice.sdi_delivered_on,
             total=breakdown.total,
             fiscal_year=year,
             provision_rate=invoice.provision_rate,
@@ -230,8 +228,13 @@ def _invoice_response(db: Session, user: User, invoice: Invoice) -> InvoiceSchem
 
 def _payment_schema(payment: TaxPayment) -> TaxPaymentSchema:
     leg = payment.transaction
+    if payment.status == "scheduled":
+        account_id = payment.account_id
+    else:
+        account_id = leg.account_id if leg is not None and leg.deleted_at is None else None
     return TaxPaymentSchema(
         id=payment.id,
+        status=TaxPaymentStatus(payment.status),
         paid_on=payment.paid_on,
         fiscal_year=payment.fiscal_year,
         component=TaxComponent(payment.component),
@@ -239,7 +242,8 @@ def _payment_schema(payment: TaxPayment) -> TaxPaymentSchema:
         amount=payment.amount,
         notes=payment.notes,
         transaction_id=payment.transaction_id,
-        account_id=leg.account_id if leg is not None and leg.deleted_at is None else None,
+        owns_transaction=payment.owns_transaction,
+        account_id=account_id,
         created_at=payment.created_at,
     )
 
@@ -362,6 +366,11 @@ def list_clients(
     return [row._mapping["client"] for row in rows]
 
 
+def _check_delivery(issue_date: date_, delivered_on: date_ | None) -> None:
+    if delivered_on is not None and delivered_on < issue_date:
+        raise _unprocessable("SdI can't deliver an invoice before its issue date")
+
+
 @router.post("/invoices", response_model=InvoiceSchema, status_code=status.HTTP_201_CREATED)
 def create_invoice(
     payload: InvoiceCreate,
@@ -377,6 +386,7 @@ def create_invoice(
         if payload.stamp_duty is not None
         else service.auto_stamp_duty(payload.amount, Decimal(rivalsa_rate))
     )
+    _check_delivery(payload.issue_date, payload.sdi_delivered_on)
     invoice = Invoice(
         user_id=current_user.id,
         number=payload.number,
@@ -385,6 +395,7 @@ def create_invoice(
         amount=payload.amount,
         rivalsa_rate=rivalsa_rate,
         stamp_duty=stamp_duty,
+        sdi_delivered_on=payload.sdi_delivered_on,
         provision_rate=payload.provision_rate,
         notes=payload.notes,
     )
@@ -405,6 +416,11 @@ def update_invoice(
     for field in ("client", "issue_date", "amount", "rivalsa_rate", "stamp_duty"):
         if field in data and data[field] is None:
             raise _unprocessable(f"{field} can't be cleared")
+
+    _check_delivery(
+        data.get("issue_date", invoice.issue_date),
+        data.get("sdi_delivered_on", invoice.sdi_delivered_on),
+    )
 
     if "collected_on" in data:
         if data["collected_on"] is None:
@@ -648,23 +664,34 @@ def create_payment(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> TaxPaymentSchema:
-    if payload.category_id is not None and payload.account_id is None:
-        raise _unprocessable("A category only applies to a payment from an account")
-    account = (
-        _eur_account(db, current_user, payload.account_id)
-        if payload.account_id is not None
-        else None
-    )
+    scheduled = payload.status == TaxPaymentStatus.scheduled
+    if not scheduled:
+        _check_not_ahead(payload.paid_on)
+    # Paid or scheduled, the money leaves an account. Without one the debt
+    # would drop while every balance stayed as it was, and net worth would
+    # rise by the amount of the F24.
+    if payload.account_id is None:
+        raise _unprocessable(
+            "A scheduled payment needs the account the debit will hit"
+            if scheduled
+            else "Choose the account the F24 was paid from"
+        )
+    if scheduled and payload.category_id is not None:
+        raise _unprocessable("Choose the category when confirming the debit")
+    account = _eur_account(db, current_user, payload.account_id)
+    if scheduled:
+        # The debit will be a movement on it: refuse now rather than at confirmation.
+        ensure_account_open_on(account, payload.paid_on)
     category_id = (
         get_owned_leaf_category(db, payload.category_id, current_user, "transfer").id
         if payload.category_id is not None
         else None
     )
-    rate = _rate(db, current_user, payload.paid_on) if account is not None else None
+    rate = None if scheduled else _rate(db, current_user, payload.paid_on)
     service.get_or_create_year(db, current_user, payload.fiscal_year)
 
     leg = None
-    if account is not None and rate is not None:
+    if rate is not None:
         leg = create_cash_leg(
             db,
             account=account,
@@ -679,13 +706,16 @@ def create_payment(
         )
     payment = TaxPayment(
         user_id=current_user.id,
+        status=payload.status.value,
         paid_on=payload.paid_on,
         fiscal_year=payload.fiscal_year,
         component=payload.component.value,
         kind=payload.kind.value,
         amount=payload.amount,
         notes=payload.notes,
+        account_id=account.id,
         transaction_id=leg.id if leg is not None else None,
+        owns_transaction=True,
     )
     db.add(payment)
     db.commit()
@@ -694,7 +724,22 @@ def create_payment(
 
 
 def _payment_description(component: str, kind: str, fiscal_year: int) -> str:
-    return f"F24 {_TAX_LABELS[component]} — {_KIND_LABELS[kind]} {fiscal_year}"
+    return f"F24 {service.payment_label(component, kind, fiscal_year)}"
+
+
+def _check_not_ahead(paid_on: date_) -> None:
+    """
+    A payment marked paid on a future date is a scheduled one: booked as
+    paid, its leg would take the cash out of the account today (balances sum
+    every movement) while the debt only drops on the date.
+    """
+    if paid_on > date_.today():
+        raise _unprocessable("A payment dated in the future is scheduled, not paid yet")
+
+
+def _live_leg(payment: TaxPayment) -> Transaction | None:
+    leg = payment.transaction
+    return leg if leg is not None and leg.deleted_at is None else None
 
 
 @router.patch("/payments/{payment_id}", response_model=TaxPaymentSchema)
@@ -709,34 +754,105 @@ def update_payment(
     for field, value in data.items():
         if value is None and field != "notes":
             raise _unprocessable(f"{field} can't be cleared")
+    # The form sends every field back: only what actually changed counts, or
+    # editing the notes of a linked F24 would read as moving its date.
+    data = {
+        field: value
+        for field, value in data.items()
+        if (value.value if isinstance(value, Enum) else value) != getattr(payment, field)
+    }
+    try:
+        check_component_kind(
+            data.get("component", TaxComponent(payment.component)),
+            data.get("kind", TaxPaymentKind(payment.kind)),
+        )
+    except ValueError as exc:
+        raise _unprocessable(str(exc)) from exc
 
-    leg = payment.transaction
-    if leg is not None and leg.deleted_at is not None:
-        leg = None
-    moves_leg = leg is not None and bool(data.keys() & {"amount", "paid_on"})
+    scheduled = payment.status == "scheduled"
+    if not scheduled and "paid_on" in data:
+        _check_not_ahead(data["paid_on"])
+    leg = _live_leg(payment)
+    linked = leg is not None and not payment.owns_transaction
+
+    # A linked movement is the bank's: its account, amount and date are what happened.
+    if linked and data.keys() & {"amount", "paid_on", "account_id"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This F24 is linked to a movement from the bank statement — "
+            "undo the confirmation to change its account, amount or date",
+        )
+    new_account: Account | None = None
+    if "account_id" in data:
+        new_account = _eur_account(db, current_user, data["account_id"])
+        data["account_id"] = new_account.id
+        if new_account.id == payment.account_id and leg is not None:
+            new_account = None  # nothing moves
     new_date = data.get("paid_on", payment.paid_on)
-    if moves_leg and leg is not None:
-        ensure_account_open_on(leg.account, new_date)
-    # Frozen-rate rule: reconverted only when amount or date change.
-    rate = _rate(db, current_user, new_date) if moves_leg else None
+    current = db.get(Account, payment.account_id) if payment.account_id else None
+    target = new_account or current
+    if target is not None and (new_account is not None or "paid_on" in data):
+        # A scheduled debit will be a movement on it, a paid one is.
+        ensure_account_open_on(target, new_date)
+
+    moves_leg = leg is not None and bool(data.keys() & {"amount", "paid_on"})
+    # Paid but recorded without a movement (before an account was required):
+    # choosing the account now writes its leg.
+    writes_leg = not scheduled and leg is None and new_account is not None
+    # Frozen-rate rule: reconverted only when amount or date change. Moving
+    # the leg to another EUR account on the same day keeps its rate.
+    rate = _rate(db, current_user, new_date) if moves_leg or writes_leg else None
     if "fiscal_year" in data:
         service.get_or_create_year(db, current_user, data["fiscal_year"])
 
     for field, value in data.items():
         setattr(payment, field, value.value if isinstance(value, Enum) else value)
 
-    if leg is not None:
+    if leg is not None and not linked:
         if moves_leg and rate is not None:
             leg.amount = -Decimal(payment.amount)
             leg.amount_base_currency = leg.amount * rate
             leg.exchange_rate = rate
             leg.date = payment.paid_on
+        if new_account is not None:
+            leg.account_id = new_account.id
         leg.description = _payment_description(
             payment.component, payment.kind, payment.fiscal_year
         )
+    elif writes_leg and new_account is not None and rate is not None:
+        created = create_cash_leg(
+            db,
+            account=new_account,
+            amount=-Decimal(payment.amount),
+            currency=service.CURRENCY,
+            rate=rate,
+            on_date=payment.paid_on,
+            description=_payment_description(
+                payment.component, payment.kind, payment.fiscal_year
+            ),
+        )
+        payment.transaction_id = created.id
+        payment.owns_transaction = True
     db.commit()
     db.refresh(payment)
     return _payment_schema(payment)
+
+
+def _release_leg(db: Session, user: User, payment: TaxPayment) -> None:
+    """
+    Undo what confirming a payment did to the ledger: a leg written from
+    here is retired; a movement linked from the bank statement stays (it
+    happened) and goes back to being an expense, in "Varie" since its
+    original category isn't kept.
+    """
+    leg = _live_leg(payment)
+    if leg is None:
+        return
+    if payment.owns_transaction:
+        leg.deleted_at = datetime.now(UTC)
+        return
+    leg.type = "expense"
+    leg.category_id = get_or_create_misc_category(db, user, "expense").id
 
 
 @router.delete("/payments/{payment_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -746,9 +862,191 @@ def delete_payment(
     current_user: User = Depends(get_current_user),
 ) -> None:
     payment = _get_owned_payment(db, payment_id, current_user)
-    _retire_transaction(db, payment.transaction_id)
+    _release_leg(db, current_user, payment)
     payment.deleted_at = datetime.now(UTC)
     db.commit()
+
+
+@router.post("/payments/{payment_id}/execute", response_model=TaxPaymentSchema)
+def execute_payment(
+    payment_id: UUID,
+    payload: TaxPaymentExecute,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> TaxPaymentSchema:
+    """The scheduled debit happened: book it, on the day it actually did."""
+    payment = _get_owned_payment(db, payment_id, current_user)
+    if payment.status != "scheduled":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Already paid")
+    _check_not_ahead(payload.paid_on)
+    if payload.transaction_id is not None and payload.category_id is not None:
+        raise _unprocessable("A linked movement keeps no category: it becomes a giroconto")
+    category_id = (
+        get_owned_leaf_category(db, payload.category_id, current_user, "transfer").id
+        if payload.category_id is not None
+        else None
+    )
+
+    if payload.transaction_id is not None:
+        movement = _linkable_debit(db, current_user, payload.transaction_id, payment)
+        # Linked, it's what the bank says happened: its date wins.
+        payment.paid_on = movement.date
+        payment.account_id = movement.account_id
+        payment.transaction_id = movement.id
+        payment.owns_transaction = False
+        movement.type = "transfer"
+        movement.category_id = None
+        movement.necessity_level_override = None
+    else:
+        account = db.get(Account, payment.account_id)
+        if account is None or account.deleted_at is not None:
+            raise _unprocessable("The scheduled account no longer exists — pick another one")
+        rate = _rate(db, current_user, payload.paid_on)
+        leg = create_cash_leg(
+            db,
+            account=account,
+            amount=-Decimal(payment.amount),
+            currency=service.CURRENCY,
+            rate=rate,
+            on_date=payload.paid_on,
+            description=_payment_description(
+                payment.component, payment.kind, payment.fiscal_year
+            ),
+            category_id=category_id,
+        )
+        payment.paid_on = payload.paid_on
+        payment.transaction_id = leg.id
+        payment.owns_transaction = True
+    payment.status = "paid"
+    db.commit()
+    db.refresh(payment)
+    return _payment_schema(payment)
+
+
+@router.post("/payments/{payment_id}/unexecute", response_model=TaxPaymentSchema)
+def unexecute_payment(
+    payment_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> TaxPaymentSchema:
+    """Back to scheduled: the debit didn't happen after all, or was confirmed by mistake."""
+    payment = _get_owned_payment(db, payment_id, current_user)
+    if payment.status != "paid":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Not paid yet")
+    leg = _live_leg(payment)
+    account_id = leg.account_id if leg is not None else payment.account_id
+    if account_id is None:
+        raise _unprocessable(
+            "Recorded without an account: there is no debit to wait for — delete it instead"
+        )
+    _release_leg(db, current_user, payment)
+    payment.status = "scheduled"
+    payment.account_id = account_id
+    payment.transaction_id = None
+    payment.owns_transaction = True
+    db.commit()
+    db.refresh(payment)
+    return _payment_schema(payment)
+
+
+# A direct debit is taken on the due date, or the next working day; a
+# statement may date it a few days either side.
+_DEBIT_WINDOW = (timedelta(days=10), timedelta(days=20))
+
+
+def _linked_debit_ids(db: Session, user: User):
+    return (
+        db.query(TaxPayment.transaction_id)
+        .filter(
+            TaxPayment.user_id == user.id,
+            TaxPayment.deleted_at.is_(None),
+            TaxPayment.transaction_id.isnot(None),
+        )
+        .scalar_subquery()
+    )
+
+
+def _linkable_debit(
+    db: Session, user: User, transaction_id: UUID, payment: TaxPayment
+) -> Transaction:
+    """
+    A plain expense of exactly the payment's amount, in EUR: what an F24
+    debit looks like once imported from the bank. Anything already tied to
+    something else (a credit, a settlement in kind, another F24) is refused.
+    """
+    movement = (
+        db.query(Transaction)
+        .join(Account, Account.id == Transaction.account_id)
+        .filter(
+            Transaction.id == transaction_id,
+            Account.user_id == user.id,
+            Account.deleted_at.is_(None),
+            Transaction.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if movement is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
+    if movement.type != "expense":
+        raise _unprocessable("Only an expense movement can be the F24's debit")
+    if movement.currency != service.CURRENCY:
+        raise _unprocessable("The movement must be in EUR")
+    if Decimal(movement.amount) != -Decimal(payment.amount):
+        raise _unprocessable("The movement's amount doesn't match the F24's")
+    if movement.lent_amount is not None or movement.offset_transaction_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This movement is part of a credit — it can't be an F24 debit",
+        )
+    other = (
+        db.query(TaxPayment)
+        .filter(
+            TaxPayment.transaction_id == movement.id,
+            TaxPayment.deleted_at.is_(None),
+            TaxPayment.id != payment.id,
+        )
+        .first()
+    )
+    if other is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This movement is already another F24's debit",
+        )
+    return movement
+
+
+@router.get("/payments/{payment_id}/candidates", response_model=list[TransactionSchema])
+def debit_candidates(
+    payment_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[Transaction]:
+    """Expenses that look like this scheduled payment's debit, closest date first."""
+    payment = _get_owned_payment(db, payment_id, current_user)
+    before, after = _DEBIT_WINDOW
+    candidates = (
+        db.query(Transaction)
+        .join(Account, Account.id == Transaction.account_id)
+        .filter(
+            Account.user_id == current_user.id,
+            Account.deleted_at.is_(None),
+            Transaction.deleted_at.is_(None),
+            Transaction.type == "expense",
+            Transaction.currency == service.CURRENCY,
+            Transaction.amount == -Decimal(payment.amount),
+            Transaction.lent_amount.is_(None),
+            Transaction.offset_transaction_id.is_(None),
+            Transaction.date >= payment.paid_on - before,
+            Transaction.date <= payment.paid_on + after,
+            Transaction.id.notin_(_linked_debit_ids(db, current_user)),
+        )
+        .all()
+    )
+    # The scheduled account's own movements first, then the closest date.
+    candidates.sort(
+        key=lambda t: (t.account_id != payment.account_id, abs((t.date - payment.paid_on).days))
+    )
+    return candidates[:10]
 
 
 # ---------------------------------------------------------------------------
@@ -855,6 +1153,21 @@ def remove_source(
 # Summary
 # ---------------------------------------------------------------------------
 
+def _summary_deadlines(ledger: service.Ledger, year: int, today: date_) -> list[service.Deadline]:
+    """
+    The year's deadlines and the next one's, plus any of the year before that
+    is past due with nothing paid or scheduled against it. Those are what the
+    banner calls overdue (it looks a year back), and the page must show them
+    or there's nowhere to record them from.
+    """
+    overdue = [
+        d
+        for d in service.deadlines_in(ledger, (year - 1,), today)
+        if d.amount_due > 0 and not d.is_arranged and d.due_date < today
+    ]
+    return overdue + service.deadlines(ledger, year, today)
+
+
 @router.get("/summary", response_model=FlatRateSummary)
 def summary(
     year: int | None = None,
@@ -914,6 +1227,11 @@ def summary(
             liability=figures.liability,
             advances_due=service.advances_due(ledger, year).total,
             paid=service.paid(ledger, fiscal_year=year),
+            stamp_duty=sum(
+                (v for (y, _), v in service.stamp_duty_by_quarter(ledger).items() if y == year),
+                Decimal("0"),
+            ),
+            stamp_duty_paid=service.stamp_duty_paid(ledger, fiscal_year=year),
             to_provision=to_provision,
             outstanding=outstanding,
             invoice_count=len(issued),
@@ -932,8 +1250,10 @@ def summary(
                 kind=TaxPaymentKind(d.kind),
                 amount_due=d.amount_due,
                 amount_paid=d.amount_paid,
+                amount_scheduled=d.amount_scheduled,
+                scheduled_on=d.scheduled_on,
                 is_estimate=d.is_estimate,
             )
-            for d in service.deadlines(ledger, year, today)
+            for d in _summary_deadlines(ledger, year, today)
         ],
     )

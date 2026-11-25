@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentType, type SVGProps } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { AlertsBanner } from '@/components/layout/AlertsBanner'
 import { LegalFooter } from '@/components/layout/LegalFooter'
 import { ThemeChooser } from '@/components/layout/ThemeChooser'
 import {
@@ -340,6 +341,9 @@ export function AppLayout() {
 
       <main className="w-full flex-1 px-4 pt-[22px] pb-12 sm:px-5">
         <div className="mx-auto flex max-w-[1200px] flex-col gap-4">
+          {/* Outside the re-keyed outlet so dismissals survive the toggle;
+              re-keyed itself so its amounts follow it. */}
+          <AlertsBanner key={hidden ? 'alerts-hidden' : 'alerts-shown'} />
           {/* Remount on toggle: the formatters read the flag at render time,
               and memoised rows or chart tooltips wouldn't re-render on their
               own. Query data is cached and filters live in the URL, so

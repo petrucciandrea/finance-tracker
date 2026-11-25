@@ -9,15 +9,19 @@ Personal finance tracker, built in phases:
 3. **Phase 3 (done)** — portfolio tracker: stocks/ETFs/crypto, price sync jobs, net-worth view
 4. **Phase 4 (done)** — planning engine: necessity taxonomy, 50/25/15/10 allocation model,
    survival budget, cut simulator, waterfall savings ladder with executable giroconti
-5. **Physical assets** — vehicles (depreciation + manual valuations) and precious metals
-   (fractional positions: grams × purity × spot), counted in net worth on the "Beni" page
+5. **Physical assets** — vehicles (depreciation + manual valuations, plus deadlines:
+   insurance, road tax, inspection, service) and precious metals (fractional positions:
+   grams × purity × spot), counted in net worth on the "Beni" page
 6. **Work profile** — `users.work_type` (employee / P.IVA forfettaria / ordinaria) in the
    profile's "Lavoro" section. Only `flat_rate` unlocks a section so far ("Fatture"):
-   invoices issued → collected, taxes and INPS on a cash basis, F24 deadlines and payments,
-   the suggested provision rate, and the accounts/holdings the provision sits in
+   invoices issued → collected, taxes and INPS on a cash basis, the bollo per quarter, F24
+   deadlines and payments (paid or scheduled), the suggested provision rate, and the
+   accounts/holdings the provision sits in
 7. **Credits** — spend fronted for other people (a dinner on your card, friends pay you back
    in cash): `transactions.lent_amount` on the expense, `repays_transaction_id` on the income
    that pays it back
+8. **Alerts** — a banner on every page (`GET /alerts`): accounts that can't cover, or barely
+   cover, what's scheduled to leave them; F24 lines and vehicle deadlines due within two weeks
 
 Single-user-per-account app; multi-user capable but built for personal use.
 
@@ -53,10 +57,10 @@ finance-tracker/
 │   │   ├── schemas/          # Pydantic schemas (all in __init__.py)
 │   │   ├── routers/          # auth, accounts, categories, transactions, budgets,
 │   │   │                     # planning, savings_goals, portfolio, physical_assets,
-│   │   │                     # flat_rate
+│   │   │                     # flat_rate, vehicle_deadlines, alerts
 │   │   └── services/         # exchange_rates, csv_import, asset_prices, net_worth,
 │   │                         # necessity, planning, waterfall, transfers, periods,
-│   │                         # ownership, physical_assets, flat_rate, credits
+│   │                         # ownership, physical_assets, flat_rate, credits, alerts
 │   └── tests/
 └── frontend/
     └── src/
@@ -561,6 +565,59 @@ figure would swing negative in the month an F24 lowers the tax via the INPS dedu
 
 `users.work_type` only gates the UI. The API and the liability work regardless — turning
 the section off must not make a real debt vanish from net worth.
+
+### The bollo is owed on delivery, not on collection
+The one non-cash-basis figure in the section. Every live invoice with `stamp_duty` owes €2
+from `sdi_delivered_on` (SdI's delivery; NULL = the issue date), collected or not, and is
+paid per **calendar quarter of delivery** (`tax_payments` component `stamp_duty`, kinds
+`q1`–`q4`, `fiscal_year` = the quarter's year; a CHECK keeps quarters and saldo/acconti apart).
+The €2 the client pays stays revenue; the €2 owed is in `tax_liability` (settled on its own in
+`tax_position`) and `cash_requirement`. `tax_cost` ignores it: charged to the client, it nets to zero.
+
+Due dates (`stamp_duty_due_date`): end of the month after the quarter, February for the fourth,
+with the deferrals taken whenever allowed — Q1 < €5,000 goes with Q2, Q1 + Q2 < €5,000 with Q3
+(30 November). At €2 an invoice that is always the case: 30 November and end of February.
+**Every** F24 deadline (taxes too) moves to the next working day (`next_business_day`: weekends,
+national holidays, Easter Monday). The Ledger keeps the bollo apart (`stamped`,
+`stamp_payments`), so `payments` and every tax computation still see imposta/INPS only.
+
+### A payment can be scheduled before it is paid
+`tax_payments.status`: `scheduled` = a direct debit authorised on the AdE portal (or an F24
+booked at the bank) that hasn't left the account. It moves **nothing** — no leg, not in `paid()`,
+not in the debt — and `paid_on` is the expected debit date; `account_id` (required) is the account
+it will hit. It only shows next to its deadline (`amount_scheduled`) and as a commitment for the
+alerts. `POST /payments/{id}/execute` books it on the actual date: either it links the expense
+imported from the bank (exact amount, EUR; it becomes a `transfer` with no category, since the
+cost was already a debt — `owns_transaction = false`) or writes the leg. `/unexecute` goes back;
+unlinking (unexecute or delete) turns a linked movement back into an expense in "Varie".
+
+Why not just date the leg in the future: balances sum every movement whatever its date, while the
+debt drops on `paid_on`, so net worth would count it twice until then. For the same reason a
+**paid** payment dated after today is a 422, and so is one without `account_id`: the debt would
+drop while no balance did, and net worth would rise by the F24 (rows recorded that way before
+this rule stay as they are). PATCH `account_id` moves a paid F24's own leg (same EUR, same day:
+the frozen rate stays), writes the leg for one recorded without an account, and is a 409 on one
+linked to an imported movement — the bank's record stays where it happened. PATCH only counts
+fields whose value changed: the form sends them all back. An account with a scheduled debit or an open vehicle
+deadline can't be deleted (409): the commitment would stop being watched.
+
+### Alerts are computed on read, worded on the client
+No scheduler, so `services/alerts.py` evaluates on every `GET /alerts` (the frontend keys it
+under `net-worth`, which every balance-moving write already invalidates). Commitments per
+account = scheduled payments + open vehicle deadlines with amount and account (not of a sold or
+deleted vehicle). Margin = max(15, 20% of the commitment), in the account's currency: balance <
+committed → `account_short` (every visit); < committed + margin → `account_near` (once, id carries
+the amount so a new debit warns again). F24 lines due within 14 days or past, with nothing paid
+**or scheduled** against them (`Deadline.is_arranged`: the estimate can differ from the
+accountant's F24 by a few euro, so any booking counts as handled), vehicle deadlines in the same
+window, scheduled debits past their date and unconfirmed. Alerts are structured (amounts,
+names), not sentences: `lib/alerts.ts` words them so "Nascondi importi" masks the figures.
+`every_visit` dismissals live in module state (back on reload), `once` in `localStorage`. The
+transaction form warns while typing (`CommitmentWarning`) and never blocks.
+
+Vehicle deadlines (`vehicle_deadlines`) are reminders, not movements: "fatto" sets `done_on` and
+can create the next occurrence; the expense is an ordinary transaction. `currency` is the
+account's when there is one, else the vehicle's. Deleting the vehicle retires them.
 
 ### CSV import is two-step, preview lives in memory
 `POST /transactions/import` parses and returns a preview with per-row flags (`is_parsable`, `is_duplicate`); `POST /transactions/import/confirm` commits only the selected rows. The preview is held in a process-local dict with a 15-minute TTL — **this breaks with more than one backend replica**. Move it to Redis before scaling out, not to a DB table.

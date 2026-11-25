@@ -29,13 +29,25 @@ Two different "debts" come out of this, on purpose:
   collected so far, next year's advances included. This is what the
   provision has to cover, and the page's gap compares against.
 
+The bollo is the one thing here that is *not* on a cash basis: it is owed
+on every invoice delivered by SdI with the €2 on it, collected or not, and
+paid per calendar quarter of delivery (see `stamp_duty_due_date`). The €2
+the client pays is revenue like the rest of the invoice; the €2 owed to the
+State is a debt from the delivery on, in `tax_liability` and
+`cash_requirement` alike, until its F24 line is paid.
+
+A payment `scheduled` but not yet `paid` (a direct debit authorised on the
+AdE portal) counts nowhere: not in what is paid, not in the debt. It only
+shows next to its deadline, and as a commitment on the account it will hit.
+
 Everything that reads the ledger takes a `Ledger` loaded once, so the
 history chart can evaluate hundreds of dates without a query per date.
 """
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date as date_
+from datetime import timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from uuid import UUID
 
@@ -69,6 +81,34 @@ INPS_ADVANCE_SHARE = Decimal("0.8")
 TAX_ADVANCE_MINIMUM = Decimal("51.65")
 TAX_ADVANCE_SINGLE_PAYMENT_BELOW = Decimal("257.52")
 TAX_FIRST_ADVANCE_SHARE = Decimal("0.4")
+# Below this, a quarter's bollo may be paid with a later one's (D.M. 17
+# giugno 2014, art. 6, as amended by D.L. 73/2022).
+STAMP_DUTY_DEFERRAL_LIMIT = Decimal("5000")
+
+TAX_COMPONENTS = ("substitute_tax", "inps")
+STAMP_DUTY_COMPONENT = "stamp_duty"
+QUARTER_KINDS = ("q1", "q2", "q3", "q4")
+
+
+_COMPONENT_LABELS = {
+    "substitute_tax": "imposta sostitutiva",
+    "inps": "INPS",
+    "stamp_duty": "bollo fatture",
+}
+_KIND_LABELS = {
+    "balance": "saldo",
+    "first_advance": "1° acconto",
+    "second_advance": "2° acconto",
+    "q1": "1° trimestre",
+    "q2": "2° trimestre",
+    "q3": "3° trimestre",
+    "q4": "4° trimestre",
+}
+
+
+def payment_label(component: str, kind: str, fiscal_year: int) -> str:
+    """"imposta sostitutiva — saldo 2025", "bollo fatture — 3° trimestre 2026"."""
+    return f"{_COMPONENT_LABELS[component]} — {_KIND_LABELS[kind]} {fiscal_year}"
 
 
 def money(value: Decimal) -> Decimal:
@@ -207,6 +247,58 @@ def fiscal_year_of(invoice: Invoice) -> int:
     return (invoice.collected_on or invoice.issue_date).year
 
 
+def stamp_duty_date(invoice: Invoice) -> date_:
+    """The day the bollo is owed from: SdI's delivery, else the issue date."""
+    return invoice.sdi_delivered_on or invoice.issue_date
+
+
+def quarter_of(day: date_) -> int:
+    return (day.month - 1) // 3 + 1
+
+
+def quarter_end(year: int, quarter: int) -> date_:
+    if quarter == 4:
+        return date_(year, 12, 31)
+    return date_(year, quarter * 3 + 1, 1) - timedelta(days=1)
+
+
+# ---------------------------------------------------------------------------
+# Business days: a deadline on a Saturday, Sunday or bank holiday moves to
+# the next working day, and so does the date a direct debit is taken.
+# ---------------------------------------------------------------------------
+
+_FIXED_HOLIDAYS = {
+    (1, 1), (1, 6), (4, 25), (5, 1), (6, 2), (8, 15), (11, 1), (12, 8), (12, 25), (12, 26),
+}
+
+
+def _easter(year: int) -> date_:
+    # Anonymous Gregorian algorithm (Meeus/Jones/Butcher).
+    a, b, c = year % 19, year // 100, year % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l_ = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l_) // 451
+    month = (h + l_ - 7 * m + 114) // 31
+    day = (h + l_ - 7 * m + 114) % 31 + 1
+    return date_(year, month, day)
+
+
+def is_business_day(day: date_) -> bool:
+    if day.weekday() >= 5 or (day.month, day.day) in _FIXED_HOLIDAYS:
+        return False
+    return day != _easter(day.year) + timedelta(days=1)  # Easter Monday
+
+
+def next_business_day(day: date_) -> date_:
+    while not is_business_day(day):
+        day += timedelta(days=1)
+    return day
+
+
 @dataclass(frozen=True)
 class InvoiceBreakdown:
     rivalsa_amount: Decimal
@@ -254,10 +346,15 @@ def invoice_breakdown(
 @dataclass
 class Ledger:
     invoices: list[Invoice]  # collected ones only
-    payments: list[TaxPayment]
+    payments: list[TaxPayment]  # paid imposta/INPS lines only
     params: dict[int, YearRow]
     activity_start: date_ | None
     safety_margin: Decimal
+    # Every live invoice carrying the bollo, collected or not.
+    stamped: list[Invoice] = field(default_factory=list)
+    stamp_payments: list[TaxPayment] = field(default_factory=list)  # paid bollo lines
+    # Every component, not paid yet: shown next to the deadlines, counted nowhere.
+    scheduled: list[TaxPayment] = field(default_factory=list)
 
     def params_for(self, year: int) -> YearParams:
         """
@@ -284,7 +381,12 @@ class Ledger:
         return {inv.collected_on.year for inv in self.invoices if inv.collected_on}
 
     def is_empty(self) -> bool:
-        return not self.invoices and not self.payments
+        return (
+            not self.invoices
+            and not self.payments
+            and not self.stamped
+            and not self.stamp_payments
+        )
 
 
 @dataclass(frozen=True)
@@ -388,8 +490,80 @@ def paid(
     )
 
 
+# ---------------------------------------------------------------------------
+# Bollo: owed per invoice delivered, paid per quarter
+# ---------------------------------------------------------------------------
+
+def stamp_duty_by_quarter(
+    ledger: Ledger, as_of: date_ | None = None
+) -> dict[tuple[int, int], Decimal]:
+    """(year, quarter) → bollo owed on the invoices delivered in it by `as_of`."""
+    result: dict[tuple[int, int], Decimal] = {}
+    for invoice in ledger.stamped:
+        day = stamp_duty_date(invoice)
+        if as_of is not None and day > as_of:
+            continue
+        key = (day.year, quarter_of(day))
+        result[key] = result.get(key, Decimal("0")) + STAMP_DUTY_AMOUNT
+    return result
+
+
+def stamp_duty_accrued(ledger: Ledger, as_of: date_) -> Decimal:
+    return sum(stamp_duty_by_quarter(ledger, as_of).values(), Decimal("0"))
+
+
+def stamp_duty_paid(
+    ledger: Ledger,
+    *,
+    as_of: date_ | None = None,
+    fiscal_year: int | None = None,
+    kind: str | None = None,
+) -> Decimal:
+    return sum(
+        (
+            Decimal(p.amount)
+            for p in ledger.stamp_payments
+            if (as_of is None or p.paid_on <= as_of)
+            and (fiscal_year is None or p.fiscal_year == fiscal_year)
+            and (kind is None or p.kind == kind)
+        ),
+        Decimal("0"),
+    )
+
+
+def stamp_duty_net(ledger: Ledger, as_of: date_) -> Decimal:
+    """Bollo owed by `as_of` minus what was paid: negative only if overpaid."""
+    return stamp_duty_accrued(ledger, as_of) - stamp_duty_paid(ledger, as_of=as_of)
+
+
+def stamp_duty_due_date(year: int, quarter: int, amounts: dict[tuple[int, int], Decimal]) -> date_:
+    """
+    End of the month after the quarter (31 May, 30 September, 30 November)
+    and the last day of February for the fourth — except that a first
+    quarter under €5,000 may go with the second, and a first plus second
+    under €5,000 with the third (30 November). With €2 an invoice a
+    freelancer is always under, so in practice: 30 November for the first
+    three quarters, February for the fourth. Moved to the next working day.
+
+    The deferral is taken whenever allowed: it is the date a direct debit
+    authorised on the portal is taken on.
+    """
+    q1 = amounts.get((year, 1), Decimal("0"))
+    q2 = amounts.get((year, 2), Decimal("0"))
+    if quarter == 4:
+        due = date_(year + 1, 3, 1) - timedelta(days=1)
+    elif quarter == 3 or (q1 + q2 < STAMP_DUTY_DEFERRAL_LIMIT):
+        due = date_(year, 11, 30)
+    elif quarter == 1 and q1 < STAMP_DUTY_DEFERRAL_LIMIT:
+        due = date_(year, 9, 30)
+    else:
+        due = date_(year, 5, 31) if quarter == 1 else date_(year, 9, 30)
+    return next_business_day(due)
+
+
 def tax_liability(ledger: Ledger, as_of: date_) -> Decimal:
-    """Accrued on collected income, net of every payment made by `as_of`."""
+    """Accrued on collected income (and the bollo on delivered invoices), net
+    of every payment made by `as_of`."""
     accrued = sum(
         (
             year_figures(ledger, year, as_of).liability
@@ -398,7 +572,7 @@ def tax_liability(ledger: Ledger, as_of: date_) -> Decimal:
         ),
         Decimal("0"),
     )
-    return accrued - paid(ledger, as_of=as_of)
+    return accrued - paid(ledger, as_of=as_of) + stamp_duty_net(ledger, as_of)
 
 
 @dataclass(frozen=True)
@@ -428,6 +602,10 @@ def tax_position(ledger: Ledger, as_of: date_) -> TaxPosition:
     accrued carries the surplus forward to the next one, as the compensation
     in its F24 would; a surplus nothing closed absorbs is credit. debt −
     credit is always `tax_liability`.
+
+    The bollo is settled on its own: what's owed and unpaid is debt, an
+    overpayment (rare: a quarter paid before its invoices were recorded)
+    is credit.
     """
     years = ledger.collected_years() | {p.fiscal_year for p in ledger.payments}
     debt = credit = carried = Decimal("0")
@@ -442,6 +620,11 @@ def tax_position(ledger: Ledger, as_of: date_) -> TaxPosition:
         if net > 0:
             debt += net
         carried = -net if net < 0 else Decimal("0")
+    stamp = stamp_duty_net(ledger, as_of)
+    if stamp > 0:
+        debt += stamp
+    else:
+        credit -= stamp
     return TaxPosition(debt=debt, credit=credit + carried)
 
 
@@ -469,8 +652,8 @@ def cash_requirement(ledger: Ledger, as_of: date_) -> Decimal:
     """
     What the F24s will still ask for the income collected by `as_of`:
     closed years' balances, this year's advances (due whatever this year
-    brings in) or its accrued taxes if larger, and the advances that this
-    year's income already commits next year to.
+    brings in) or its accrued taxes if larger, the advances that this
+    year's income already commits next year to, and the unpaid bollo.
     """
     current = as_of.year
     years = ledger.collected_years() | {p.fiscal_year for p in ledger.payments}
@@ -484,6 +667,8 @@ def cash_requirement(ledger: Ledger, as_of: date_) -> Decimal:
     # Every payment made so far covers one of the terms above (or a later
     # year's, which can only lower what's left).
     total -= paid(ledger, as_of=as_of)
+    # The bollo on what's been delivered: owed whether the client paid or not.
+    total += stamp_duty_net(ledger, as_of)
     return max(total, Decimal("0"))
 
 
@@ -613,17 +798,69 @@ class Deadline:
     amount_due: Decimal
     amount_paid: Decimal
     is_estimate: bool
+    # Scheduled but not taken yet: neither paid nor still to arrange.
+    amount_scheduled: Decimal = Decimal("0")
+    scheduled_on: date_ | None = None
+
+    @property
+    def is_arranged(self) -> bool:
+        """
+        Something was paid or scheduled for this line. The amount computed
+        here is an estimate — the accountant's F24 can differ by a few euro —
+        so a line counts as handled once anything is booked against it,
+        rather than nagging about the difference forever.
+        """
+        return self.amount_paid > 0 or self.amount_scheduled > 0
+
+
+def _scheduled(
+    ledger: Ledger, fiscal_year: int, component: str, kind: str
+) -> tuple[Decimal, date_ | None]:
+    rows = [
+        p
+        for p in ledger.scheduled
+        if p.fiscal_year == fiscal_year and p.component == component and p.kind == kind
+    ]
+    amount = sum((Decimal(p.amount) for p in rows), Decimal("0"))
+    return amount, min((p.paid_on for p in rows), default=None)
 
 
 def deadlines(ledger: Ledger, year: int, as_of: date_) -> list[Deadline]:
+    """The F24s falling due in `year` and the next one."""
+    return deadlines_in(ledger, (year, year + 1), as_of)
+
+
+def deadlines_in(ledger: Ledger, due_years: Iterable[int], as_of: date_) -> list[Deadline]:
     """
-    The F24s falling due in `year` and the next one: 30 June (balance of
-    the year before + first advance), 30 November (second advance). Based
-    on a year still in progress, they're estimates on what's collected so
-    far.
+    The F24 lines falling due in `due_years`: 30 June (balance of the year
+    before + first advance), 30 November (second advance), each moved to the
+    next working day, plus the bollo's quarters (`stamp_duty_due_date`).
+    Based on a year (or quarter) still in progress, they're estimates on
+    what's collected (delivered) so far.
     """
     result: list[Deadline] = []
-    for due_year in (year, year + 1):
+
+    def add(due_date, fiscal_year, component, kind, amount_due, amount_paid, is_estimate):
+        scheduled, scheduled_on = _scheduled(ledger, fiscal_year, component, kind)
+        if amount_due == 0 and amount_paid == 0 and scheduled == 0:
+            return
+        result.append(
+            Deadline(
+                due_date=due_date,
+                fiscal_year=fiscal_year,
+                component=component,
+                kind=kind,
+                amount_due=amount_due,
+                amount_paid=amount_paid,
+                is_estimate=is_estimate,
+                amount_scheduled=scheduled,
+                scheduled_on=scheduled_on,
+            )
+        )
+
+    stamps = stamp_duty_by_quarter(ledger)
+    stamps_so_far = stamp_duty_by_quarter(ledger, as_of)
+    for due_year in sorted(set(due_years)):
         basis = due_year - 1
         closed = as_of > date_(basis, 12, 31)
         figures = year_figures(ledger, basis, None if closed else as_of)
@@ -639,7 +876,8 @@ def deadlines(ledger: Ledger, year: int, as_of: date_) -> list[Deadline]:
             - paid(ledger, fiscal_year=basis, component="inps", kinds=advance_kinds),
             Decimal("0"),
         )
-        june, november = date_(due_year, 6, 30), date_(due_year, 11, 30)
+        june = next_business_day(date_(due_year, 6, 30))
+        november = next_business_day(date_(due_year, 11, 30))
         rows = [
             (june, basis, "substitute_tax", "balance", balance_tax),
             (june, basis, "inps", "balance", balance_inps),
@@ -652,19 +890,24 @@ def deadlines(ledger: Ledger, year: int, as_of: date_) -> list[Deadline]:
             amount_paid = paid(
                 ledger, fiscal_year=fiscal_year, component=component, kinds=(kind,)
             )
-            if amount_due == 0 and amount_paid == 0:
-                continue
-            result.append(
-                Deadline(
-                    due_date=due_date,
-                    fiscal_year=fiscal_year,
-                    component=component,
-                    kind=kind,
-                    amount_due=amount_due,
-                    amount_paid=amount_paid,
-                    is_estimate=not closed,
-                )
+            add(due_date, fiscal_year, component, kind, amount_due, amount_paid, not closed)
+
+        # The bollo: this year's first three quarters, last year's fourth.
+        for stamp_year, quarter in ((basis, 4), (due_year, 1), (due_year, 2), (due_year, 3)):
+            kind = QUARTER_KINDS[quarter - 1]
+            # Invoices dated ahead (issued today for next week) count from
+            # their date, so the estimate uses what's delivered so far.
+            due_amount = stamps_so_far.get((stamp_year, quarter), Decimal("0"))
+            add(
+                stamp_duty_due_date(stamp_year, quarter, stamps),
+                stamp_year,
+                STAMP_DUTY_COMPONENT,
+                kind,
+                due_amount,
+                stamp_duty_paid(ledger, fiscal_year=stamp_year, kind=kind),
+                as_of <= quarter_end(stamp_year, quarter),
             )
+    result.sort(key=lambda d: (d.due_date, d.component != STAMP_DUTY_COMPONENT))
     return result
 
 
@@ -725,7 +968,7 @@ def load_ledger(db: Session, user: User) -> Ledger:
         .filter(
             Invoice.user_id == user.id,
             Invoice.deleted_at.is_(None),
-            Invoice.collected_on.isnot(None),
+            Invoice.collected_on.isnot(None) | Invoice.stamp_duty.is_(True),
         )
         .all()
     )
@@ -734,11 +977,15 @@ def load_ledger(db: Session, user: User) -> Ledger:
         .filter(TaxPayment.user_id == user.id, TaxPayment.deleted_at.is_(None))
         .all()
     )
+    paid_rows = [p for p in payments if p.status == "paid"]
     years = db.query(FlatRateYear).filter(FlatRateYear.user_id == user.id).all()
     settings = db.query(FlatRateSettings).filter(FlatRateSettings.user_id == user.id).first()
     return Ledger(
-        invoices=invoices,
-        payments=payments,
+        invoices=[inv for inv in invoices if inv.collected_on is not None],
+        payments=[p for p in paid_rows if p.component in TAX_COMPONENTS],
+        stamped=[inv for inv in invoices if inv.stamp_duty],
+        stamp_payments=[p for p in paid_rows if p.component == STAMP_DUTY_COMPONENT],
+        scheduled=[p for p in payments if p.status == "scheduled"],
         params={row.year: YearRow.from_row(row) for row in years},
         activity_start=settings.activity_start_date if settings else None,
         safety_margin=(

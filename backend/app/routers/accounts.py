@@ -26,8 +26,10 @@ from app.models import (
     Currency,
     SavingsGoal,
     SavingsGoalSource,
+    TaxPayment,
     Transaction,
     User,
+    VehicleDeadline,
 )
 from app.schemas import Account as AccountSchema
 from app.schemas import AccountCreate, AccountUpdate
@@ -43,6 +45,38 @@ def _reject_if_holds_the_tax_provision(db: Session, account: Account, user: User
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This account holds the tax provision — remove it from Fatture first",
+        )
+
+
+def _reject_if_a_debit_is_due(db: Session, account: Account) -> None:
+    """
+    A scheduled F24 or a vehicle deadline paid from the account is checked
+    against its balance; deleted, the account would drop out of the check
+    and the commitment would silently stop being watched.
+    """
+    scheduled = (
+        db.query(TaxPayment)
+        .filter(
+            TaxPayment.account_id == account.id,
+            TaxPayment.status == "scheduled",
+            TaxPayment.deleted_at.is_(None),
+        )
+        .first()
+    )
+    deadline = (
+        db.query(VehicleDeadline)
+        .filter(
+            VehicleDeadline.account_id == account.id,
+            VehicleDeadline.done_on.is_(None),
+            VehicleDeadline.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if scheduled is not None or deadline is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A scheduled payment or a vehicle deadline is due from this account — "
+            "move it to another account first",
         )
 
 
@@ -236,6 +270,7 @@ def delete_account(
     # Same for the P.IVA provision: its total would silently drop and the
     # gap would read as a shortfall.
     _reject_if_holds_the_tax_provision(db, account, current_user)
+    _reject_if_a_debit_is_due(db, account)
 
     account.deleted_at = datetime.now(UTC)
     db.commit()

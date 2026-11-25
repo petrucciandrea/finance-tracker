@@ -128,6 +128,10 @@ class Invoice(Base, TimestampMixin, SoftDeleteMixin):
     rivalsa_rate: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False)
     # €2 bollo charged to the client — revenue too (AdE, risposta 428/2022).
     stamp_duty: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # When SdI delivered it, if not the issue date. The bollo's quarter
+    # follows the delivery (an invoice dated 30 March and delivered on 1
+    # April is a second-quarter one); NULL = the issue date.
+    sdi_delivered_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     collected_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     # Per-invoice override of the year's provision rate.
     provision_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
@@ -161,6 +165,10 @@ class Invoice(Base, TimestampMixin, SoftDeleteMixin):
             "NOT owns_transaction OR transaction_id IS NOT NULL",
             name="ck_invoices_owned_transaction",
         ),
+        CheckConstraint(
+            "sdi_delivered_on IS NULL OR sdi_delivered_on >= issue_date",
+            name="ck_invoices_sdi_delivery",
+        ),
         # One bank movement settles one invoice.
         Index(
             "uq_invoices_transaction",
@@ -174,10 +182,23 @@ class Invoice(Base, TimestampMixin, SoftDeleteMixin):
 class TaxPayment(Base, TimestampMixin, SoftDeleteMixin):
     """
     One F24 line: a saldo or an acconto of either the imposta sostitutiva
-    or the INPS contributions, for a given fiscal year. Paying from an
-    account writes a one-sided `transfer`, not an expense: the cost was
-    already booked as a liability when the income came in, and paying it
-    only swaps cash for a smaller debt.
+    or the INPS contributions for a fiscal year, or one quarter's bollo on
+    the invoices. Paying from an account writes a one-sided `transfer`, not
+    an expense: the cost was already booked as a liability when the income
+    came in (or the invoice went out, for the bollo), and paying it only
+    swaps cash for a smaller debt.
+
+    A payment can be `scheduled` before it is `paid`: a direct debit
+    authorised on the AdE portal, or an F24 booked for a future date at the
+    bank, leaves the account only on the day it falls due. Until then it
+    moves nothing — no cash leg, no lower debt — and `paid_on` is the date
+    the debit is expected; `account_id` says which account it will hit, so
+    that account's balance can be checked against it. Confirming it writes
+    the leg (or links the movement imported from the bank statement) on the
+    actual date. Counting it earlier would take the cash out of the account
+    days before the bank does, and dating the leg in the future would be
+    worse: balances sum every movement whatever its date, while the debt
+    only drops on `paid_on`, so net worth would count the payment twice.
     """
 
     __tablename__ = "tax_payments"
@@ -186,25 +207,53 @@ class TaxPayment(Base, TimestampMixin, SoftDeleteMixin):
     user_id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
     )
+    status: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="paid", server_default="paid"
+    )
     paid_on: Mapped[date] = mapped_column(Date, nullable=False)
     fiscal_year: Mapped[int] = mapped_column(Integer, nullable=False)
     component: Mapped[str] = mapped_column(String(20), nullable=False)
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # The account the money leaves: the one a scheduled debit will hit, then
+    # the leg's. NULL for a payment recorded without a movement.
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=True
+    )
     transaction_id: Mapped[uuid.UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("transactions.id"), nullable=True
     )
+    # True when the leg was written from here; false when it is a movement
+    # imported from the bank and linked on confirmation, which belongs to the
+    # statement and goes back to being an expense when unlinked instead of
+    # being retired.
+    owns_transaction: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
 
     transaction: Mapped["Transaction | None"] = relationship()
+    account: Mapped["Account | None"] = relationship()
 
     __table_args__ = (
         CheckConstraint("amount > 0", name="ck_tax_payments_amount"),
+        CheckConstraint("status in ('scheduled','paid')", name="ck_tax_payments_status"),
         CheckConstraint(
-            "component in ('substitute_tax','inps')", name="ck_tax_payments_component"
+            "component in ('substitute_tax','inps','stamp_duty')",
+            name="ck_tax_payments_component",
         ),
         CheckConstraint(
-            "kind in ('balance','first_advance','second_advance')", name="ck_tax_payments_kind"
+            "kind in ('balance','first_advance','second_advance','q1','q2','q3','q4')",
+            name="ck_tax_payments_kind",
+        ),
+        # The bollo is paid per quarter, the taxes per saldo/acconto.
+        CheckConstraint(
+            "(component = 'stamp_duty') = (kind in ('q1','q2','q3','q4'))",
+            name="ck_tax_payments_component_kind",
+        ),
+        CheckConstraint(
+            "status <> 'scheduled' OR (account_id IS NOT NULL AND transaction_id IS NULL)",
+            name="ck_tax_payments_scheduled",
         ),
     )
 

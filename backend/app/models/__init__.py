@@ -612,5 +612,6 @@ from app.models.physical_asset import (  # noqa: F401,E402
     PhysicalAsset,
     PhysicalAssetMovement,
     PhysicalAssetValuation,
+    VehicleDeadline,
 )
 from app.models.refresh_token import RefreshToken  # noqa: F401,E402

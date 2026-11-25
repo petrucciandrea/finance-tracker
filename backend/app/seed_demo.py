@@ -52,6 +52,7 @@ from app.models import (
     TaxPayment,
     Transaction,
     User,
+    VehicleDeadline,
 )
 from app.services import asset_prices
 from app.services import flat_rate as flat_rate_service
@@ -138,12 +139,9 @@ FIRST_MONTH_FEES = 600
 MONTHLY_GROWTH = 280
 # Above this a month's work is split between the retainer and a project.
 SPLIT_ABOVE = 2000
-F24_KIND_LABELS = {
-    "balance": "saldo",
-    "first_advance": "1° acconto",
-    "second_advance": "2° acconto",
-}
-F24_TAX_LABELS = {"substitute_tax": "imposta sostitutiva", "inps": "INPS"}
+# A bollo debit due this close is shown as authorised on the AdE portal
+# (scheduled); one further off is left for the user to arrange.
+SCHEDULE_BOLLO_WITHIN = timedelta(days=30)
 
 
 def create_categories(db: Session, user: User) -> dict[str, Category]:
@@ -777,7 +775,7 @@ class Seeder:
         price: Decimal,
         depreciation: str,
         valuations: list[tuple[date_, Decimal, str]] | None = None,
-    ) -> None:
+    ) -> PhysicalAsset:
         # Bought before the history starts, so no cash leg: nothing to pay it from.
         asset = PhysicalAsset(
             user_id=self.user.id,
@@ -798,6 +796,28 @@ class Seeder:
                     physical_asset_id=asset.id, date=day, value=value, notes=notes
                 )
             )
+        return asset
+
+    def add_deadline(
+        self,
+        vehicle: PhysicalAsset,
+        kind: str,
+        in_days: int,
+        amount: Decimal | None = None,
+        account: str | None = None,
+    ) -> None:
+        """A renewal relative to today: the window slides, and so do the reminders."""
+        self.db.add(
+            VehicleDeadline(
+                user_id=self.user.id,
+                physical_asset_id=vehicle.id,
+                kind=kind,
+                due_date=self.today + timedelta(days=in_days),
+                amount=amount,
+                currency=BASE_CURRENCY,
+                account_id=self.acc[account].id if account else None,
+            )
+        )
 
     def add_metal(
         self,
@@ -868,7 +888,7 @@ class Seeder:
         self.load_metal_spots(ago(160))
 
         # Vehicles bought years ago; the car has had a dealer appraisal since.
-        self.add_vehicle(
+        golf = self.add_vehicle(
             "Volkswagen Golf 1.6 TDI",
             "car",
             date_(2021, 9, 18),
@@ -876,7 +896,14 @@ class Seeder:
             "0.11",
             [(ago(120), money(9600), "Quotazione concessionario")],
         )
-        self.add_vehicle("Honda SH 350i", "motorcycle", date_(2024, 4, 12), money(5900), "0.10")
+        scooter = self.add_vehicle(
+            "Honda SH 350i", "motorcycle", date_(2024, 4, 12), money(5900), "0.10"
+        )
+        # One renewal close enough to show in the alerts, paid from the current account.
+        self.add_deadline(golf, "insurance", 9, money(540), "intesa")
+        self.add_deadline(golf, "road_tax", 70, money(198), "intesa")
+        self.add_deadline(golf, "service", 150)
+        self.add_deadline(scooter, "inspection", 120, money(79))
 
         # Gold coins: some already owned, one more bought from the savings account.
         self.add_metal(
@@ -981,7 +1008,10 @@ class Seeder:
                 "Accantonamento tasse",
             )
         for payment in payments:
-            if payment.paid_on >= self.start:
+            if payment.status == "scheduled":
+                # Nothing moves until the debit is taken: only the account it will hit.
+                payment.account_id = self.acc["tasse"].id
+            elif payment.paid_on >= self.start:
                 leg = create_cash_leg(
                     self.db,
                     account=self.acc["tasse"],
@@ -989,13 +1019,14 @@ class Seeder:
                     currency=BASE_CURRENCY,
                     rate=Decimal(1),
                     on_date=payment.paid_on,
-                    description=(
-                        f"F24 {F24_TAX_LABELS[payment.component]} — "
-                        f"{F24_KIND_LABELS[payment.kind]} {payment.fiscal_year}"
+                    description="F24 "
+                    + flat_rate_service.payment_label(
+                        payment.component, payment.kind, payment.fiscal_year
                     ),
                     category_id=self.cat["F24"].id,
                 )
                 payment.transaction_id = leg.id
+                payment.account_id = self.acc["tasse"].id
             self.db.add(payment)
         self.db.flush()
 
@@ -1075,6 +1106,9 @@ class Seeder:
         Every F24 line due by today (30 June and 30 November), paid in full on its working
         day. Computed in order on the ledger itself, since each payment changes the next:
         INPS paid in a year is deducted from that year's tax base.
+
+        The bollo, quarter by quarter: paid on its due date when that has passed, scheduled
+        (a direct debit authorised on the portal) when it falls within SCHEDULE_BOLLO_WITHIN.
         """
         payments: list[TaxPayment] = []
         for year in range(ACTIVITY_START.year + 1, self.today.year + 1):
@@ -1083,7 +1117,9 @@ class Seeder:
                     continue
                 for line in flat_rate_service.deadlines(ledger, year, due):
                     owed = line.amount_due - line.amount_paid
-                    if line.due_date != due or owed <= 0:
+                    if line.component == flat_rate_service.STAMP_DUTY_COMPONENT:
+                        continue
+                    if line.due_date != flat_rate_service.next_business_day(due) or owed <= 0:
                         continue
                     payment = TaxPayment(
                         user_id=self.user.id,
@@ -1095,6 +1131,22 @@ class Seeder:
                     )
                     ledger.payments.append(payment)
                     payments.append(payment)
+
+        quarters = flat_rate_service.stamp_duty_by_quarter(ledger)
+        for (year, quarter), owed in sorted(quarters.items()):
+            due = flat_rate_service.stamp_duty_due_date(year, quarter, quarters)
+            if due > self.today + SCHEDULE_BOLLO_WITHIN:
+                continue
+            payment = TaxPayment(
+                user_id=self.user.id,
+                status="paid" if due <= self.today else "scheduled",
+                paid_on=due,
+                fiscal_year=year,
+                component=flat_rate_service.STAMP_DUTY_COMPONENT,
+                kind=flat_rate_service.QUARTER_KINDS[quarter - 1],
+                amount=owed,
+            )
+            payments.append(payment)
         return payments
 
     # -- sanity -------------------------------------------------------------

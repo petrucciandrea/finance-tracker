@@ -11,6 +11,7 @@ import type {
   InvoiceUpdatePayload,
   ProvisionSourceCreatePayload,
   TaxPaymentCreatePayload,
+  TaxPaymentExecutePayload,
   TaxPaymentUpdatePayload,
 } from '@/types'
 
@@ -50,6 +51,14 @@ export function useCollectionCandidates(invoiceId: string | null) {
     queryKey: [...FLAT_RATE_KEY, 'candidates', invoiceId],
     queryFn: () => flatRateApi.collectionCandidates(invoiceId!),
     enabled: invoiceId !== null,
+  })
+}
+
+export function useDebitCandidates(paymentId: string | null) {
+  return useQuery({
+    queryKey: [...FLAT_RATE_KEY, 'debit-candidates', paymentId],
+    queryFn: () => flatRateApi.debitCandidates(paymentId!),
+    enabled: paymentId !== null,
   })
 }
 
@@ -129,6 +138,19 @@ export function useUpdateTaxPayment() {
 export function useDeleteTaxPayment() {
   const onSuccess = useInvalidate()
   return useMutation({ mutationFn: (id: string) => flatRateApi.deletePayment(id), onSuccess })
+}
+
+export function useExecuteTaxPayment() {
+  const onSuccess = useInvalidate()
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: TaxPaymentExecutePayload }) => flatRateApi.executePayment(id, payload),
+    onSuccess,
+  })
+}
+
+export function useUnexecuteTaxPayment() {
+  const onSuccess = useInvalidate()
+  return useMutation({ mutationFn: (id: string) => flatRateApi.unexecutePayment(id), onSuccess })
 }
 
 export function useAddProvisionSource() {

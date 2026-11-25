@@ -31,6 +31,7 @@ from app.models import (
     PhysicalAssetValuation,
     Transaction,
     User,
+    VehicleDeadline,
 )
 from app.schemas import (
     MetalMovementCreate,
@@ -385,6 +386,10 @@ def delete_physical_asset(
     for movement in asset.movements:
         movement.deleted_at = now
         _retire_leg(db, movement.transaction_id)
+    # Its reminders go with it: a deleted car has no insurance to renew.
+    db.query(VehicleDeadline).filter(
+        VehicleDeadline.physical_asset_id == asset.id, VehicleDeadline.deleted_at.is_(None)
+    ).update({VehicleDeadline.deleted_at: now}, synchronize_session=False)
     db.commit()
 
 

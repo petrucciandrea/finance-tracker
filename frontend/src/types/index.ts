@@ -825,8 +825,11 @@ export interface ApiErrorResponse {
 
 // --- P.IVA forfettaria (amounts in EUR) ---
 
-export type TaxComponent = 'substitute_tax' | 'inps'
-export type TaxPaymentKind = 'balance' | 'first_advance' | 'second_advance'
+export type TaxComponent = 'substitute_tax' | 'inps' | 'stamp_duty'
+// q1–q4 are the bollo's quarters; the taxes use saldo/acconti.
+export type TaxPaymentKind = 'balance' | 'first_advance' | 'second_advance' | 'q1' | 'q2' | 'q3' | 'q4'
+// scheduled = authorised (a direct debit on the AdE portal), not taken yet: moves nothing.
+export type TaxPaymentStatus = 'scheduled' | 'paid'
 export type InvoiceStatus = 'collected' | 'outstanding'
 
 export interface FlatRateSettings {
@@ -884,6 +887,8 @@ export interface Invoice {
   rivalsa_amount: string
   stamp_duty: boolean
   stamp_duty_amount: string
+  // When SdI delivered it, if not the issue date: the bollo's quarter follows it.
+  sdi_delivered_on: string | null
   total: string
   // The collection year once collected, the issue year until then.
   fiscal_year: number
@@ -912,6 +917,7 @@ export interface InvoiceCreatePayload {
   rivalsa_rate?: string | null
   // null/omitted = automatic above €77,47
   stamp_duty?: boolean | null
+  sdi_delivered_on?: string | null
   provision_rate?: string | null
   notes?: string | null
 }
@@ -928,6 +934,8 @@ export interface InvoiceCollectPayload {
 
 export interface TaxPayment {
   id: string
+  status: TaxPaymentStatus
+  // For a scheduled one: the day the debit is expected.
   paid_on: string
   fiscal_year: number
   component: TaxComponent
@@ -935,6 +943,8 @@ export interface TaxPayment {
   amount: string
   notes: string | null
   transaction_id: string | null
+  // false = a movement imported from the bank, linked on confirmation.
+  owns_transaction: boolean
   account_id: string | null
   created_at: string
 }
@@ -946,11 +956,21 @@ export interface TaxPaymentCreatePayload {
   kind: TaxPaymentKind
   amount: string
   notes?: string | null
-  account_id?: string | null
+  status?: TaxPaymentStatus
+  // The account it left (paid) or will leave (scheduled): required, 422 without.
+  account_id: string
   category_id?: string | null
 }
 
-export type TaxPaymentUpdatePayload = Partial<Omit<TaxPaymentCreatePayload, 'account_id' | 'category_id'>>
+// account_id: scheduled payments only.
+export type TaxPaymentUpdatePayload = Partial<Omit<TaxPaymentCreatePayload, 'category_id' | 'status'>>
+
+export interface TaxPaymentExecutePayload {
+  paid_on: string
+  // Link the debit imported from the bank, or omit to write it on the scheduled account.
+  transaction_id?: string | null
+  category_id?: string | null
+}
 
 export interface ProvisionSource {
   id: string
@@ -983,7 +1003,10 @@ export interface F24Deadline {
   kind: TaxPaymentKind
   amount_due: string
   amount_paid: string
-  // Computed on a year that hasn't closed yet.
+  // Scheduled and not taken yet; scheduled_on is the earliest debit date.
+  amount_scheduled: string
+  scheduled_on: string | null
+  // Computed on a year (or, for the bollo, a quarter) that hasn't closed yet.
   is_estimate: boolean
 }
 
@@ -997,9 +1020,101 @@ export interface FlatRateYearFigures {
   liability: string
   advances_due: string
   paid: string
+  // Owed on the invoices delivered in the year, and paid for them so far.
+  stamp_duty: string
+  stamp_duty_paid: string
   to_provision: string
   outstanding: string
   invoice_count: number
+}
+
+export type VehicleDeadlineKind = 'insurance' | 'road_tax' | 'inspection' | 'service' | 'other'
+
+export interface VehicleDeadline {
+  id: string
+  physical_asset_id: string
+  kind: VehicleDeadlineKind
+  label: string | null
+  due_date: string
+  amount: string | null
+  // The account's currency when there is one, else the vehicle's.
+  currency: string
+  // Paid from this account: the amount is a commitment on it until done.
+  account_id: string | null
+  notes: string | null
+  done_on: string | null
+  created_at: string
+}
+
+export interface VehicleDeadlineCreatePayload {
+  physical_asset_id: string
+  kind: VehicleDeadlineKind
+  label?: string | null
+  due_date: string
+  amount?: string | null
+  account_id?: string | null
+  notes?: string | null
+}
+
+export type VehicleDeadlineUpdatePayload = Partial<Omit<VehicleDeadlineCreatePayload, 'physical_asset_id'>>
+
+export interface VehicleDeadlineCompletePayload {
+  done_on: string
+  // Set = create the next occurrence too.
+  next_due_date?: string | null
+}
+
+export type AlertKind =
+  | 'account_short'
+  | 'account_near'
+  | 'f24_overdue'
+  | 'f24_upcoming'
+  | 'scheduled_unconfirmed'
+  | 'vehicle_overdue'
+  | 'vehicle_upcoming'
+
+/** Structured, so the client words it and formatAmount masks the figures. */
+export interface Alert {
+  // Stable while the cause is unchanged: a dismissal is remembered by it.
+  id: string
+  kind: AlertKind
+  tone: 'danger' | 'warn'
+  // every_visit: back on each app open until solved. once: dismissed for good (until the id changes).
+  repeat: 'every_visit' | 'once'
+  label: string
+  due_date: string | null
+  amount: string | null
+  currency: string | null
+  account_id: string | null
+  account_name: string | null
+  balance: string | null
+  committed: string | null
+  margin: string | null
+  link: string | null
+}
+
+export interface CommitmentItem {
+  label: string
+  due_date: string
+  amount: string
+}
+
+export interface AccountCommitment {
+  account_id: string
+  account_name: string
+  currency: string
+  balance: string
+  committed: string
+  margin: string
+  // Below threshold = close to it; below committed = not enough.
+  threshold: string
+  last_movement_on: string | null
+  items: CommitmentItem[]
+}
+
+export interface AlertsResponse {
+  alerts: Alert[]
+  commitments: AccountCommitment[]
 }
 
 export interface FlatRateSummary {

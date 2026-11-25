@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.routers import (
     accounts,
+    alerts,
     auth,
     budgets,
     categories,
@@ -23,6 +24,7 @@ from app.routers import (
     portfolio,
     savings_goals,
     transactions,
+    vehicle_deadlines,
 )
 from app.services.csv_import import CsvImportError
 
@@ -143,6 +145,8 @@ app.include_router(savings_goals.router)
 app.include_router(portfolio.router)
 app.include_router(physical_assets.router)
 app.include_router(flat_rate.router)
+app.include_router(vehicle_deadlines.router)
+app.include_router(alerts.router)
 
 
 @app.get("/health", tags=["health"])

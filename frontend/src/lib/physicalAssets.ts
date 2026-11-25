@@ -1,4 +1,4 @@
-import type { MetalForm, PreciousMetal, VehicleType } from '@/types'
+import type { MetalForm, PreciousMetal, VehicleDeadlineKind, VehicleType } from '@/types'
 
 export const VEHICLE_TYPE_LABELS: Record<VehicleType, string> = {
   car: 'Auto',
@@ -62,4 +62,31 @@ export function millesimiToPurity(value: string): string {
 export function purityToMillesimi(purity: string): string {
   // Drop trailing zeros: 0.7500 → "750", 0.9999 → "999.9".
   return String(Number((Number(purity) * 1000).toFixed(1)))
+}
+
+// Must match services/alerts.py: VEHICLE_DEADLINE_LABELS.
+export const VEHICLE_DEADLINE_LABELS: Record<VehicleDeadlineKind, string> = {
+  insurance: 'Assicurazione',
+  road_tax: 'Bollo auto',
+  inspection: 'Revisione',
+  service: 'Tagliando',
+  other: 'Altro',
+}
+
+// How far the next occurrence usually is: a year, two for the inspection
+// (after the first one, four years from registration). Only a default.
+const NEXT_DEADLINE_YEARS: Record<VehicleDeadlineKind, number> = {
+  insurance: 1,
+  road_tax: 1,
+  inspection: 2,
+  service: 1,
+  other: 1,
+}
+
+export function nextDeadlineDate(kind: VehicleDeadlineKind, due: string): string {
+  const [y, m, d] = due.split('-').map(Number)
+  const year = y + NEXT_DEADLINE_YEARS[kind]
+  // 29 February rolls back to the 28th in a non-leap year.
+  const last = new Date(Date.UTC(year, m, 0)).getUTCDate()
+  return `${year}-${String(m).padStart(2, '0')}-${String(Math.min(d, last)).padStart(2, '0')}`
 }

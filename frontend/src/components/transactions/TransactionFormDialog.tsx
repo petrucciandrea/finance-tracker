@@ -3,6 +3,7 @@ import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { CategorySelect } from '@/components/transactions/CategorySelect'
+import { CommitmentWarning } from '@/components/transactions/CommitmentWarning'
 import { Button } from '@/components/ui/Button'
 import { Dialog } from '@/components/ui/Dialog'
 import { ErrorBlock } from '@/components/ui/EmptyState'
@@ -136,6 +137,7 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
   const lentEnabled = useWatch({ control, name: 'lent_enabled' })
   const lentAmount = useWatch({ control, name: 'lent_amount' })
   const amountValue = useWatch({ control, name: 'amount' })
+  const currencyValue = useWatch({ control, name: 'currency' })
   const repaysId = useWatch({ control, name: 'repays_transaction_id' })
   const { data: openCredits } = useOpenCredits(type === 'income')
   const isRepayment = type === 'income' && !!repaysId
@@ -404,6 +406,11 @@ function TransactionForm({ transaction, onDone }: { transaction?: Transaction | 
           <input id="tx-description" className="field" {...register('description')} />
         </Field>
       </div>
+
+      {/* Money leaving an account: an expense, or the outgoing side of a new giroconto. */}
+      {!editing && (type === 'expense' || type === 'transfer') && fromAccountId && (
+        <CommitmentWarning accountId={fromAccountId} outflow={parseAmount(amountValue)} currency={currencyValue || fromAccount?.currency || ''} />
+      )}
 
       {serverError && <ErrorBlock>{serverError}</ErrorBlock>}
 

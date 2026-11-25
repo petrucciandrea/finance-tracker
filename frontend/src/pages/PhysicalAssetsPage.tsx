@@ -1,5 +1,6 @@
 import { useState, type ComponentType, type SVGProps } from 'react'
 import { PhysicalAssetForm } from '@/components/physical-assets/PhysicalAssetForm'
+import { VehicleDeadlinesCard } from '@/components/physical-assets/VehicleDeadlines'
 import { MovementsDialog, SellDialog, ValuationsDialog } from '@/components/physical-assets/PhysicalAssetDialogs'
 import { Delta } from '@/components/ui/Amount'
 import { Button } from '@/components/ui/Button'
@@ -305,6 +306,8 @@ export function PhysicalAssetsPage() {
           </Card>
         ))
       )}
+
+      {!isLoading && !isError && <VehicleDeadlinesCard vehicles={vehicles} />}
 
       <Dialog
         open={form !== null}

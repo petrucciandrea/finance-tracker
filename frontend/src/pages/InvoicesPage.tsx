@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
-import { CollectDialog, InvoiceDialog, TaxPaymentDialog, type PaymentDraft } from '@/components/flat-rate/FlatRateDialogs'
+import { CollectDialog, ExecutePaymentDialog, InvoiceDialog, TaxPaymentDialog, type PaymentDraft } from '@/components/flat-rate/FlatRateDialogs'
 import { YearPicker } from '@/components/flat-rate/YearPicker'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
@@ -21,10 +21,11 @@ import {
   useInvoices,
   useTaxPayments,
   useUncollectInvoice,
+  useUnexecuteTaxPayment,
 } from '@/hooks/useFlatRate'
 import { apiErrorMessage } from '@/lib/apiError'
-import { provisionRateLabel, REVENUE_LIMIT, TAX_COMPONENT_LABELS, TAX_KIND_LABELS } from '@/lib/flatRate'
-import { formatAmount, formatFullDate, formatPercent, formatQuantity, formatShortDate, toNumber } from '@/lib/format'
+import { provisionRateLabel, REVENUE_LIMIT, taxLineLabel } from '@/lib/flatRate'
+import { formatAmount, formatFullDate, formatPercent, formatQuantity, formatShortDate, toISODate, toNumber } from '@/lib/format'
 import type { F24Deadline, FlatRateSummary, Invoice, TaxPayment } from '@/types'
 
 const EUR = 'EUR'
@@ -197,19 +198,22 @@ function YearBreakdown({ summary }: { summary: FlatRateSummary }) {
         <Line label="Tasse e contributi dell'anno" value={f.liability} strong />
         <Line label="Acconti dovuti per l'anno" value={f.advances_due} hint="Calcolati sull'anno precedente" />
         <Line label="Versato per l'anno" value={f.paid} />
+        {toNumber(f.stamp_duty) > 0 && (
+          <Line
+            label="Bolli sulle fatture"
+            value={f.stamp_duty}
+            hint={`Dovuti allo Stato sulle fatture consegnate nell'anno, incassate o no · versati ${formatAmount(f.stamp_duty_paid, EUR)} €`}
+          />
+        )}
         <Line label="Da accantonare sulle fatture" value={f.to_provision} hint={`Al ${provisionRateLabel(p)}${p.provision_rate === null ? ' consigliato' : ''}, salvo eccezioni per fattura`} />
       </div>
     </Card>
   )
 }
 
-function deadlineLabel(d: F24Deadline): string {
-  const kind = TAX_KIND_LABELS[d.kind]
-  return `${kind} ${TAX_COMPONENT_LABELS[d.component].toLowerCase()} ${d.fiscal_year}`
-}
-
 function DeadlinesCard({ deadlines, onPay }: { deadlines: F24Deadline[]; onPay: (draft: PaymentDraft) => void }) {
   const dates = [...new Set(deadlines.map((d) => d.due_date))].sort()
+  const today = toISODate(new Date())
   return (
     <Card title="Scadenze F24">
       {deadlines.length === 0 ? (
@@ -230,32 +234,39 @@ function DeadlinesCard({ deadlines, onPay }: { deadlines: F24Deadline[]; onPay: 
               <ul className="mt-1 text-[13px]">
                 {rows.map((d) => {
                   const paid = toNumber(d.amount_paid)
+                  const scheduled = toNumber(d.amount_scheduled)
                   const owed = toNumber(d.amount_due)
                   const settled = paid >= owed - 0.005
+                  const covered = paid + scheduled >= owed - 0.005
+                  const draft: PaymentDraft = {
+                    fiscal_year: d.fiscal_year,
+                    component: d.component,
+                    kind: d.kind,
+                    amount: String(Math.max(owed - paid - scheduled, 0)),
+                    paid_on: d.due_date,
+                  }
                   return (
-                    <li key={`${d.fiscal_year}-${d.component}-${d.kind}`} className="flex items-center gap-2 border-t border-line py-1.5 tabular-nums">
-                      <span className="min-w-0 flex-1">{deadlineLabel(d)}</span>
+                    <li key={`${d.fiscal_year}-${d.component}-${d.kind}`} className="flex flex-wrap items-center gap-2 border-t border-line py-1.5 tabular-nums">
+                      <span className="min-w-0 flex-1">{taxLineLabel(d)}</span>
+                      {!covered && d.due_date < today && <StatusChip kind="over">scaduto</StatusChip>}
                       {paid > 0 && (
                         <StatusChip kind={settled ? 'good' : 'warn'}>
                           {settled ? 'versato' : `versati ${formatAmount(paid, EUR)}`}
                         </StatusChip>
                       )}
+                      {scheduled > 0 && d.scheduled_on && <StatusChip kind="info">programmato il {formatShortDate(d.scheduled_on)}</StatusChip>}
                       <Money value={owed} />
-                      {!settled && (
-                        <Button
-                          size="sm"
-                          onClick={() =>
-                            onPay({
-                              fiscal_year: d.fiscal_year,
-                              component: d.component,
-                              kind: d.kind,
-                              amount: String(Math.max(owed - paid, 0)),
-                              paid_on: d.due_date,
-                            })
-                          }
-                        >
-                          Registra
-                        </Button>
+                      {!covered && (
+                        <span className="flex gap-1.5">
+                          <Button size="sm" onClick={() => onPay({ ...draft, status: 'paid', paid_on: d.due_date > today ? today : d.due_date })}>
+                            Registra
+                          </Button>
+                          {d.due_date >= today && (
+                            <Button size="sm" onClick={() => onPay({ ...draft, status: 'scheduled' })}>
+                              Programma
+                            </Button>
+                          )}
+                        </span>
                       )}
                     </li>
                   )
@@ -287,12 +298,14 @@ function PaymentsCard({
           {payments.map((p) => (
             <li key={p.id} className="flex items-center gap-2 border-t border-line py-2 first:border-t-0">
               <div className="min-w-0 flex-1">
-                <div className="font-bold">
-                  {TAX_KIND_LABELS[p.kind]} {TAX_COMPONENT_LABELS[p.component].toLowerCase()} {p.fiscal_year}
+                <div className="flex flex-wrap items-center gap-1.5 font-bold">
+                  {taxLineLabel(p)}
+                  {p.status === 'scheduled' && <StatusChip kind="info">programmato</StatusChip>}
                 </div>
                 <div className="text-[12px] text-ink-3">
-                  {formatFullDate(p.paid_on)}
-                  {p.account_id ? ` · da ${accountName(p.account_id)}` : ''}
+                  {p.status === 'scheduled' ? `addebito previsto il ${formatFullDate(p.paid_on)}` : formatFullDate(p.paid_on)}
+                  {p.account_id ? ` · ${p.status === 'scheduled' ? 'su' : 'da'} ${accountName(p.account_id)}` : ''}
+                  {p.status === 'paid' && p.transaction_id && !p.owns_transaction ? ' · movimento importato' : ''}
                   {p.notes ? ` · ${p.notes}` : ''}
                 </div>
               </div>
@@ -374,6 +387,8 @@ export function InvoicesPage() {
   const uncollect = useUncollectInvoice()
   const deleteInvoice = useDeleteInvoice()
   const deletePayment = useDeleteTaxPayment()
+  const unexecute = useUnexecuteTaxPayment()
+  const [executing, setExecuting] = useState<TaxPayment | null>(null)
 
   const [editing, setEditing] = useState<{ invoice: Invoice | null } | null>(null)
   const [collecting, setCollecting] = useState<Invoice | null>(null)
@@ -419,6 +434,23 @@ export function InvoicesPage() {
 
   function paymentActions(payment: TaxPayment): RowMenuItem[] {
     return [
+      ...(payment.status === 'scheduled'
+        ? [{ label: 'Conferma addebito', onSelect: () => setExecuting(payment) }]
+        : payment.account_id
+          ? [
+              {
+                label: 'Riporta a programmato',
+                onSelect: async () => {
+                  setActionError(null)
+                  try {
+                    await unexecute.mutateAsync(payment.id)
+                  } catch (e) {
+                    setActionError(apiErrorMessage(e))
+                  }
+                },
+              },
+            ]
+          : []),
       { label: 'Modifica', onSelect: () => setPaying({ payment, draft: null }) },
       {
         label: 'Elimina',
@@ -588,6 +620,7 @@ export function InvoicesPage() {
       <InvoiceDialog open={editing !== null} invoice={editing?.invoice ?? null} onClose={() => setEditing(null)} />
       <CollectDialog invoice={collecting} onClose={() => setCollecting(null)} />
       <TaxPaymentDialog open={paying !== null} payment={paying?.payment ?? null} draft={paying?.draft ?? null} onClose={() => setPaying(null)} />
+      <ExecutePaymentDialog payment={executing} onClose={() => setExecuting(null)} />
       <ConfirmDialog
         open={deleting !== null}
         title={deleting?.kind === 'invoice' ? `Eliminare la fattura a ${deleting.item.client}?` : 'Eliminare il versamento?'}
@@ -599,7 +632,9 @@ export function InvoicesPage() {
       >
         {deleting?.kind === 'invoice'
           ? "Se l'entrata sul conto è stata creata da qui, sparisce anche quella. Un movimento importato e collegato resta."
-          : "Sparisce anche l'eventuale uscita registrata sul conto."}
+          : deleting?.kind === 'payment' && deleting.item.transaction_id && !deleting.item.owns_transaction
+            ? "L'addebito importato dall'estratto conto resta: torna una spesa, in «Varie»."
+            : "Sparisce anche l'eventuale uscita registrata sul conto."}
       </ConfirmDialog>
     </>
   )

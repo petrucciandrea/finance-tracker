@@ -499,7 +499,8 @@ def test_collecting_lowers_net_worth_by_the_tax_share_only(
     _collect(client, headers, invoice["id"], collected_on="2025-03-15", account_id=account["id"])
 
     net_worth = _net_worth(client, headers)
-    liability = Decimal("40.64") + Decimal("213.19")
+    # Imposta + INPS, plus the €2 bollo owed to the State since delivery.
+    liability = Decimal("40.64") + Decimal("213.19") + Decimal("2.00")
     assert Decimal(net_worth["total_cash_balance"]) == Decimal("1042.00")
     assert Decimal(net_worth["total_tax_liability"]) == liability
     assert Decimal(net_worth["total_tax_debt"]) == liability
@@ -530,8 +531,9 @@ def test_paying_an_f24_leaves_net_worth_unchanged(
 
     after = _net_worth(client, headers)
     assert Decimal(after["total_net_worth"]) == before
-    assert Decimal(after["total_tax_liability"]) == Decimal("213.19")
-    assert Decimal(after["total_tax_debt"]) == Decimal("213.19")
+    # INPS still due, and the invoice's bollo.
+    assert Decimal(after["total_tax_liability"]) == Decimal("215.19")
+    assert Decimal(after["total_tax_debt"]) == Decimal("215.19")
     assert Decimal(after["total_tax_credit"]) == Decimal("0")
     assert _balance(client, headers, account["id"]) == Decimal("1001.36")
 
@@ -559,13 +561,14 @@ def test_an_advance_paid_ahead_shows_next_to_the_debt(
     assert response.status_code == 201, response.text
 
     after = _net_worth(client, headers)
-    assert Decimal(after["total_tax_debt"]) == Decimal("253.83")
+    # 253.83 of imposta + INPS and the €2 bollo.
+    assert Decimal(after["total_tax_debt"]) == Decimal("255.83")
     assert Decimal(after["total_tax_credit"]) == Decimal("100.00")
-    assert Decimal(after["total_tax_liability"]) == Decimal("153.83")
+    assert Decimal(after["total_tax_liability"]) == Decimal("155.83")
     assert Decimal(after["total_net_worth"]) == before
 
     summary = client.get(f"{URL}/summary?year=2026", headers=headers).json()
-    assert Decimal(summary["tax_debt"]) == Decimal("253.83")
+    assert Decimal(summary["tax_debt"]) == Decimal("255.83")
     assert Decimal(summary["tax_credit"]) == Decimal("100.00")
 
 
@@ -578,9 +581,10 @@ def test_history_subtracts_the_liability(
 
     points = client.get("/api/v1/portfolio/history?period=all", headers=headers).json()["points"]
     last = points[-1]
-    assert Decimal(last["total_liabilities_base_currency"]) == Decimal("253.83")
-    assert Decimal(last["total_net_worth"]) == Decimal("1142.00") - Decimal("253.83")
-    # Before the collection there was nothing to owe.
+    # Imposta + INPS on the collection, and the bollo on the invoice.
+    assert Decimal(last["total_liabilities_base_currency"]) == Decimal("255.83")
+    assert Decimal(last["total_net_worth"]) == Decimal("1142.00") - Decimal("255.83")
+    # Before the invoice there was nothing to owe.
     assert Decimal(points[0]["total_liabilities_base_currency"]) == Decimal("0")
 
 

@@ -203,3 +203,55 @@ class PhysicalAssetMovement(Base, TimestampMixin, SoftDeleteMixin):
             "type = 'buy' OR price IS NOT NULL", name="ck_physical_asset_movements_sale_price"
         ),
     )
+
+
+class VehicleDeadline(Base, TimestampMixin, SoftDeleteMixin):
+    """
+    Something a vehicle falls due for: insurance, road tax, the inspection,
+    a service. Each row is one occurrence; completing it can create the
+    next one (a year on for most, two for the inspection), so the history
+    stays readable instead of a single row whose date keeps moving.
+
+    `amount` + `account_id` make it a commitment on that account, like a
+    scheduled F24: the account's balance is checked against it until it is
+    done. The expense itself is recorded as an ordinary transaction (or
+    arrives from the bank statement) — a deadline is a reminder, not a
+    movement, so completing one writes nothing to the ledger.
+    """
+
+    __tablename__ = "vehicle_deadlines"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    physical_asset_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("physical_assets.id"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(12), nullable=False)
+    # Required for `other`, optional otherwise (e.g. "Kasko").
+    label: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    # The account's currency when there is one, else the vehicle's.
+    currency: Mapped[str] = mapped_column(String(3), ForeignKey("currencies.code"), nullable=False)
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=True
+    )
+    notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    done_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "kind in ('insurance','road_tax','inspection','service','other')",
+            name="ck_vehicle_deadlines_kind",
+        ),
+        CheckConstraint(
+            "kind <> 'other' OR label IS NOT NULL", name="ck_vehicle_deadlines_label"
+        ),
+        CheckConstraint("amount IS NULL OR amount > 0", name="ck_vehicle_deadlines_amount"),
+        # A commitment on an account needs a figure to check the balance against.
+        CheckConstraint(
+            "account_id IS NULL OR amount IS NOT NULL", name="ck_vehicle_deadlines_account"
+        ),
+    )

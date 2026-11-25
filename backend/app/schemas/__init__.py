@@ -15,7 +15,7 @@ from enum import Enum
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -148,12 +148,56 @@ class WorkType(str, Enum):
 class TaxComponent(str, Enum):
     substitute_tax = "substitute_tax"  # imposta sostitutiva
     inps = "inps"
+    stamp_duty = "stamp_duty"  # imposta di bollo sulle fatture elettroniche
 
 
 class TaxPaymentKind(str, Enum):
     balance = "balance"  # saldo
     first_advance = "first_advance"  # 1° acconto (30 giugno)
     second_advance = "second_advance"  # 2° acconto (30 novembre)
+    # The bollo's quarters (codici tributo 2521–2524).
+    q1 = "q1"
+    q2 = "q2"
+    q3 = "q3"
+    q4 = "q4"
+
+
+_QUARTER_KINDS = {"q1", "q2", "q3", "q4"}
+
+
+def check_component_kind(component: "TaxComponent | None", kind: "TaxPaymentKind | None") -> None:
+    if component is None or kind is None:
+        return
+    if (component == TaxComponent.stamp_duty) != (kind.value in _QUARTER_KINDS):
+        raise ValueError("The bollo is paid per quarter (q1–q4), the taxes per saldo/acconto")
+
+
+class TaxPaymentStatus(str, Enum):
+    # Authorised (a direct debit on the AdE portal, an F24 booked at the
+    # bank) but not taken yet: moves nothing until confirmed.
+    scheduled = "scheduled"
+    paid = "paid"
+
+
+class VehicleDeadlineKind(str, Enum):
+    insurance = "insurance"  # assicurazione RC
+    road_tax = "road_tax"  # bollo auto
+    inspection = "inspection"  # revisione
+    service = "service"  # tagliando
+    other = "other"
+
+
+class AlertTone(str, Enum):
+    danger = "danger"
+    warn = "warn"
+
+
+class AlertRepeat(str, Enum):
+    # Shown on every visit until the cause goes away; dismissing it only
+    # hides it until the app is opened again.
+    every_visit = "every_visit"
+    # Dismissed for good, until its `id` changes (the cause changed).
+    once = "once"
 
 
 class InvoiceStatus(str, Enum):
@@ -827,6 +871,108 @@ class PhysicalAssetWithValue(BaseModel):
     created_at: datetime
 
 
+class VehicleDeadlineCreate(BaseModel):
+    physical_asset_id: UUID
+    kind: VehicleDeadlineKind
+    label: str | None = Field(default=None, min_length=1, max_length=100)
+    due_date: date_
+    amount: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=2)
+    # Paid from this account: the amount becomes a commitment on it.
+    account_id: UUID | None = None
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class VehicleDeadlineUpdate(BaseModel):
+    kind: VehicleDeadlineKind | None = None
+    label: str | None = Field(default=None, min_length=1, max_length=100)
+    due_date: date_ | None = None
+    amount: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=2)
+    account_id: UUID | None = None
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class VehicleDeadlineComplete(BaseModel):
+    done_on: date_
+    # Set = create the next occurrence (same kind, label, amount, account).
+    next_due_date: date_ | None = None
+
+
+class VehicleDeadline(ORMBase):
+    id: UUID
+    physical_asset_id: UUID
+    kind: VehicleDeadlineKind
+    label: str | None
+    due_date: date_
+    amount: Decimal | None
+    currency: str
+    account_id: UUID | None
+    notes: str | None
+    done_on: date_ | None
+    created_at: datetime
+
+
+class CommitmentItem(BaseModel):
+    label: str
+    due_date: date_
+    amount: Decimal
+
+
+class AccountCommitment(BaseModel):
+    """What's due to leave an account (scheduled F24s, vehicle deadlines
+    paid from it) against what's in it."""
+
+    account_id: UUID
+    account_name: str
+    currency: str
+    balance: Decimal
+    committed: Decimal
+    # The larger of 15 (in the account's currency) and 20% of `committed`.
+    margin: Decimal
+    # balance below this = "close to it"; below `committed` = not enough.
+    threshold: Decimal
+    # The date of the account's latest movement: a balance is only as fresh
+    # as the last statement imported.
+    last_movement_on: date_ | None
+    items: list[CommitmentItem]
+
+
+class Alert(BaseModel):
+    """
+    One thing that needs attention. Structured rather than a sentence: the
+    client words it and formats the amounts, so "Nascondi importi" masks
+    them like everywhere else.
+
+    kinds: account_short (balance below what's due from it), account_near
+    (above it by less than the margin), f24_overdue / f24_upcoming (lines
+    neither paid nor scheduled), scheduled_unconfirmed (its date passed and
+    the debit wasn't confirmed), vehicle_overdue / vehicle_upcoming.
+    """
+
+    # Stable while its cause is unchanged, so a dismissal can be remembered.
+    id: str
+    kind: str
+    tone: AlertTone
+    repeat: AlertRepeat
+    # What it is about: "bollo fatture — 3° trimestre 2026", "Panda · assicurazione".
+    label: str
+    due_date: date_ | None = None
+    amount: Decimal | None = None
+    currency: str | None = None
+    account_id: UUID | None = None
+    account_name: str | None = None
+    # account_* only.
+    balance: Decimal | None = None
+    committed: Decimal | None = None
+    margin: Decimal | None = None
+    # A page in the app to go and fix it.
+    link: str | None = None
+
+
+class AlertsResponse(BaseModel):
+    alerts: list[Alert]
+    commitments: list[AccountCommitment]
+
+
 class AccountBalance(BaseModel):
     account_id: UUID
     account_name: str
@@ -1204,6 +1350,8 @@ class InvoiceCreate(BaseModel):
     rivalsa_rate: Decimal | None = Field(default=None, ge=0, lt=1, max_digits=5, decimal_places=4)
     # None = automatic: charged when fee + rivalsa exceeds €77.47.
     stamp_duty: bool | None = None
+    # When SdI delivered it, if not the issue date: the bollo's quarter follows it.
+    sdi_delivered_on: date_ | None = None
     provision_rate: Decimal | None = Field(default=None, ge=0, le=1, max_digits=5, decimal_places=4)
     notes: str | None = Field(default=None, max_length=500)
 
@@ -1215,6 +1363,8 @@ class InvoiceUpdate(BaseModel):
     amount: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=2)
     rivalsa_rate: Decimal | None = Field(default=None, ge=0, lt=1, max_digits=5, decimal_places=4)
     stamp_duty: bool | None = None
+    # Clearable: null = delivered on the issue date.
+    sdi_delivered_on: date_ | None = None
     # Clearable (null = back to the year's rate), like number and notes.
     provision_rate: Decimal | None = Field(default=None, ge=0, le=1, max_digits=5, decimal_places=4)
     notes: str | None = Field(default=None, max_length=500)
@@ -1248,6 +1398,7 @@ class Invoice(BaseModel):
     rivalsa_amount: Decimal
     stamp_duty: bool
     stamp_duty_amount: Decimal
+    sdi_delivered_on: date_ | None
     total: Decimal
     # The collection year once collected, the issue year until then.
     fiscal_year: int
@@ -1270,15 +1421,24 @@ class Invoice(BaseModel):
 
 
 class TaxPaymentCreate(BaseModel):
+    # For a scheduled payment: the day the debit is expected.
     paid_on: date_
     fiscal_year: int = Field(ge=2000, le=2100)
     component: TaxComponent
     kind: TaxPaymentKind
     amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
     notes: str | None = Field(default=None, max_length=500)
-    # Optional: paid from this account (a negative one-sided `transfer`).
+    status: TaxPaymentStatus = TaxPaymentStatus.paid
+    # Required (422 without it; Optional only so the error says why). Paid:
+    # the leg (a negative one-sided `transfer`) is written on it. Scheduled:
+    # the account the debit will hit; nothing is written until confirmed.
     account_id: UUID | None = None
     category_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> "TaxPaymentCreate":
+        check_component_kind(self.component, self.kind)
+        return self
 
 
 class TaxPaymentUpdate(BaseModel):
@@ -1288,10 +1448,28 @@ class TaxPaymentUpdate(BaseModel):
     kind: TaxPaymentKind | None = None
     amount: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=2)
     notes: str | None = Field(default=None, max_length=500)
+    # Scheduled: the account the debit will hit. Paid: moves its leg there
+    # (or writes it, for one recorded without an account). Not for one linked
+    # to a movement imported from the bank (409).
+    account_id: UUID | None = None
+
+
+class TaxPaymentExecute(BaseModel):
+    """
+    Confirm a scheduled payment once the debit has happened. Either link the
+    movement imported from the bank statement (`transaction_id`: it becomes
+    a `transfer`, since the cost was booked as a debt already), or let the
+    app write the leg on the scheduled account.
+    """
+
+    paid_on: date_
+    transaction_id: UUID | None = None
+    category_id: UUID | None = None
 
 
 class TaxPayment(BaseModel):
     id: UUID
+    status: TaxPaymentStatus
     paid_on: date_
     fiscal_year: int
     component: TaxComponent
@@ -1299,6 +1477,7 @@ class TaxPayment(BaseModel):
     amount: Decimal
     notes: str | None
     transaction_id: UUID | None
+    owns_transaction: bool
     account_id: UUID | None
     created_at: datetime
 
@@ -1336,7 +1515,10 @@ class F24Deadline(BaseModel):
     kind: TaxPaymentKind
     amount_due: Decimal
     amount_paid: Decimal
-    # True while the year it's computed on hasn't closed yet.
+    # Scheduled and not taken yet; `scheduled_on` is the earliest debit date.
+    amount_scheduled: Decimal
+    scheduled_on: date_ | None
+    # True while the year (or the bollo's quarter) it's computed on hasn't closed yet.
     is_estimate: bool
 
 
@@ -1350,7 +1532,11 @@ class FlatRateYearFigures(BaseModel):
     substitute_tax: Decimal
     liability: Decimal  # substitute_tax + inps
     advances_due: Decimal  # this year's advances, computed on the previous one
-    paid: Decimal  # F24 payments for this fiscal year
+    paid: Decimal  # F24 payments for this fiscal year (imposta + INPS)
+    # Owed on the invoices delivered in the year (any collection state), and
+    # paid for them so far.
+    stamp_duty: Decimal
+    stamp_duty_paid: Decimal
     to_provision: Decimal  # Σ per collected invoice: total × its rate
     outstanding: Decimal  # issued this year, not collected yet
     invoice_count: int

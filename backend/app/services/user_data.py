@@ -35,6 +35,7 @@ OWNED_TABLES: list[tuple[str, str]] = [
     ("invoices", _BY_USER),
     ("flat_rate_years", _BY_USER),
     ("flat_rate_settings", _BY_USER),
+    ("vehicle_deadlines", _BY_USER),
     ("physical_asset_movements", _OF_ASSETS),
     ("physical_asset_valuations", _OF_ASSETS),
     ("physical_assets", _BY_USER),

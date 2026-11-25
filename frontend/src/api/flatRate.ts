@@ -14,6 +14,7 @@ import type {
   ProvisionStatus,
   TaxPayment,
   TaxPaymentCreatePayload,
+  TaxPaymentExecutePayload,
   TaxPaymentUpdatePayload,
   Transaction,
 } from '@/types'
@@ -101,6 +102,21 @@ export async function updatePayment(id: string, payload: TaxPaymentUpdatePayload
 
 export async function deletePayment(id: string): Promise<void> {
   await apiClient.delete(`${BASE}/payments/${id}`)
+}
+
+export async function executePayment(id: string, payload: TaxPaymentExecutePayload): Promise<TaxPayment> {
+  const { data } = await apiClient.post<TaxPayment>(`${BASE}/payments/${id}/execute`, payload)
+  return data
+}
+
+export async function unexecutePayment(id: string): Promise<TaxPayment> {
+  const { data } = await apiClient.post<TaxPayment>(`${BASE}/payments/${id}/unexecute`)
+  return data
+}
+
+export async function debitCandidates(id: string): Promise<Transaction[]> {
+  const { data } = await apiClient.get<Transaction[]>(`${BASE}/payments/${id}/candidates`)
+  return data
 }
 
 export async function getProvision(): Promise<ProvisionStatus> {

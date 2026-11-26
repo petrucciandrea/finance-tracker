@@ -710,3 +710,67 @@ def test_editing_a_legs_category_updates_its_counterpart(
     )
     other = client.get(f"/api/v1/transactions/{incoming['id']}", headers=headers).json()
     assert other["category_id"] is None
+
+
+def test_executing_for_a_goal_without_an_account_links_the_chosen_one(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    main = client.post(
+        "/api/v1/accounts",
+        json={"name": "Conto", "type": "checking", "currency": "EUR", "starting_balance": "1000"},
+        headers=headers,
+    ).json()
+    piggy = client.post(
+        "/api/v1/accounts",
+        json={"name": "Salvadanaio", "type": "savings", "currency": "EUR"},
+        headers=headers,
+    ).json()
+    goal = client.post(
+        "/api/v1/planning/goals",
+        json={"name": "Auto", "kind": "medium_term", "priority": 0,
+              "target_mode": "fixed_amount", "target_amount": "5000"},
+        headers=headers,
+    ).json()
+
+    response = client.post(
+        EXECUTE_URL,
+        json={"items": [{"goal_id": goal["id"], "from_account_id": main["id"],
+                         "to_account_id": piggy["id"], "amount": "300.00"}]},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    linked = client.get(f"/api/v1/planning/goals/{goal['id']}", headers=headers).json()
+    assert [s["account_id"] for s in linked["sources"]] == [piggy["id"]]
+
+
+def test_a_goal_with_an_account_refuses_another_destination(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    accounts = [
+        client.post(
+            "/api/v1/accounts",
+            json={"name": n, "type": "checking", "currency": "EUR", "starting_balance": "1000"},
+            headers=headers,
+        ).json()
+        for n in ("Conto", "Deposito", "Altro")
+    ]
+    goal = client.post(
+        "/api/v1/planning/goals",
+        json={"name": "Emergenza", "kind": "emergency_fund", "priority": 0,
+              "target_mode": "fixed_amount", "target_amount": "5000"},
+        headers=headers,
+    ).json()
+    client.post(f"/api/v1/planning/goals/{goal['id']}/sources",
+                json={"account_id": accounts[1]["id"]}, headers=headers)
+
+    response = client.post(
+        EXECUTE_URL,
+        json={"items": [{"goal_id": goal["id"], "from_account_id": accounts[0]["id"],
+                         "to_account_id": accounts[2]["id"], "amount": "100.00"}]},
+        headers=headers,
+    )
+
+    assert response.status_code == 422

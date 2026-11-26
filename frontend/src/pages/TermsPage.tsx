@@ -18,13 +18,17 @@ export function TermsPage() {
       <p>
         Calcoli, stime e suggerimenti (compresi quelli su tasse, contributi, scadenze fiscali e accantonamenti del
         regime forfettario) sono indicativi e non sostituiscono un commercialista, un consulente finanziario o un
-        professionista abilitato. Le decisioni che prendi restano tue.
+        professionista abilitato. Le decisioni che prendi restano tue. I modelli di allocazione e i paletti sul
+        portafoglio sono esempi generici che scegli e modifichi tu: non indicano prodotti e non sono
+        raccomandazioni personalizzate di investimento.
       </p>
 
       <h2>3. Dati di mercato</h2>
       <p>
         Cambi e prezzi provengono da fonti di terze parti e possono essere ritardati, incompleti o errati. Non
-        garantiamo la loro accuratezza; il valore del patrimonio mostrato è una stima.
+        garantiamo la loro accuratezza; il valore del patrimonio mostrato è una stima. Lo stesso vale per la
+        composizione dei fondi (aree, settori): i dati precaricati sono approssimazioni da fonti pubbliche, con la loro
+        data.
       </p>
 
       <h2>4. Registrazione e account</h2>

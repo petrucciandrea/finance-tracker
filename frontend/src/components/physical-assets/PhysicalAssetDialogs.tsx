@@ -5,6 +5,7 @@ import { Dialog } from '@/components/ui/Dialog'
 import { ErrorBlock } from '@/components/ui/EmptyState'
 import { Field } from '@/components/ui/Field'
 import { SegmentedControl } from '@/components/ui/SegmentedControl'
+import { Tip } from '@/components/ui/Tip'
 import { useAccounts } from '@/hooks/useAccounts'
 import { useCategories } from '@/hooks/useCategories'
 import {
@@ -111,7 +112,12 @@ export function ValuationsDialog({ asset, onClose }: { asset: PhysicalAssetWithV
       onClose={onClose}
       size="md"
       title={asset ? `Valutazioni · ${asset.name}` : ''}
-      description="Una quotazione (concessionario, annuncio, perizia) diventa il nuovo punto di partenza: da quella data la svalutazione riparte dal valore indicato."
+      description={
+        <>
+          Una quotazione diventa il nuovo punto di partenza.{' '}
+          <Tip>Concessionario, annuncio o perizia: da quella data la svalutazione riparte dal valore indicato.</Tip>
+        </>
+      }
     >
       {asset && <ValuationsPanel key={asset.id} asset={asset} />}
     </Dialog>

@@ -15,7 +15,15 @@ from enum import Enum
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -638,6 +646,253 @@ class Asset(ORMBase):
     currency: str
 
 
+class ExposureDimension(str, Enum):
+    asset_class = "asset_class"
+    region = "region"
+    sector = "sector"
+    currency = "currency"
+
+
+# Fixed lists, never free text: two spellings of one region would split it in
+# two. `cash` is an asset class the allocation computes (uninvested cash on
+# investment accounts), never one a product is given.
+EXPOSURE_BUCKETS: dict[str, tuple[str, ...]] = {
+    "asset_class": (
+        "equity", "bond", "money_market", "commodity", "crypto", "real_estate", "other",
+    ),
+    "region": (
+        "north_america", "europe_ex_italy", "italy", "united_kingdom", "japan",
+        "pacific_ex_japan", "emerging", "not_applicable",
+    ),
+    # GICS.
+    "sector": (
+        "information_technology", "financials", "health_care", "consumer_discretionary",
+        "communication_services", "industrials", "consumer_staples", "energy", "materials",
+        "utilities", "real_estate",
+    ),
+    "currency": ("EUR", "USD", "GBP", "JPY", "CHF", "other"),
+}
+
+
+class ExposureSource(str, Enum):
+    user = "user"  # the user's own weights
+    reference = "reference"  # app/data/asset_exposures.json
+    default = "default"  # what the type implies (a stock is equity, crypto is crypto)
+
+
+class ExposureWeight(BaseModel):
+    bucket: str = Field(min_length=1, max_length=30)
+    weight: Decimal = Field(gt=0, le=100, max_digits=7, decimal_places=4)
+
+
+class AssetExposureDimension(BaseModel):
+    dimension: ExposureDimension
+    # None = nothing known: the whole product is unclassified here.
+    source: ExposureSource | None = None
+    weights: list[ExposureWeight]
+    as_of: date_ | None = None
+    notes: str | None = None
+    source_urls: list[str] = Field(default_factory=list)
+
+
+class AssetExposures(BaseModel):
+    asset: "Asset"
+    dimensions: list[AssetExposureDimension]
+
+
+class AssetExposureUpdate(BaseModel):
+    weights: list[ExposureWeight] = Field(max_length=20)
+    as_of: date_ | None = None
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class ExposureSuggestion(BaseModel):
+    """Yahoo's profile of a single stock, mapped to our buckets. Nothing is saved."""
+
+    asset_id: UUID
+    raw_sector: str | None = None
+    raw_country: str | None = None
+    weights: dict[ExposureDimension, list[ExposureWeight]]
+
+
+class AllocationBucketValue(BaseModel):
+    bucket: str
+    value: Decimal
+    percentage: float
+
+
+class AllocationPositionKind(str, Enum):
+    holding = "holding"
+    metal = "metal"
+    cash = "cash"
+
+
+class AllocationPosition(BaseModel):
+    kind: AllocationPositionKind
+    label: str
+    asset: "Asset | None" = None
+    account_name: str | None = None
+    # None = no stored price or rate: left out of every total.
+    value: Decimal | None = None
+    source: ExposureSource | None = None
+    as_of: date_ | None = None
+    # The weights used for this dimension (empty = unclassified).
+    weights: list[ExposureWeight]
+
+
+class PortfolioAllocation(BaseModel):
+    """
+    Pillar 4 only: holdings funding an emergency fund or a dated goal, and
+    the tax provision, are out (`excluded_value`) — counted, they would make
+    the portfolio look prudent with money that is due within a few years.
+    """
+
+    dimension: ExposureDimension
+    base_currency: str
+    # What the percentages are of: everything valued in this dimension (for
+    # `sector`, only the equity part of it).
+    total: Decimal
+    classified_value: Decimal
+    # classified / total, 0-100. Below 90 the rules don't judge.
+    coverage: float
+    buckets: list[AllocationBucketValue]
+    unclassified_value: Decimal
+    excluded_value: Decimal
+    # Value the dimension doesn't apply to, left out of `total`: the
+    # non-equity part for `sector`, `not_applicable` (gold, crypto, money
+    # market) for `region`.
+    outside_value: Decimal = Decimal("0")
+    has_unpriced: bool
+    # Positions whose weights are dated more than a year ago.
+    stale_count: int
+    positions: list[AllocationPosition]
+
+
+class PortfolioRuleKind(str, Enum):
+    target = "target"
+    max_share = "max_share"
+    excess_cash = "excess_cash"
+    min_invested = "min_invested"
+
+
+class PortfolioRuleCreate(BaseModel):
+    """Each kind takes its own fields; the router 422s the wrong ones."""
+
+    kind: PortfolioRuleKind
+    # target: asset_class | region. max_share: any dimension, or `position`
+    # with the asset id as bucket.
+    dimension: str | None = Field(default=None, max_length=12)
+    bucket: str | None = Field(default=None, max_length=40)
+    target_pct: Decimal | None = Field(default=None, ge=0, le=100, max_digits=5, decimal_places=2)
+    tolerance_pct: Decimal | None = Field(
+        default=None, gt=0, le=50, max_digits=5, decimal_places=2
+    )
+    max_pct: Decimal | None = Field(default=None, gt=0, le=100, max_digits=5, decimal_places=2)
+    min_pct: Decimal | None = Field(default=None, gt=0, le=100, max_digits=5, decimal_places=2)
+    threshold_amount: Decimal | None = Field(
+        default=None, gt=0, max_digits=18, decimal_places=2
+    )
+    threshold_months: Decimal | None = Field(
+        default=None, gt=0, le=60, max_digits=4, decimal_places=1
+    )
+
+
+class PortfolioRule(ORMBase):
+    id: UUID
+    kind: PortfolioRuleKind
+    dimension: str | None = None
+    bucket: str | None = None
+    target_pct: Decimal | None = None
+    tolerance_pct: Decimal | None = None
+    max_pct: Decimal | None = None
+    min_pct: Decimal | None = None
+    threshold_amount: Decimal | None = None
+    threshold_months: Decimal | None = None
+
+
+class RuleState(str, Enum):
+    ok = "ok"
+    over = "over"
+    under = "under"
+    # Not judged: too little of the dimension is classified, no history to
+    # size the idle-cash threshold, or nothing invested yet.
+    unknown = "unknown"
+
+
+class PortfolioRuleStatus(BaseModel):
+    rule: PortfolioRule
+    state: RuleState
+    actual_pct: float | None = None
+    actual_amount: Decimal | None = None
+    # excess_cash: the threshold in money (months × average spend).
+    limit_amount: Decimal | None = None
+    # unknown only: coverage | no_history | nothing_invested
+    reason: str | None = None
+    # max_share on a position: the product's symbol, for display.
+    label: str | None = None
+
+
+class ContributionSplit(BaseModel):
+    bucket: str
+    amount: Decimal
+
+
+class PortfolioRulesStatus(BaseModel):
+    base_currency: str
+    rules: list[PortfolioRuleStatus]
+    # Cash nothing needs: operating accounts above pillar 1's target, minus the
+    # emergency fund's gap and the scheduled debits, plus idle broker cash.
+    # None while pillar 1's target is unknown.
+    idle_cash: Decimal | None = None
+    invested: Decimal
+    # invested / (invested + idle_cash), 0-100.
+    invested_share: float | None = None
+    # This month's quota for the open-ended long-term rung, and how to split
+    # it across the asset-class targets to close the gaps without selling.
+    contribution: Decimal
+    contribution_split: list[ContributionSplit]
+
+
+class PresetTarget(BaseModel):
+    dimension: ExposureDimension
+    bucket: str
+    target_pct: Decimal
+
+
+class PortfolioPreset(BaseModel):
+    key: str
+    label: str
+    description: str
+    targets: list[PresetTarget]
+
+
+class ApplyPresetRequest(BaseModel):
+    preset: str = Field(max_length=30)
+    tolerance_pct: Decimal = Field(
+        default=Decimal("5"), gt=0, le=50, max_digits=5, decimal_places=2
+    )
+
+
+class TargetWeight(BaseModel):
+    bucket: str = Field(min_length=1, max_length=40)
+    target_pct: Decimal = Field(ge=0, le=100, max_digits=5, decimal_places=2)
+
+
+class TargetsReplace(BaseModel):
+    """
+    Every target of one dimension at once, as the slider editor sends them:
+    one-by-one creation can't move from one mix to another, since the sum
+    would cross 100 halfway. A bucket at 0 is not stored (no target, so it
+    isn't judged); an empty list removes the dimension's targets.
+    """
+
+    dimension: ExposureDimension
+    tolerance_pct: Decimal = Field(
+        default=Decimal("5"), gt=0, le=50, max_digits=5, decimal_places=2
+    )
+    targets: list[TargetWeight] = Field(max_length=20)
+
+
 class AssetSearchResult(BaseModel):
     symbol: str
     name: str
@@ -945,7 +1200,11 @@ class Alert(BaseModel):
     kinds: account_short (balance below what's due from it), account_near
     (above it by less than the margin), f24_overdue / f24_upcoming (lines
     neither paid nor scheduled), scheduled_unconfirmed (its date passed and
-    the debit wasn't confirmed), vehicle_overdue / vehicle_upcoming.
+    the debit wasn't confirmed), vehicle_overdue / vehicle_upcoming;
+    the plan's (services/plan_alerts.py): goal_overdue, goal_due_soon,
+    goal_behind_schedule, goal_horizon_mismatch, allocation_out_of_band,
+    allocation_over_cap, excess_cash, below_min_invested_share,
+    investing_without_emergency_fund, exposure_data_stale.
     """
 
     # Stable while its cause is unchanged, so a dismissal can be remembered.
@@ -964,6 +1223,12 @@ class Alert(BaseModel):
     balance: Decimal | None = None
     committed: Decimal | None = None
     margin: Decimal | None = None
+    # Plan and portfolio alerts: the share measured and the limit set (both
+    # percentages, 0-100), and what they are about.
+    percentage: float | None = None
+    limit_percentage: float | None = None
+    dimension: str | None = None
+    bucket: str | None = None
     # A page in the app to go and fix it.
     link: str | None = None
 
@@ -1040,6 +1305,7 @@ class AllocationPlan(ORMBase):
     pct_discretionary: Decimal
     pct_savings: Decimal
     lookback_months: int
+    operating_cash_months: Decimal
     default_source_account_id: UUID | None = None
 
 
@@ -1058,6 +1324,9 @@ class AllocationPlanUpdate(BaseModel):
     )
     pct_savings: Decimal | None = Field(default=None, ge=0, le=100, max_digits=5, decimal_places=2)
     lookback_months: int | None = Field(default=None, ge=1, le=60)
+    operating_cash_months: Decimal | None = Field(
+        default=None, ge=0, le=24, max_digits=4, decimal_places=1
+    )
     default_source_account_id: UUID | None = None
 
 
@@ -1112,8 +1381,20 @@ class SurvivalBudget(BaseModel):
     monthly_total_expenses: Decimal | None = None
     # Net of flat-rate taxes, as the allocation model's base.
     monthly_income: Decimal | None = None
-    # Excludes the accounts holding the P.IVA tax provision.
+    # What the runway lives off: operating_cash + emergency_fund + goal_excess
+    # − committed_outflows. Not every account: the tax provision is the
+    # State's, a dated goal's cash has a job, and broker cash is pillar 4's.
     total_cash_balance: Decimal
+    # Pillar 1: the accounts no goal or provision claims, investment ones aside.
+    operating_cash: Decimal = Decimal("0")
+    # Pillar 2, valued like the cascade (holdings from the caches only).
+    emergency_fund: Decimal = Decimal("0")
+    # Cash on goal accounts above every goal's target: nobody needs it.
+    goal_excess: Decimal = Decimal("0")
+    # Debits already scheduled from the operating accounts (F24, vehicles).
+    committed_outflows: Decimal = Decimal("0")
+    # An emergency-fund holding with no cached price counted as nothing.
+    has_unpriced_holdings: bool = False
     # Cash divided by the survival budget. None whenever the survival budget
     # is unknown or zero.
     months_of_runway: float | None = None
@@ -1169,10 +1450,14 @@ class SimulationResponse(BaseModel):
 class SavingsGoalCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     kind: SavingsGoalKind
-    priority: int = Field(ge=0)
+    # Omitted = placed by the server: a dated goal among the dated ones by
+    # its date, anything else at the bottom (above an open-ended rung).
+    priority: int | None = Field(default=None, ge=0)
     target_mode: TargetMode
     target_months: Decimal | None = Field(default=None, gt=0, max_digits=5, decimal_places=2)
     target_amount: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=2)
+    # medium_term + fixed_amount only (422 otherwise).
+    target_date: date_ | None = None
 
 
 class SavingsGoalUpdate(BaseModel):
@@ -1181,15 +1466,23 @@ class SavingsGoalUpdate(BaseModel):
     target_mode: TargetMode | None = None
     target_months: Decimal | None = Field(default=None, gt=0, max_digits=5, decimal_places=2)
     target_amount: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=2)
+    target_date: date_ | None = None
+    # Set = reached and spent: the goal leaves the cascade and its sources are
+    # retired. Cleared = back in the cascade, with no sources.
+    completed_at: date_ | None = None
 
 
 class SavingsGoalSource(ORMBase):
     id: UUID
     account_id: UUID
+    # Set = that holding inside the account, valued from the caches.
+    asset_id: UUID | None = None
+    asset: Asset | None = None
 
 
 class SavingsGoalSourceCreate(BaseModel):
     account_id: UUID
+    asset_id: UUID | None = None
 
 
 class SavingsGoal(ORMBase):
@@ -1200,8 +1493,20 @@ class SavingsGoal(ORMBase):
     target_mode: TargetMode
     target_months: Decimal | None = None
     target_amount: Decimal | None = None
+    target_date: date_ | None = None
+    completed_at: date_ | None = None
     sources: list[SavingsGoalSource] = Field(default_factory=list)
     deleted_at: datetime | None = None
+
+    @field_validator("sources", mode="before")
+    @classmethod
+    def _active_sources_only(cls, value: object) -> object:
+        # The ORM relationship loads detached (soft-deleted) mappings too;
+        # listed here they would show an account as still linked after it was
+        # detached, or freed by completing the goal.
+        if isinstance(value, list):
+            return [s for s in value if getattr(s, "deleted_at", None) is None]
+        return value
 
 
 class WaterfallStep(BaseModel):
@@ -1221,12 +1526,33 @@ class WaterfallStep(BaseModel):
     allocated_amount: Decimal
     funding_percentage: float
     is_funded: bool
+    # A holding source with no cached price or rate: `current_amount` leaves
+    # it out, so the goal reads as less funded than it may be.
+    has_unpriced_sources: bool = False
+    # Dated goals only (None otherwise).
+    target_date: date_ | None = None
+    # Monthly contributions left, this month included (0 once the date passed).
+    months_left: int | None = None
+    # What this month puts aside: executed giroconti + the pending suggestion,
+    # one-off surplus included.
+    this_month_amount: Decimal | None = None
+    # What's left after this month, over the months after it: the rate needed
+    # from next month on.
+    required_monthly: Decimal | None = None
+    # What the monthly quota alone gives the goal from next month (the one-off
+    # surplus is a stock, so it is not projected forward).
+    monthly_pace: Decimal | None = None
+    # The month the gap closes at `monthly_pace`; None = never at this pace.
+    projected_date: date_ | None = None
+    on_track: bool | None = None
 
 
 class WaterfallAction(BaseModel):
     kind: WaterfallActionKind
-    goal_id: UUID
+    # None for the tax provision rung (purpose = tax_provision).
+    goal_id: UUID | None = None
     goal_name: str
+    purpose: str = "goal"
     amount: Decimal
     currency: str
     from_account_id: UUID | None = None
@@ -1234,6 +1560,21 @@ class WaterfallAction(BaseModel):
     to_account_id: UUID | None = None
     to_account_name: str | None = None
     reason: str
+
+
+class TaxProvisionRung(BaseModel):
+    """
+    The P.IVA provision as the cascade's first rung: what the F24s will still
+    ask (less what's already scheduled from other accounts) against what the
+    provision holds. Before any goal: it is a debt, not a saving.
+    """
+
+    target: Decimal
+    current: Decimal
+    gap: Decimal
+    allocated_amount: Decimal
+    account_id: UUID | None = None
+    account_name: str | None = None
 
 
 class WaterfallPlan(BaseModel):
@@ -1248,12 +1589,111 @@ class WaterfallPlan(BaseModel):
     steps: list[WaterfallStep]
     unallocated_amount: Decimal
     actions: list[WaterfallAction]
+    # Pillar 1's surplus: what the operating accounts hold beyond their target
+    # and the debits scheduled from them. None while the target is unknown.
+    operating_surplus: Decimal | None = None
+    # What the cascade distributed: the larger of the quota still to place and
+    # the surplus (the quota's money already sits in that surplus, so the two
+    # are not added).
+    budget: Decimal = Decimal("0")
+    tax_provision: TaxProvisionRung | None = None
+    # Where the suggested giroconti leave from: the plan's account, or (no
+    # account in the plan) the operating account with the most cash.
+    source_account_id: UUID | None = None
+    source_is_fallback: bool = False
+    # What goal accounts hold beyond every goal they fund (shared accounts
+    # are split in cascade order): free money, moved from those accounts.
+    goal_account_excess: Decimal = Decimal("0")
+    goal_account_excesses: list["AccountAmount"] = Field(default_factory=list)
+
+
+class AccountAmount(BaseModel):
+    account_id: UUID
+    account_name: str
+    amount: Decimal
+
+
+class PillarKey(str, Enum):
+    """
+    The plan's four pillars, in the order money should fill them:
+    1 operating cash (the month's spending), 2 emergency fund, 3 savings for
+    dated or known expenses, 4 long-term investing. Pillars 2-4 hold the
+    goals of the matching `SavingsGoalKind`; pillar 1 is computed.
+    """
+
+    operating = "operating"
+    emergency = "emergency"
+    planned = "planned"
+    investing = "investing"
+
+
+class PillarItemKind(str, Enum):
+    # Pillar 3 lines that aren't goals: money already spoken for by the app's
+    # other sections, shown beside the goals rather than turned into them.
+    tax_provision = "tax_provision"
+    vehicle_deadline = "vehicle_deadline"
+    # Pillar 4: cash on investment accounts no goal claims.
+    uninvested_cash = "uninvested_cash"
+    # Pillar 4: holdings no goal or provision claims.
+    free_holdings = "free_holdings"
+    # Pillar 1: what a goal account holds beyond every goal it funds.
+    goal_account_excess = "goal_account_excess"
+
+
+class PillarItem(BaseModel):
+    kind: PillarItemKind
+    label: str
+    # What it needs (a deadline's amount, the F24s' requirement) — None for
+    # pillar 4's lines, which are only "what's there".
+    amount: Decimal | None = None
+    # What is set aside for it, when the app knows (the tax provision).
+    available: Decimal | None = None
+    currency: str
+    due_date: date_ | None = None
+    # amount / months to the due date: what to put aside each month for it.
+    monthly: Decimal | None = None
+    account_name: str | None = None
+
+
+class Pillar(BaseModel):
+    key: PillarKey
+    # Sum of the known targets; None when none is known (pillar 1 without a
+    # complete month of history, pillar 4 always — it has no ceiling).
+    target: Decimal | None = None
+    current: Decimal
+    gap: Decimal | None = None
+    # What to put aside each month to stay on schedule: the dated goals'
+    # required rates plus the items' monthly shares. None = nothing dated.
+    monthly_required: Decimal | None = None
+    steps: list[WaterfallStep]
+    items: list[PillarItem]
+
+
+class PillarsResponse(BaseModel):
+    base_currency: str
+    period_start: date_
+    operating_cash_months: Decimal
+    # The average over the plan's lookback, complete months only; None = unknown.
+    monthly_total_expenses: Decimal | None = None
+    # Some holding has no cached price or rate: its pillar reads low.
+    has_unpriced_holdings: bool
+    pillars: list[Pillar]
 
 
 class WaterfallExecutionItem(BaseModel):
-    goal_id: UUID
+    # A goal; without one, `to_account_id` is the tax provision's account.
+    # With both, `to_account_id` is the account to link to a goal that has
+    # none yet (executing the advice "no account linked").
+    goal_id: UUID | None = None
+    to_account_id: UUID | None = None
     from_account_id: UUID
     amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
+
+    @model_validator(mode="after")
+    def _a_destination(self) -> "WaterfallExecutionItem":
+        if self.goal_id is None and self.to_account_id is None:
+            raise ValueError("Give goal_id, to_account_id or both")
+        return self
 
 
 class WaterfallExecuteRequest(BaseModel):

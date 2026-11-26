@@ -15,7 +15,6 @@ path do so explicitly.
 """
 
 from datetime import date as date_
-from datetime import timedelta
 from decimal import Decimal
 
 import httpx
@@ -28,6 +27,31 @@ from app.models import ExchangeRate
 
 class ExchangeRateUnavailable(Exception):
     pass
+
+
+# Longest run of days without a close that still counts as covered: a
+# weekend plus the longest exchange holidays (Christmas to Boxing Day on a
+# Friday) stay under it.
+MAX_CACHE_GAP_DAYS = 6
+
+
+def covers_range(cached: dict[date_, Decimal], start_date: date_, end_date: date_) -> bool:
+    """
+    Whether the cached daily values (closes, rates) cover the range. Trading calendars have gaps,
+    so not every date can be required — but every gap is checked, not just
+    the start. Checking only "something near the start" read a range cached
+    a month ago, plus today's quote from `get_price`, as complete, and left
+    the month in between permanently empty (the history chart flatlined and
+    the demo seed failed on it).
+    """
+    if not cached:
+        return False
+    days = sorted(cached)
+    bounds = [start_date, *days, end_date]
+    return all(
+        (later - earlier).days <= MAX_CACHE_GAP_DAYS
+        for earlier, later in zip(bounds, bounds[1:], strict=False)
+    )
 
 
 def get_rate(db: Session, from_currency: str, to_currency: str, on_date: date_) -> Decimal:
@@ -91,7 +115,7 @@ def get_rate_history(
     )
     cached = {row.date: Decimal(str(row.rate)) for row in cached_rows}
 
-    if cached and min(cached) <= start_date + timedelta(days=5):
+    if covers_range(cached, start_date, end_date):
         return cached
 
     url = f"{settings.exchange_rate_api_base_url}/{start_date.isoformat()}..{end_date.isoformat()}"

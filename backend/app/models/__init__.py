@@ -390,6 +390,13 @@ class AllocationPlan(Base, TimestampMixin, SoftDeleteMixin):
         Integer, nullable=False, default=6, server_default="6"
     )
 
+    # Pillar 1 (operating cash): how many months of average total spend the
+    # accounts no goal or provision claims should hold. Below it, the
+    # pillars view says the current accounts are running thin.
+    operating_cash_months: Mapped[Decimal] = mapped_column(
+        Numeric(4, 1), nullable=False, default=Decimal("1"), server_default="1"
+    )
+
     # The account income lands on — the source leg of any suggested
     # transfer. Without it the waterfall can only advise, not propose an
     # executable giroconto.
@@ -442,6 +449,15 @@ class SavingsGoal(Base, TimestampMixin, SoftDeleteMixin):
     target_months: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
     # `fixed_amount` only.
     target_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    # A medium-term, fixed-amount goal can be due on a date ("10k for the car
+    # in a year"): it then reports the monthly rate it needs and the date the
+    # quota actually reaches it. The cascade still runs on `priority`; a new
+    # dated goal is only *placed* by its date (see the router).
+    target_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Reached and spent. Unlike a drained emergency fund, whose reopened gap
+    # is the point, buying the car must close the goal, not ask for 10k
+    # again. Completing retires the sources, freeing the accounts.
+    completed_at: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="savings_goals")
     sources: Mapped[list["SavingsGoalSource"]] = relationship(back_populates="goal")
@@ -465,22 +481,28 @@ class SavingsGoal(Base, TimestampMixin, SoftDeleteMixin):
             name="ck_savings_goals_target_parameters",
         ),
         CheckConstraint("priority >= 0", name="ck_savings_goals_priority"),
+        CheckConstraint(
+            "target_date IS NULL OR (kind = 'medium_term' AND target_mode = 'fixed_amount')",
+            name="ck_savings_goals_target_date",
+        ),
     )
 
 
 class SavingsGoalSource(Base, TimestampMixin, SoftDeleteMixin):
     """
-    An account whose balance counts toward a goal.
+    What counts toward a goal: `(account)` = the account's cash,
+    `(account, asset)` = that holding inside it — the grain of
+    `FlatRateProvisionSource`. A broker's uninvested cash and its ETF are two
+    rows, and may fund two different goals.
 
-    Accounts only, not assets: valuing a holding means a live price and FX
-    call per position, which would put N external requests behind a plain
-    GET of the waterfall. An asset-backed rung is a later phase, and its
-    right grain is (account, asset) rather than the globally-shared asset
-    row.
+    A holding is valued from the caches only (`net_worth.cached_holding_values`:
+    the latest stored price and rate, never a fetch), so a GET of the
+    waterfall still makes no external request. That is the reason sources
+    used to be accounts only.
 
-    An account may fund at most one goal, or its balance would be counted
-    twice over. That rule's scope is the user rather than the goal, so it
-    can't be a unique index here and lives in the router as a 409.
+    Each source funds at most one goal, or its value would be counted twice
+    over. That rule's scope is the user rather than the goal, so it can't be
+    a unique index here and lives in the router as a 409.
     """
 
     __tablename__ = "savings_goal_sources"
@@ -492,9 +514,13 @@ class SavingsGoalSource(Base, TimestampMixin, SoftDeleteMixin):
     account_id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False, index=True
     )
+    asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("assets.id"), nullable=True
+    )
 
     goal: Mapped["SavingsGoal"] = relationship(back_populates="sources")
     account: Mapped["Account"] = relationship()
+    asset: Mapped["Asset | None"] = relationship()
 
 
 class SavingsAllocation(Base, TimestampMixin, SoftDeleteMixin):
@@ -613,5 +639,10 @@ from app.models.physical_asset import (  # noqa: F401,E402
     PhysicalAssetMovement,
     PhysicalAssetValuation,
     VehicleDeadline,
+)
+from app.models.portfolio_allocation import (  # noqa: F401,E402
+    AssetExposure,
+    AssetProfile,
+    PortfolioRule,
 )
 from app.models.refresh_token import RefreshToken  # noqa: F401,E402

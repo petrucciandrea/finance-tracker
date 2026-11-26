@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as planningApi from '@/api/planning'
-import type { AllocationPlanUpdatePayload, SimulationRequest } from '@/types'
+import type { AllocationPlanUpdatePayload, PortfolioRuleCreatePayload, SimulationRequest, TargetsReplacePayload } from '@/types'
 
 // Exported so useTransactions.ts and useAccounts.ts can invalidate it too —
 // the allocation status, the survival budget and (from phase C) the
@@ -45,5 +45,54 @@ export function useSimulate() {
   // CSV import preview mutations.
   return useMutation({
     mutationFn: (payload: SimulationRequest) => planningApi.simulate(payload),
+  })
+}
+
+const RULES_KEY = ['planning', 'portfolio-rules'] as const
+
+export function usePortfolioRules() {
+  return useQuery({ queryKey: RULES_KEY, queryFn: planningApi.getPortfolioRules })
+}
+
+export function usePortfolioPresets() {
+  return useQuery({ queryKey: ['planning', 'portfolio-presets'], queryFn: planningApi.listPortfolioPresets, staleTime: Infinity })
+}
+
+// The rules feed the alerts banner, which lives under the net-worth key.
+function invalidateRules(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: RULES_KEY })
+  queryClient.invalidateQueries({ queryKey: ['net-worth'] })
+}
+
+export function useCreatePortfolioRule() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: PortfolioRuleCreatePayload) => planningApi.createPortfolioRule(payload),
+    onSuccess: () => invalidateRules(queryClient),
+  })
+}
+
+export function useDeletePortfolioRule() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => planningApi.deletePortfolioRule(id),
+    onSuccess: () => invalidateRules(queryClient),
+  })
+}
+
+export function useApplyPortfolioPreset() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ preset, tolerancePct }: { preset: string; tolerancePct?: string }) =>
+      planningApi.applyPortfolioPreset(preset, tolerancePct),
+    onSuccess: () => invalidateRules(queryClient),
+  })
+}
+
+export function useReplaceTargets() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: TargetsReplacePayload) => planningApi.replaceTargets(payload),
+    onSuccess: () => invalidateRules(queryClient),
   })
 }

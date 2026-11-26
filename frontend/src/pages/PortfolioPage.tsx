@@ -3,6 +3,7 @@ import { AllocationBar } from '@/components/portfolio/AllocationBar'
 import { DeleteAssetTransactionDialog, EditAssetTransactionDialog } from '@/components/portfolio/AssetTransactionDialogs'
 import { AssetTransactionForm } from '@/components/portfolio/AssetTransactionForm'
 import { AssetTransactionImport } from '@/components/portfolio/AssetTransactionImport'
+import { CompositionCard } from '@/components/portfolio/CompositionCard'
 import { HoldingsTable } from '@/components/portfolio/HoldingsTable'
 import { PnlByAssetChart } from '@/components/portfolio/PnlByAssetChart'
 import { PortfolioValueChart } from '@/components/portfolio/PortfolioValueChart'
@@ -201,6 +202,8 @@ export function PortfolioPage() {
           <CurrencyExposure exposure={exposure} baseCurrency={base} />
         </Card>
       </div>
+
+      <CompositionCard />
 
       <Card title="Posizioni" meta={<span className="text-[13px] text-ink-3">Prezzi nella valuta del titolo, valori in {base}</span>}>
         <div className="mt-2">{netWorth.isLoading ? <LoadingBlock className="h-40" /> : <HoldingsTable holdings={holdings} baseCurrency={base} />}</div>

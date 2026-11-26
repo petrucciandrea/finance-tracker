@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models import Asset, AssetPrice, Currency
+from app.services.exchange_rates import covers_range
 
 
 class AssetPriceUnavailable(Exception):
@@ -103,10 +104,7 @@ def get_price_history(
     )
     cached = {row.date: Decimal(str(row.price)) for row in cached_rows}
 
-    # Trading calendars have gaps (weekends, holidays) so we can't require
-    # every single date to be cached — treat "we already have something
-    # within a few days of the start of the range" as full coverage.
-    if cached and min(cached) <= start_date + timedelta(days=5):
+    if covers_range(cached, start_date, end_date):
         return cached
 
     if asset.asset_type == "crypto":

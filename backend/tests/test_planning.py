@@ -412,6 +412,116 @@ def test_survival_budget_reports_months_of_runway(
     assert body["months_of_runway"] == 5.0
 
 
+def _funded_account(
+    client: TestClient, headers: dict, name: str, balance: str, type_: str = "checking"
+) -> dict:
+    response = client.post(
+        "/api/v1/accounts",
+        json={"name": name, "type": type_, "currency": "EUR", "starting_balance": balance},
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _goal_on(client: TestClient, headers: dict, account_id: str, **goal) -> dict:
+    response = client.post("/api/v1/planning/goals", json=goal, headers=headers)
+    assert response.status_code == 201, response.text
+    created = response.json()
+    response = client.post(
+        f"/api/v1/planning/goals/{created['id']}/sources",
+        json={"account_id": account_id},
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    return created
+
+
+def test_runway_lives_off_operating_cash_and_the_emergency_fund_only(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    current = _funded_account(client, headers, "Corrente", "2000.00")
+    emergency = _funded_account(client, headers, "Emergenza", "3000.00", "savings")
+    house = _funded_account(client, headers, "Casa", "10000.00", "savings")
+    _funded_account(client, headers, "Broker", "4000.00", "investment")
+    taxes = _funded_account(client, headers, "Tasse", "1500.00", "savings")
+    _goal_on(
+        client, headers, emergency["id"],
+        name="Fondo emergenza", kind="emergency_fund",
+        target_mode="fixed_amount", target_amount="2500.00",
+    )
+    _goal_on(
+        client, headers, house["id"],
+        name="Anticipo casa", kind="medium_term",
+        target_mode="fixed_amount", target_amount="20000.00",
+    )
+    response = client.post(
+        "/api/v1/flat-rate/sources", json={"account_id": taxes["id"]}, headers=headers
+    )
+    assert response.status_code == 201, response.text
+    casa = _create_category(client, headers, "Affitto", "expense", necessity_level="primary")
+    _create_transaction(client, headers, current["id"], "-500.00", "2026-08-10", casa["id"])
+
+    body = client.get(f"{SURVIVAL_URL}?date=2026-09-14", headers=headers).json()
+
+    # Current 1500 + emergency fund 2500 + the 500 its account holds above
+    # the target. The down payment, the broker's cash and the tax provision
+    # all have another job.
+    assert Decimal(body["operating_cash"]) == Decimal("1500.00")
+    assert Decimal(body["emergency_fund"]) == Decimal("2500.00")
+    assert Decimal(body["goal_excess"]) == Decimal("500.00")
+    assert Decimal(body["committed_outflows"]) == Decimal("0.00")
+    assert Decimal(body["total_cash_balance"]) == Decimal("4500.00")
+    assert body["months_of_runway"] == 9.0
+
+
+def test_runway_subtracts_debits_scheduled_from_the_operating_accounts(
+    client: TestClient, registered_user: dict
+) -> None:
+    from datetime import date, timedelta
+
+    headers = registered_user["auth_headers"]
+    current = _funded_account(client, headers, "Corrente", "3000.00")
+    response = client.post(
+        "/api/v1/flat-rate/payments",
+        json={
+            "status": "scheduled",
+            "paid_on": (date.today() + timedelta(days=5)).isoformat(),
+            "fiscal_year": 2025,
+            "component": "substitute_tax",
+            "kind": "balance",
+            "amount": "500.00",
+            "account_id": current["id"],
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    casa = _create_category(client, headers, "Affitto", "expense", necessity_level="primary")
+    _create_transaction(client, headers, current["id"], "-500.00", "2026-08-10", casa["id"])
+
+    body = client.get(f"{SURVIVAL_URL}?date=2026-09-14", headers=headers).json()
+
+    # 2500 on the account, but 500 of it is already the State's F24.
+    assert Decimal(body["committed_outflows"]) == Decimal("500.00")
+    assert Decimal(body["total_cash_balance"]) == Decimal("2000.00")
+    assert body["months_of_runway"] == 4.0
+
+
+def test_an_overdraft_is_no_runway_not_negative_months(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    current = _funded_account(client, headers, "Corrente", "0")
+    casa = _create_category(client, headers, "Affitto", "expense", necessity_level="primary")
+    _create_transaction(client, headers, current["id"], "-500.00", "2026-08-10", casa["id"])
+
+    body = client.get(f"{SURVIVAL_URL}?date=2026-09-14", headers=headers).json()
+
+    assert Decimal(body["total_cash_balance"]) == Decimal("-500.00")
+    assert body["months_of_runway"] == 0.0
+
+
 # ---------------------------------------------------------------------------
 # Simulator
 # ---------------------------------------------------------------------------

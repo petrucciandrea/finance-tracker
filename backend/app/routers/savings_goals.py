@@ -17,7 +17,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, selectinload
 
 from app.deps import get_current_user, get_db
-from app.models import SavingsAllocation, SavingsGoal, SavingsGoalSource, Transaction, User
+from app.models import (
+    Asset,
+    FlatRateProvisionSource,
+    SavingsAllocation,
+    SavingsGoal,
+    SavingsGoalSource,
+    Transaction,
+    User,
+)
 from app.schemas import (
     SavingsAllocation as SavingsAllocationSchema,
 )
@@ -26,6 +34,7 @@ from app.schemas import (
 )
 from app.schemas import (
     SavingsGoalCreate,
+    SavingsGoalKind,
     SavingsGoalSourceCreate,
     SavingsGoalUpdate,
     TargetMode,
@@ -39,8 +48,9 @@ from app.schemas import (
 from app.schemas import (
     Transaction as TransactionSchema,
 )
+from app.services import flat_rate as flat_rate_service
 from app.services import waterfall as waterfall_service
-from app.services.flat_rate import source_account_ids
+from app.services.net_worth import compute_holding_positions
 from app.services.ownership import get_owned_account
 from app.services.periods import period_bounds
 from app.services.transfers import create_linked_transfer
@@ -91,6 +101,87 @@ def _validate_target(
         )
 
 
+def _validate_dates(
+    kind: str,
+    target_mode: str,
+    target_date: date_ | None,
+    completed_at: date_ | None,
+) -> None:
+    """
+    A date is a deadline for an amount to be ready by: it needs a fixed
+    amount (a dynamic target has no fixed finish line) and belongs to the
+    medium term, the pillar of things bought on a date. The emergency fund
+    is never "due", and the long term is open by nature. The database has
+    the same rule as a CHECK; this makes it a 422.
+    """
+    if target_date is not None and (
+        kind != SavingsGoalKind.medium_term.value or target_mode != TargetMode.fixed_amount.value
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Only a medium-term goal with a fixed amount can have a target date",
+        )
+    if completed_at is not None:
+        if target_mode != TargetMode.fixed_amount.value:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Only a goal with a fixed amount can be marked as reached",
+            )
+        if completed_at > date_.today():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="A goal can't be reached in the future",
+            )
+
+
+def _placement_priority(
+    db: Session, user: User, kind: str, target_date: date_ | None
+) -> int:
+    """
+    Where a goal created without a priority goes, inside its own pillar (the
+    pillar is fixed by `kind`, see `waterfall.PILLAR_RANK`). A dated goal
+    goes among the dated ones by date, nearest first, so the car due next
+    year comes before the down payment due in five. Anything else goes last
+    in its pillar, but above an open-ended goal, which absorbs the rest and
+    must stay at the bottom. The user can reorder afterwards: the date only
+    decides the starting position.
+    """
+    goals = [g for g in waterfall_service.list_goals(db, user) if g.completed_at is None]
+    same = [g for g in goals if g.kind == kind]
+    if target_date is not None:
+        later = [g.priority for g in same if g.target_date and g.target_date > target_date]
+        if later:
+            return min(later)
+        dated = [g.priority for g in same if g.target_date]
+        if dated:
+            return max(dated) + 1
+    tail = [g.priority for g in same if g.target_mode == TargetMode.open_ended.value]
+    if tail:
+        return min(tail)
+    return max((g.priority for g in goals), default=-1) + 1
+
+
+def _make_room(db: Session, user: User, priority: int) -> None:
+    """Shift every goal at `priority` or below down by one, to insert above them."""
+    for goal in waterfall_service.list_goals(db, user):
+        if goal.priority >= priority:
+            goal.priority += 1
+
+
+def _reject_open_ended_outside_investing(kind: str, target_mode: str) -> None:
+    """
+    An open-ended goal absorbs whatever reaches it, and goals are filled pillar
+    by pillar: one in pillar 2 or 3 would starve every pillar after it, with
+    no priority able to move it below them. "Whatever is left" is pillar 4's
+    job by definition.
+    """
+    if target_mode == TargetMode.open_ended.value and kind != SavingsGoalKind.long_term.value:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Only a long_term goal can be open-ended",
+        )
+
+
 def _reject_second_open_ended(db: Session, user: User, exclude_goal_id: UUID | None = None) -> None:
     """
     Only one open-ended rung. It absorbs the whole remainder and closes the
@@ -128,17 +219,30 @@ def create_goal(
     current_user: User = Depends(get_current_user),
 ) -> SavingsGoal:
     _validate_target(payload.target_mode.value, payload.target_months, payload.target_amount)
+    _validate_dates(payload.kind.value, payload.target_mode.value, payload.target_date, None)
+    if payload.target_date is not None and payload.target_date <= date_.today():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="A new goal's target date must be in the future",
+        )
+    _reject_open_ended_outside_investing(payload.kind.value, payload.target_mode.value)
     if payload.target_mode == TargetMode.open_ended:
         _reject_second_open_ended(db, current_user)
+
+    priority = payload.priority
+    if priority is None:
+        priority = _placement_priority(db, current_user, payload.kind.value, payload.target_date)
+        _make_room(db, current_user, priority)
 
     goal = SavingsGoal(
         user_id=current_user.id,
         name=payload.name,
         kind=payload.kind.value,
-        priority=payload.priority,
+        priority=priority,
         target_mode=payload.target_mode.value,
         target_months=payload.target_months,
         target_amount=payload.target_amount,
+        target_date=payload.target_date,
     )
     db.add(goal)
     db.commit()
@@ -214,13 +318,48 @@ def _build_transfers(
     allocations: list[SavingsAllocation],
     created: list[Transaction],
 ) -> None:
+    provision_accounts = {
+        s.account_id
+        for s in flat_rate_service.active_sources(db, current_user)
+        if s.asset_id is None
+    }
     for item in payload.items:
-        goal = _get_owned_goal(db, item.goal_id, current_user)
         from_account = get_owned_account(db, item.from_account_id, current_user)
+        if item.goal_id is None:
+            # The tax provision rung: a plain giroconto into a provision
+            # account. Not a savings allocation — it doesn't consume the
+            # quota's bookkeeping, and once it lands the rung's gap closes.
+            assert item.to_account_id is not None
+            if item.to_account_id not in provision_accounts:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="That account doesn't hold the tax provision",
+                )
+            outgoing, incoming = create_linked_transfer(
+                db,
+                current_user,
+                from_account=from_account,
+                to_account=get_owned_account(db, item.to_account_id, current_user),
+                amount=item.amount,
+                on_date=on_date,
+                description="Accantonamento tasse",
+            )
+            created.extend([outgoing, incoming])
+            continue
 
-        destination_id = next(
-            (s.account_id for s in goal.sources if s.deleted_at is None), None
-        )
+        goal = _get_owned_goal(db, item.goal_id, current_user)
+
+        destination_id = waterfall_service.destination_account_id(goal)
+        if destination_id is None and item.to_account_id is not None:
+            # Executing the advice "no account linked": the account chosen in
+            # the row becomes the goal's source, with the same rules as
+            # linking it by hand, in the same all-or-nothing batch.
+            destination_id = _link_source(db, current_user, goal, item.to_account_id).account_id
+        elif item.to_account_id is not None and item.to_account_id != destination_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"«{goal.name}» already transfers into another account",
+            )
         if destination_id is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -298,11 +437,35 @@ def update_goal(
         update_data.get("target_months", goal.target_months),
         update_data.get("target_amount", goal.target_amount),
     )
+    target_date = update_data.get("target_date", goal.target_date)
+    if target_mode_value != TargetMode.fixed_amount.value and "target_date" not in update_data:
+        # Leaving fixed_amount drops the deadline with it rather than 422ing
+        # on a field the client didn't touch.
+        target_date = None
+        update_data["target_date"] = None
+    _validate_dates(
+        goal.kind,
+        target_mode_value,
+        target_date,
+        update_data.get("completed_at", goal.completed_at),
+    )
+    if target_mode_value != goal.target_mode:
+        # Only on a change: a goal stored that way before the rule still saves.
+        _reject_open_ended_outside_investing(goal.kind, target_mode_value)
     if target_mode_value == TargetMode.open_ended.value:
         _reject_second_open_ended(db, current_user, exclude_goal_id=goal.id)
 
+    completing = goal.completed_at is None and update_data.get("completed_at") is not None
     for field, value in update_data.items():
         setattr(goal, field, getattr(value, "value", value))
+
+    if completing:
+        # Reached and spent: the accounts are free for the next goal. Not
+        # restored on un-completing — by then they may fund another one.
+        now = datetime.now(UTC)
+        for source in goal.sources:
+            if source.deleted_at is None:
+                source.deleted_at = now
 
     db.commit()
     db.refresh(goal)
@@ -324,6 +487,97 @@ def delete_goal(
     db.commit()
 
 
+def _link_source(
+    db: Session,
+    current_user: User,
+    goal: SavingsGoal,
+    account_id: UUID,
+    asset_id: UUID | None = None,
+) -> SavingsGoalSource:
+    """
+    Map an account's cash, or a holding in it, to a goal: shared by the
+    sources endpoint and by executing a suggestion for a goal that had no
+    account yet. Flushes, never commits — the caller owns the transaction.
+    """
+    if goal.completed_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"«{goal.name}» was already reached",
+        )
+    account = get_owned_account(db, account_id, current_user)
+    # Closing refuses an account that funds a goal; this is the other door.
+    if account.closed_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"The account «{account.name}» is closed",
+        )
+
+    if asset_id is not None:
+        if db.get(Asset, asset_id) is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+        position = compute_holding_positions(db, current_user).get((account.id, asset_id))
+        if position is None or position["quantity"] <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="This account holds no position in that product",
+            )
+
+    # A holding funds at most one goal: its value counts whole and can't be
+    # moved by giroconto, so there is nothing to split. An account's *cash*
+    # may fund several goals — goal_values splits it in cascade order — but
+    # not the same goal twice.
+    query = (
+        db.query(SavingsGoalSource)
+        .join(SavingsGoal, SavingsGoal.id == SavingsGoalSource.goal_id)
+        .filter(
+            SavingsGoal.user_id == current_user.id,
+            SavingsGoal.deleted_at.is_(None),
+            SavingsGoalSource.account_id == account_id,
+            SavingsGoalSource.deleted_at.is_(None),
+        )
+    )
+    if asset_id is not None:
+        if query.filter(SavingsGoalSource.asset_id == asset_id).first() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This already funds another savings goal",
+            )
+    elif (
+        query.filter(
+            SavingsGoalSource.asset_id.is_(None), SavingsGoalSource.goal_id == goal.id
+        ).first()
+        is not None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This account already funds this goal",
+        )
+
+    # Earmarked for taxes: the same money can't also count as savings.
+    provision = (
+        db.query(FlatRateProvisionSource)
+        .filter(
+            FlatRateProvisionSource.user_id == current_user.id,
+            FlatRateProvisionSource.deleted_at.is_(None),
+            FlatRateProvisionSource.account_id == account.id,
+            FlatRateProvisionSource.asset_id == asset_id
+            if asset_id is not None
+            else FlatRateProvisionSource.asset_id.is_(None),
+        )
+        .first()
+    )
+    if provision is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This holds the tax provision — remove it from Fatture first",
+        )
+
+    source = SavingsGoalSource(goal_id=goal.id, account_id=account_id, asset_id=asset_id)
+    db.add(source)
+    db.flush()
+    return source
+
+
 @router.post(
     "/goals/{goal_id}/sources",
     response_model=SavingsGoalSourceSchema,
@@ -336,43 +590,7 @@ def add_source(
     current_user: User = Depends(get_current_user),
 ) -> SavingsGoalSource:
     goal = _get_owned_goal(db, goal_id, current_user)
-    account = get_owned_account(db, payload.account_id, current_user)
-    # Closing refuses an account that funds a goal; this is the other door.
-    if account.closed_at is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"The account «{account.name}» is closed",
-        )
-
-    # An account may fund at most one goal, or its balance would count
-    # toward both and the cascade would think it had twice the money.
-    # Scoped to the user, so it can't be a unique index on this table.
-    existing = (
-        db.query(SavingsGoalSource)
-        .join(SavingsGoal, SavingsGoal.id == SavingsGoalSource.goal_id)
-        .filter(
-            SavingsGoal.user_id == current_user.id,
-            SavingsGoal.deleted_at.is_(None),
-            SavingsGoalSource.account_id == payload.account_id,
-            SavingsGoalSource.deleted_at.is_(None),
-        )
-        .first()
-    )
-    if existing is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This account already funds another savings goal",
-        )
-
-    # Earmarked for taxes: the same balance can't also count as savings.
-    if account.id in source_account_ids(db, current_user, cash_only=True):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This account holds the tax provision — remove it from Fatture first",
-        )
-
-    source = SavingsGoalSource(goal_id=goal.id, account_id=payload.account_id)
-    db.add(source)
+    source = _link_source(db, current_user, goal, payload.account_id, payload.asset_id)
     db.commit()
     db.refresh(source)
     return source
@@ -386,9 +604,7 @@ def remove_source(
     current_user: User = Depends(get_current_user),
 ) -> None:
     goal = _get_owned_goal(db, goal_id, current_user)
-    source = next(
-        (s for s in goal.sources if s.id == source_id and s.deleted_at is None), None
-    )
+    source = next((s for s in goal.sources if s.id == source_id and s.deleted_at is None), None)
     if source is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found")
 

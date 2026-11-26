@@ -5,6 +5,7 @@ import { Dialog } from '@/components/ui/Dialog'
 import { ErrorBlock, LoadingBlock } from '@/components/ui/EmptyState'
 import { Field } from '@/components/ui/Field'
 import { SegmentedControl } from '@/components/ui/SegmentedControl'
+import { Tip } from '@/components/ui/Tip'
 import { useAccounts } from '@/hooks/useAccounts'
 import { useCategories } from '@/hooks/useCategories'
 import {
@@ -449,7 +450,12 @@ export function TaxPaymentDialog({
       onClose={onClose}
       size="md"
       title={payment ? (payment.status === 'scheduled' ? 'Modifica pagamento programmato' : 'Modifica versamento F24') : 'Registra versamento F24'}
-      description="Una riga dell'F24: saldo o acconto di imposta o INPS, oppure il bollo di un trimestre. Pagarlo da un conto non è una spesa: riduce la liquidità e il debito fiscale insieme."
+      description={
+        <>
+          Una riga dell'F24: saldo o acconto di imposta o INPS, oppure il bollo di un trimestre.{' '}
+          <Tip>Pagarlo da un conto non è una spesa: riduce la liquidità e il debito fiscale insieme.</Tip>
+        </>
+      }
     >
       {open && <TaxPaymentForm key={payment?.id ?? 'new'} payment={payment} draft={draft} onClose={onClose} />}
     </Dialog>
@@ -538,8 +544,11 @@ function TaxPaymentForm({ payment, draft, onClose }: { payment: TaxPayment | nul
       )}
       {scheduled && (
         <p className="rounded-[10px] bg-card-2 px-3 py-2.5 text-[13px] text-ink-2">
-          Un addebito autorizzato (sul portale Fatture e Corrispettivi o in banca) che non è ancora uscito dal conto. Finché non lo confermi non muove nulla: né
-          il saldo né il debito. Il conto viene controllato, e se non basta lo segnaliamo.
+          Un addebito autorizzato non ancora uscito dal conto.{' '}
+          <Tip label="Cos’è un pagamento programmato">
+            <span>Autorizzato sul portale Fatture e Corrispettivi o in banca.</span>
+            <span>Finché non lo confermi non muove nulla: né il saldo né il debito. Il conto viene controllato, e se non basta lo segnaliamo.</span>
+          </Tip>
         </p>
       )}
       <div className="grid grid-cols-2 gap-2.5">

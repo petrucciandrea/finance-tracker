@@ -3,7 +3,12 @@ import type {
   AllocationPlan,
   AllocationPlanUpdatePayload,
   AllocationStatus,
+  PortfolioPreset,
+  PortfolioRule,
+  PortfolioRuleCreatePayload,
+  PortfolioRulesStatus,
   SimulationRequest,
+  TargetsReplacePayload,
   SimulationResponse,
   SurvivalBudget,
 } from '@/types'
@@ -36,5 +41,37 @@ export async function getSurvivalBudget(date?: string): Promise<SurvivalBudget> 
 
 export async function simulate(payload: SimulationRequest): Promise<SimulationResponse> {
   const { data } = await apiClient.post<SimulationResponse>('/planning/simulate', payload)
+  return data
+}
+
+export async function getPortfolioRules(): Promise<PortfolioRulesStatus> {
+  const { data } = await apiClient.get<PortfolioRulesStatus>('/planning/portfolio-rules')
+  return data
+}
+
+export async function createPortfolioRule(payload: PortfolioRuleCreatePayload): Promise<PortfolioRule> {
+  const { data } = await apiClient.post<PortfolioRule>('/planning/portfolio-rules', payload)
+  return data
+}
+
+export async function deletePortfolioRule(id: string): Promise<void> {
+  await apiClient.delete(`/planning/portfolio-rules/${id}`)
+}
+
+export async function listPortfolioPresets(): Promise<PortfolioPreset[]> {
+  const { data } = await apiClient.get<PortfolioPreset[]>('/planning/portfolio-presets')
+  return data
+}
+
+export async function applyPortfolioPreset(preset: string, tolerancePct?: string): Promise<PortfolioRulesStatus> {
+  const { data } = await apiClient.post<PortfolioRulesStatus>('/planning/portfolio-rules/preset', {
+    preset,
+    ...(tolerancePct ? { tolerance_pct: tolerancePct } : {}),
+  })
+  return data
+}
+
+export async function replaceTargets(payload: TargetsReplacePayload): Promise<PortfolioRulesStatus> {
+  const { data } = await apiClient.put<PortfolioRulesStatus>('/planning/portfolio-rules/targets', payload)
   return data
 }

@@ -16,6 +16,13 @@ export function useSavingsGoals() {
   return useQuery({ queryKey: GOALS_KEY, queryFn: goalsApi.listGoals })
 }
 
+export function usePillars(date?: string) {
+  return useQuery({
+    queryKey: ['planning', 'pillars', date],
+    queryFn: () => goalsApi.getPillars(date),
+  })
+}
+
 export function useWaterfall(date?: string) {
   return useQuery({
     queryKey: [...WATERFALL_KEY, date],
@@ -28,6 +35,8 @@ export function useWaterfall(date?: string) {
 // planning namespace rather than trying to predict what changed.
 function invalidatePlanning(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({ queryKey: PLANNING_KEY })
+  // Goals with a date raise alerts, cached under the net-worth key.
+  queryClient.invalidateQueries({ queryKey: NET_WORTH_KEY })
 }
 
 export function useCreateGoal() {
@@ -58,8 +67,8 @@ export function useDeleteGoal() {
 export function useAddGoalSource() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ goalId, accountId }: { goalId: string; accountId: string }) =>
-      goalsApi.addSource(goalId, accountId),
+    mutationFn: ({ goalId, accountId, assetId }: { goalId: string; accountId: string; assetId?: string | null }) =>
+      goalsApi.addSource(goalId, accountId, assetId),
     onSuccess: () => invalidatePlanning(queryClient),
   })
 }

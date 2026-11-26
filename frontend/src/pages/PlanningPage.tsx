@@ -57,17 +57,7 @@ function AllocationTable({ month, today }: { month: Date; today: Date }) {
       meta={
         status && (
           <span className="text-[13px] text-ink-2 tabular-nums">
-            {toNumber(status.flat_rate_tax_total) > 0 ? (
-              <>
-                su {formatAmount(status.gross_income_total, status.base_currency)} di entrate −{' '}
-                {formatAmount(status.flat_rate_tax_total, status.base_currency)} di tasse e contributi P.IVA ={' '}
-                <b className="text-ink">{formatAmount(status.income_total, status.base_currency)}</b> {status.base_currency} netti
-              </>
-            ) : (
-              <>
-                su <b className="text-ink">{formatAmount(status.income_total, status.base_currency)}</b> {status.base_currency} di entrate
-              </>
-            )}
+            su <b className="text-ink">{formatAmount(status.income_total, status.base_currency)}</b> {status.base_currency} di entrate
           </span>
         )
       }
@@ -425,18 +415,12 @@ export function PlanningPage() {
   const savings = status?.buckets.find((b) => b.bucket === 'savings')
   const excluded = (status?.income_breakdown ?? []).filter((r) => r.excluded_from_income_base).reduce((s, r) => s + toNumber(r.total_amount_base_currency), 0)
   const income = toNumber(status?.income_total)
-  // Imposta + INPS on the invoices collected this month: the State's share,
-  // already out of the base the whole plan is computed on.
-  const flatRateTaxes = toNumber(status?.flat_rate_tax_total)
 
   const kpis: Kpi[] = [
     {
-      label: `${flatRateTaxes > 0 ? 'Entrate nette' : 'Entrate'} ${inProgress ? 'del mese' : `di ${formatMonthName(month)}`}`,
+      label: `Entrate ${inProgress ? 'del mese' : `di ${formatMonthName(month)}`}`,
       value: status ? formatAmount(income, currency) : '…',
-      sub:
-        flatRateTaxes > 0
-          ? `${formatAmount(status?.gross_income_total, currency)} lorde − ${formatAmount(flatRateTaxes, currency)} tasse e contributi P.IVA`
-          : `base del piano · ${formatAmount(excluded, currency)} esclusi`,
+      sub: `base del piano · ${formatAmount(excluded, currency)} esclusi`,
     },
     {
       label: inProgress ? 'Spese finora' : 'Spese',

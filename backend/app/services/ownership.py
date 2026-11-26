@@ -183,3 +183,50 @@ def get_or_create_refunds_category(db: Session, user: User) -> Category:
     db.add(category)
     db.flush()
     return category
+
+
+TAXES_CATEGORY_NAME = "Tasse"
+
+
+def get_or_create_taxes_category(db: Session, user: User) -> Category:
+    """
+    Where an F24 payment lands when the client picks no category, created on
+    first use. An existing expense category of that name is reused (wherever
+    it sits in the hierarchy, as long as it's a leaf), so a user who already
+    keeps a "Tasse" doesn't get a second one.
+
+    A new one is `primary`: a tax already owed has to be paid whatever else
+    is cut, so it belongs in the survival budget, not in the unclassified
+    bucket where it would lower the coverage until the user noticed.
+    """
+    candidates = (
+        db.query(Category)
+        .filter(
+            Category.user_id == user.id,
+            Category.name == TAXES_CATEGORY_NAME,
+            Category.type == "expense",
+            Category.deleted_at.is_(None),
+        )
+        .order_by(Category.id)
+        .all()
+    )
+    for candidate in candidates:
+        has_children = (
+            db.query(Category.id)
+            .filter(Category.parent_id == candidate.id, Category.deleted_at.is_(None))
+            .first()
+            is not None
+        )
+        if not has_children:
+            return candidate
+
+    category = Category(
+        user_id=user.id,
+        name=TAXES_CATEGORY_NAME,
+        type="expense",
+        parent_id=None,
+        necessity_level="primary",
+    )
+    db.add(category)
+    db.flush()
+    return category

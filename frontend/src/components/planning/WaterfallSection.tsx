@@ -25,7 +25,7 @@ import { formatAmount, formatFullDate, formatPercent, toISODate, toNumber } from
 import type { Account, SavingsGoal, SavingsGoalKind, TargetMode, TaxProvisionRung, WaterfallAction, WaterfallStep } from '@/types'
 import { GoalSchedule } from '@/components/planning/GoalSchedule'
 import { Tip } from '@/components/ui/Tip'
-import { KIND_LABELS, sourceLabel } from '@/lib/goals'
+import { PILLAR_OF_KIND, sourceLabel } from '@/lib/goals'
 
 const TARGET_MODE_LABELS: Record<TargetMode, string> = {
   months_of_primary_expenses: 'Mesi di spese primarie',
@@ -50,8 +50,8 @@ function StepRow({ step, index, goal, currency }: { step: WaterfallStep; index: 
       <div className="min-w-0 tabular-nums">
         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <span className="font-extrabold">
-            <span className="sr-only">Gradino {index + 1}: </span>
-            {step.name} <span className="text-[12px] font-semibold text-ink-3">{KIND_LABELS[step.kind]}</span>
+            <span className="sr-only">Priorità {index + 1}: </span>
+            {step.name}
           </span>
           <span className="flex flex-wrap gap-1.5">
             {Number(step.allocated_amount) > 0 && <StatusChip kind="info">+{money(step.allocated_amount)} da versare</StatusChip>}
@@ -62,11 +62,11 @@ function StepRow({ step, index, goal, currency }: { step: WaterfallStep; index: 
           <p className="mt-1 text-[13px] font-semibold text-warn">
             Target non ancora calcolabile{' '}
             <Tip label="Perché non è calcolabile">
-              Serve almeno un mese completo di storico per la media delle spese primarie. Il gradino è sospeso, non considerato completo.
+              Serve almeno un mese completo di storico per la media delle spese primarie. L’obiettivo è sospeso, non considerato completo.
             </Tip>
           </p>
         ) : step.target_amount === null ? (
-          <p className="mt-1 text-[13px] text-ink-2">Senza target: riceve tutto ciò che avanza dai gradini sopra. Ora {money(step.current_amount)}.</p>
+          <p className="mt-1 text-[13px] text-ink-2">Senza target: riceve tutto ciò che avanza dagli obiettivi sopra. Ora {money(step.current_amount)}.</p>
         ) : (
           <>
             <div className="mt-1 flex justify-between text-[13px] text-ink-2">
@@ -97,8 +97,8 @@ function StepRow({ step, index, goal, currency }: { step: WaterfallStep; index: 
   )
 }
 
-// A goal's id (or the purpose, for the tax rung) plus the suggested source:
-// one rung can be fed from several accounts — the spending account and a
+// A goal's id (or the purpose, for the tax provision) plus the suggested
+// source: one goal can be fed from several accounts — the spending account and a
 // goal account's excess — and each is its own giroconto.
 function actionKey(a: WaterfallAction): string {
   return `${a.goal_id ?? a.purpose}:${a.from_account_id ?? ''}`
@@ -116,7 +116,7 @@ function TaxRow({ rung, currency }: { rung: TaxProvisionRung; currency: string }
       <div className="min-w-0 tabular-nums">
         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <span className="font-extrabold">
-            Accantonamento tasse <span className="text-[12px] font-semibold text-ink-3">prima di ogni obiettivo</span>
+            Accantonamento tasse <span className="text-[12px] font-semibold text-ink-3">è un debito, non un obiettivo</span>
           </span>
           <span className="flex flex-wrap gap-1.5">
             {toNumber(rung.allocated_amount) > 0 && <StatusChip kind="info">+{money(rung.allocated_amount)} da versare</StatusChip>}
@@ -249,10 +249,15 @@ function GoalForm({ onDone }: { onDone: () => void }) {
   const [months, setMonths] = useState('6')
   const [amount, setAmount] = useState('')
   const [targetDate, setTargetDate] = useState('')
-  // Empty = placed by the server: a dated goal by its date, nearest first.
-  const [priority, setPriority] = useState('')
   const [error, setError] = useState<string | null>(null)
   const canHaveDate = kind === 'medium_term' && targetMode === 'fixed_amount'
+  // "Whatever is left" is pillar 4's job: open-ended elsewhere is a 422.
+  const modes = (Object.keys(TARGET_MODE_LABELS) as TargetMode[]).filter((m) => m !== 'open_ended' || kind === 'long_term')
+
+  function chooseKind(next: SavingsGoalKind) {
+    setKind(next)
+    if (targetMode === 'open_ended' && next !== 'long_term') setTargetMode('fixed_amount')
+  }
 
   async function submit() {
     setError(null)
@@ -260,8 +265,9 @@ function GoalForm({ onDone }: { onDone: () => void }) {
     try {
       await createGoal.mutateAsync({
         name: name.trim(),
+        // No priority: the server places it in its pillar (a dated goal by
+        // date, nearest first) and the menu moves it from there.
         kind,
-        ...(priority.trim() ? { priority: Number(priority) } : {}),
         target_mode: targetMode,
         target_months: targetMode === 'months_of_primary_expenses' ? months : null,
         target_amount: targetMode === 'fixed_amount' ? amount.replace(',', '.') : null,
@@ -279,26 +285,23 @@ function GoalForm({ onDone }: { onDone: () => void }) {
         <Field label="Nome" htmlFor="goal-name">
           <input id="goal-name" className="field" value={name} onChange={(e) => setName(e.target.value)} placeholder="Es. Fondo emergenza" />
         </Field>
-        <Field label="Tipo" htmlFor="goal-kind">
-          <select id="goal-kind" className="field" value={kind} onChange={(e) => setKind(e.target.value as SavingsGoalKind)}>
-            {(Object.keys(KIND_LABELS) as SavingsGoalKind[]).map((k) => (
+        <Field label="Pilastro" htmlFor="goal-kind">
+          <select id="goal-kind" className="field" value={kind} onChange={(e) => chooseKind(e.target.value as SavingsGoalKind)}>
+            {(Object.keys(PILLAR_OF_KIND) as SavingsGoalKind[]).map((k) => (
               <option key={k} value={k}>
-                {KIND_LABELS[k]}
+                {PILLAR_OF_KIND[k].number} · {PILLAR_OF_KIND[k].title}
               </option>
             ))}
           </select>
         </Field>
         <Field label="Target" htmlFor="goal-mode">
           <select id="goal-mode" className="field" value={targetMode} onChange={(e) => setTargetMode(e.target.value as TargetMode)}>
-            {(Object.keys(TARGET_MODE_LABELS) as TargetMode[]).map((m) => (
+            {modes.map((m) => (
               <option key={m} value={m}>
                 {TARGET_MODE_LABELS[m]}
               </option>
             ))}
           </select>
-        </Field>
-        <Field label="Priorità" htmlFor="goal-priority" hint="Vuota = automatica: le scadenze più vicine prima. Si può spostare dopo.">
-          <input id="goal-priority" type="number" min={0} className="field" placeholder="Automatica" value={priority} onChange={(e) => setPriority(e.target.value)} />
         </Field>
         {targetMode === 'months_of_primary_expenses' && (
           <Field label="Mesi" htmlFor="goal-months">
@@ -413,7 +416,7 @@ function GoalSourcesDialog({ goal, onClose }: { goal: SavingsGoal | null; onClos
         <>
           Il saldo dei conti, o il valore degli investimenti, conta come già accantonato.{' '}
           <Tip>
-            Un conto può finanziare più obiettivi: il saldo li riempie in ordine di priorità e quello che avanza diventa eccedenza. Un investimento
+            Un conto può finanziare più obiettivi: il saldo li riempie in ordine di pilastro e di priorità e quello che avanza diventa eccedenza. Un investimento
             finanzia un solo obiettivo.
           </Tip>
         </>
@@ -425,9 +428,10 @@ function GoalSourcesDialog({ goal, onClose }: { goal: SavingsGoal | null; onClos
 }
 
 /**
- * The savings ladder: the month's savings quota fills goals in priority
- * order and spills to the next rung only when the one above is full.
- * Suggested giroconti are pre-selected and run as one all-or-nothing batch.
+ * The month's money moved into the pillars: the tax provision first (a
+ * debt), then pillars 2 → 3 → 4, and inside each the goals in priority order,
+ * spilling to the next only when the one above is full. Suggested giroconti
+ * are pre-selected and run as one all-or-nothing batch.
  */
 export function WaterfallSection({ date, currency }: { date: string; currency: string }) {
   const { data: waterfall, isLoading, isError } = useWaterfall(date)
@@ -447,13 +451,13 @@ export function WaterfallSection({ date, currency }: { date: string; currency: s
   const accounts = accountList ?? []
   // The user's per-row picks (source, and destination for a goal with no
   // account), keyed like the selection. Lost on reload, on purpose: the
-  // cascade may have moved.
+  // suggestions may have moved.
   const [choices, setChoices] = useState<Record<string, Choice>>({})
   const goalsById = new Map((goals ?? []).map((g) => [g.id, g]))
   const actions = waterfall?.actions ?? []
   const executableActions = actions.filter((a) => resolve(a, choices[actionKey(a)], accounts).executable)
   // Selected by default — acting on the suggestions is the common case.
-  // Tracking the opt-outs keeps the set right when the cascade recomputes.
+  // Tracking the opt-outs keeps the set right when the suggestions recompute.
   const selected = new Set(executableActions.map(actionKey).filter((id) => !deselected.has(id)))
 
   function toggle(goalId: string) {
@@ -498,7 +502,12 @@ export function WaterfallSection({ date, currency }: { date: string; currency: s
     }
   }
 
-  const steps = [...(waterfall?.steps ?? [])].sort((a, b) => a.priority - b.priority)
+  // Already in the server's order: pillar, then priority inside it. Sorting
+  // by `priority` alone here would mix the pillars again.
+  const steps = waterfall?.steps ?? []
+  const groups = (Object.keys(PILLAR_OF_KIND) as SavingsGoalKind[])
+    .map((kind) => ({ kind, steps: steps.filter((s) => s.kind === kind) }))
+    .filter((g) => g.steps.length > 0)
   const completed = (goals ?? []).filter((g) => g.completed_at)
 
   async function patchGoal(id: string, payload: Parameters<typeof updateGoal.mutateAsync>[0]['payload']) {
@@ -510,12 +519,15 @@ export function WaterfallSection({ date, currency }: { date: string; currency: s
     }
   }
 
-  // Swap with the neighbour, then renumber 0..n so ties (priority isn't
-  // unique) can't make the move a no-op. Only the rows that changed are sent.
-  async function move(index: number, direction: -1 | 1) {
+  // Swap with the neighbour in the same pillar (the pillar is fixed by the
+  // kind, priority only orders inside it), then renumber 0..n so ties
+  // (priority isn't unique) can't make the move a no-op. Only the rows that
+  // changed are sent.
+  async function move(goalId: string, direction: -1 | 1) {
     const order = steps.map((s) => s.goal_id)
+    const index = order.indexOf(goalId)
     const target = index + direction
-    if (target < 0 || target >= order.length) return
+    if (index < 0 || target < 0 || target >= order.length || steps[target].kind !== steps[index].kind) return
     ;[order[index], order[target]] = [order[target], order[index]]
     setGoalError(null)
     try {
@@ -531,14 +543,15 @@ export function WaterfallSection({ date, currency }: { date: string; currency: s
 
   return (
     <Card
-      title="Cascata del risparmio"
+      title="Versamenti del mese"
       meta={
         <Tip>
           <span>
-            Si distribuisce la quota di risparmio del mese o, se è di più, quello che i conti di spesa hanno oltre l’obiettivo di liquidità: prima le
-            tasse, poi gli obiettivi in ordine di priorità, passando al gradino dopo solo quando il precedente è pieno (al 95%).
+            Si distribuisce la quota di risparmio del mese o, se è di più, quello che i conti di spesa hanno oltre la liquidità del primo pilastro:
+            prima le tasse, che sono un debito, poi il fondo emergenza, gli accantonamenti e infine gli investimenti. Dentro ogni pilastro gli
+            obiettivi seguono la loro priorità, e si passa al successivo solo quando quello sopra è pieno (al 95%).
           </span>
-          <span>Gli obiettivi con una scadenza entrano in ordine di data; puoi spostarli dal menu.</span>
+          <span>Gli obiettivi con una scadenza entrano in ordine di data; dal menu puoi spostarli dentro il loro pilastro.</span>
         </Tip>
       }
       action={
@@ -551,7 +564,7 @@ export function WaterfallSection({ date, currency }: { date: string; currency: s
         <LoadingBlock className="mt-3 h-40" />
       ) : isError || !waterfall ? (
         <div className="mt-3">
-          <ErrorBlock>Non è stato possibile calcolare la cascata.</ErrorBlock>
+          <ErrorBlock>Non è stato possibile calcolare i versamenti del mese.</ErrorBlock>
         </div>
       ) : (
         <>
@@ -580,37 +593,55 @@ export function WaterfallSection({ date, currency }: { date: string; currency: s
                   Parti da un fondo emergenza di qualche mese di spese primarie.
                 </EmptyState>
               ) : (
-                <ol aria-label="Gradini">
-                  {waterfall.tax_provision && <TaxRow rung={waterfall.tax_provision} currency={currency} />}
-                  {steps.map((step, i) => (
-                    <li key={step.goal_id} className="flex items-start gap-1 border-t border-line first:border-t-0">
-                      <div className="min-w-0 flex-1">
-                        <StepRow step={step} index={i} goal={goalsById.get(step.goal_id)} currency={currency} />
-                      </div>
-                      <div className="pt-3">
-                        <RowMenu
-                          label={`Azioni per ${step.name}`}
-                          items={[
-                            { label: 'Fonti collegate…', onSelect: () => setEditingSources(goalsById.get(step.goal_id) ?? null) },
-                            ...(i > 0 ? [{ label: 'Sposta su', onSelect: () => move(i, -1) }] : []),
-                            ...(i < steps.length - 1 ? [{ label: 'Sposta giù', onSelect: () => move(i, 1) }] : []),
-                            ...(step.target_mode === 'fixed_amount'
-                              ? [{ label: 'Segna come raggiunto', onSelect: () => patchGoal(step.goal_id, { completed_at: toISODate(new Date()) }) }]
-                              : []),
-                            {
-                              label: 'Elimina obiettivo',
-                              tone: 'danger',
-                              onSelect: () => {
-                                setDeleteError(null)
-                                setDeleting(goalsById.get(step.goal_id) ?? null)
-                              },
-                            },
-                          ]}
-                        />
-                      </div>
-                    </li>
+                <div className="flex flex-col gap-3">
+                  {waterfall.tax_provision && (
+                    <section aria-labelledby="wf-taxes">
+                      <h3 id="wf-taxes" className="text-[13px] font-extrabold text-ink-2">
+                        Prima dei pilastri
+                      </h3>
+                      <ol>
+                        <TaxRow rung={waterfall.tax_provision} currency={currency} />
+                      </ol>
+                    </section>
+                  )}
+                  {groups.map(({ kind, steps: group }) => (
+                    <section key={kind} aria-labelledby={`wf-pillar-${kind}`}>
+                      <h3 id={`wf-pillar-${kind}`} className="text-[13px] font-extrabold text-ink-2">
+                        {PILLAR_OF_KIND[kind].number} · {PILLAR_OF_KIND[kind].title}
+                      </h3>
+                      <ol>
+                        {group.map((step, i) => (
+                          <li key={step.goal_id} className="flex items-start gap-1 border-t border-line first:border-t-0">
+                            <div className="min-w-0 flex-1">
+                              <StepRow step={step} index={i} goal={goalsById.get(step.goal_id)} currency={currency} />
+                            </div>
+                            <div className="pt-3">
+                              <RowMenu
+                                label={`Azioni per ${step.name}`}
+                                items={[
+                                  { label: 'Fonti collegate…', onSelect: () => setEditingSources(goalsById.get(step.goal_id) ?? null) },
+                                  ...(i > 0 ? [{ label: 'Più priorità', onSelect: () => move(step.goal_id, -1) }] : []),
+                                  ...(i < group.length - 1 ? [{ label: 'Meno priorità', onSelect: () => move(step.goal_id, 1) }] : []),
+                                  ...(step.target_mode === 'fixed_amount'
+                                    ? [{ label: 'Segna come raggiunto', onSelect: () => patchGoal(step.goal_id, { completed_at: toISODate(new Date()) }) }]
+                                    : []),
+                                  {
+                                    label: 'Elimina obiettivo',
+                                    tone: 'danger',
+                                    onSelect: () => {
+                                      setDeleteError(null)
+                                      setDeleting(goalsById.get(step.goal_id) ?? null)
+                                    },
+                                  },
+                                ]}
+                              />
+                            </div>
+                          </li>
+                        ))}
+                      </ol>
+                    </section>
                   ))}
-                </ol>
+                </div>
               )}
               {goalError && (
                 <div className="mt-2">

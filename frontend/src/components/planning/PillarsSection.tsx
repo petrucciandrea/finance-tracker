@@ -9,13 +9,14 @@ import { Tip } from '@/components/ui/Tip'
 import { usePlan, useUpdatePlan } from '@/hooks/usePlanning'
 import { usePillars } from '@/hooks/useSavingsGoals'
 import { formatAmount, formatShortDate, toNumber } from '@/lib/format'
+import { PILLAR_TITLES } from '@/lib/goals'
 import type { Pillar, PillarItem, PillarKey } from '@/types'
 
 const PILLARS: Record<PillarKey, { title: string; blurb: string }> = {
-  operating: { title: 'Liquidità', blurb: 'I conti per le spese del mese, non assegnati a obiettivi.' },
-  emergency: { title: 'Fondo emergenza', blurb: 'La riserva per gli imprevisti: si riempie per prima.' },
-  planned: { title: 'Accantonamenti', blurb: 'Spese con una data o già note: auto, casa, tasse, scadenze.' },
-  investing: { title: 'Investimenti', blurb: 'Il lungo periodo: quello che non serve nei prossimi anni.' },
+  operating: { title: PILLAR_TITLES.operating, blurb: 'I conti per le spese del mese, non assegnati a obiettivi. Quello che hanno in più va ai pilastri successivi.' },
+  emergency: { title: PILLAR_TITLES.emergency, blurb: 'La riserva per gli imprevisti: si riempie per prima, subito dopo le tasse.' },
+  planned: { title: PILLAR_TITLES.planned, blurb: 'Spese con una data o già note: auto, casa, tasse, scadenze.' },
+  investing: { title: PILLAR_TITLES.investing, blurb: 'Il lungo periodo: quello che non serve nei prossimi anni.' },
 }
 
 const MONTH_CHOICES = ['0.5', '1', '2', '3']
@@ -138,7 +139,7 @@ function PillarDetails({ pillar, currency, months, monthlySpend }: { pillar: Pil
             {pillar.key === 'investing'
               ? 'Cosa c’è dentro'
               : pillar.key === 'operating'
-                ? 'Eccedenza sui conti degli obiettivi (obiettivi già pieni): la cascata la sposta'
+                ? 'Eccedenza sui conti degli obiettivi (obiettivi già pieni): va ai pilastri successivi'
                 : 'Già messo da parte o in arrivo'}
           </h3>
           <ul className="mt-1">
@@ -150,7 +151,7 @@ function PillarDetails({ pillar, currency, months, monthlySpend }: { pillar: Pil
       )}
 
       {pillar.steps.length === 0 && pillar.items.length === 0 && pillar.key !== 'operating' && (
-        <p className="text-[13px] text-ink-3">Nessun obiettivo in questo pilastro: aggiungine uno dalla cascata del risparmio qui sotto.</p>
+        <p className="text-[13px] text-ink-3">Nessun obiettivo in questo pilastro: aggiungine uno da «Versamenti del mese» qui sotto.</p>
       )}
     </div>
   )
@@ -185,8 +186,8 @@ function PillarTile({ pillar, index, currency, onOpen }: { pillar: Pillar; index
 
 /**
  * The four pillars of the plan, in the order money should fill them. A
- * reading of where the money is against what each layer needs; the cascade
- * below is where the month's quota gets moved.
+ * reading of where the money is against what each layer needs; "Versamenti
+ * del mese" below is where the month's money gets moved, in the same order.
  */
 export function PillarsSection({ date }: { date: string }) {
   const { data, isLoading, isError } = usePillars(date)
@@ -200,7 +201,8 @@ export function PillarsSection({ date }: { date: string }) {
       title="I quattro pilastri"
       meta={
         <Tip>
-          Prima la liquidità per il mese, poi il fondo emergenza, poi gli accantonamenti per le spese con una data, e solo dopo gli investimenti.
+          Prima la liquidità per il mese. Quello che c’è in più va alle tasse, poi al fondo emergenza, agli accantonamenti per le spese con una data e
+          solo alla fine agli investimenti. Dentro ogni pilastro decide la priorità degli obiettivi.
         </Tip>
       }
     >

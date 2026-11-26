@@ -181,9 +181,11 @@ def test_a_new_goal_without_priority_is_placed_by_its_date(
 
     body = client.get(GOALS_URL, headers=headers).json()
 
-    # Nearest deadline first, all of them above the open-ended rung.
+    # Nearest deadline first inside pillar 3. The numbers only order a
+    # pillar's own goals, so they must rise there and nowhere else.
     assert [g["name"] for g in body] == ["Emergenza", "Auto", "Viaggio", "Mutuo", "PAC"]
-    assert [g["priority"] for g in body] == [0, 1, 2, 3, 4]
+    planned = [g["priority"] for g in body if g["kind"] == "medium_term"]
+    assert planned == sorted(set(planned))
 
 
 def test_a_dated_goal_reports_its_timetable(client: TestClient, registered_user: dict) -> None:

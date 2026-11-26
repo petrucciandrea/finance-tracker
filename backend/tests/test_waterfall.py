@@ -137,7 +137,7 @@ def test_a_second_open_ended_goal_is_rejected(client: TestClient, registered_use
     assert response.status_code == 409
 
 
-def test_goals_are_listed_in_cascade_order(client: TestClient, registered_user: dict) -> None:
+def test_goals_are_listed_in_pillar_order(client: TestClient, registered_user: dict) -> None:
     headers = registered_user["auth_headers"]
     _goal(client, headers, name="Terzo", kind="long_term", priority=5, target_mode="open_ended")
     _goal(
@@ -152,6 +152,74 @@ def test_goals_are_listed_in_cascade_order(client: TestClient, registered_user: 
     body = client.get(GOALS_URL, headers=headers).json()
 
     assert [g["name"] for g in body] == ["Primo", "Secondo", "Terzo"]
+
+
+def test_priority_orders_goals_only_inside_their_pillar(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    # Numbered as if the PAC came first: the pillars still win.
+    _goal(client, headers, name="PAC", kind="long_term", priority=0, target_mode="open_ended")
+    _goal(
+        client, headers, name="Auto", kind="medium_term", priority=1,
+        target_mode="fixed_amount", target_amount="2000.00",
+    )
+    _goal(
+        client, headers, name="Emergenza", kind="emergency_fund", priority=7,
+        target_mode="fixed_amount", target_amount="1000.00",
+    )
+    _goal(
+        client, headers, name="Casa", kind="medium_term", priority=0,
+        target_mode="fixed_amount", target_amount="9000.00",
+    )
+
+    body = client.get(GOALS_URL, headers=headers).json()
+
+    assert [g["name"] for g in body] == ["Emergenza", "Casa", "Auto", "PAC"]
+
+
+def test_only_a_long_term_goal_can_be_open_ended(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    for kind in ("emergency_fund", "medium_term"):
+        response = client.post(
+            GOALS_URL,
+            json={"name": "Resto", "kind": kind, "target_mode": "open_ended"},
+            headers=headers,
+        )
+        # Filled pillar by pillar, it would starve every pillar after it.
+        assert response.status_code == 422, kind
+
+    goal = _goal(
+        client, headers, name="Auto", kind="medium_term",
+        target_mode="fixed_amount", target_amount="2000.00",
+    )
+    response = client.patch(
+        f"{GOALS_URL}/{goal['id']}",
+        json={"target_mode": "open_ended", "target_amount": None},
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+def test_a_new_goal_is_placed_last_in_its_pillar_above_the_open_ended_one(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    _goal(client, headers, name="PAC", kind="long_term", target_mode="open_ended")
+    _goal(
+        client, headers, name="Pensione", kind="long_term",
+        target_mode="fixed_amount", target_amount="50000.00",
+    )
+    _goal(
+        client, headers, name="Emergenza", kind="emergency_fund",
+        target_mode="fixed_amount", target_amount="1000.00",
+    )
+
+    body = client.get(GOALS_URL, headers=headers).json()
+
+    assert [g["name"] for g in body] == ["Emergenza", "Pensione", "PAC"]
 
 
 # ---------------------------------------------------------------------------

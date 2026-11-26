@@ -790,7 +790,7 @@ def test_a_provision_account_cant_fund_a_goal_and_vice_versa(
     savings = _account(client, headers, "Risparmi")
     goal = client.post(
         "/api/v1/planning/goals",
-        json={"name": "Fondo", "kind": "medium_term", "priority": 1, "target_mode": "open_ended"},
+        json={"name": "Fondo", "kind": "long_term", "priority": 1, "target_mode": "open_ended"},
         headers=headers,
     ).json()
 

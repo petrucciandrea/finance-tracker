@@ -134,28 +134,28 @@ def _validate_dates(
             )
 
 
-def _placement_priority(db: Session, user: User, target_date: date_ | None) -> int:
+def _placement_priority(
+    db: Session, user: User, kind: str, target_date: date_ | None
+) -> int:
     """
-    Where a goal created without a priority goes. A dated goal is placed
-    among the dated ones by its date (nearest first), so the cascade funds
-    the car due next year before the down payment due in five; anything
-    else goes above the long-term rungs, which sit at the bottom. The user
-    can reorder afterwards and the stored priority is what the cascade
-    follows — the date only decides the starting position.
+    Where a goal created without a priority goes, inside its own pillar (the
+    pillar is fixed by `kind`, see `waterfall.PILLAR_RANK`). A dated goal
+    goes among the dated ones by date, nearest first, so the car due next
+    year comes before the down payment due in five. Anything else goes last
+    in its pillar, but above an open-ended goal, which absorbs the rest and
+    must stay at the bottom. The user can reorder afterwards: the date only
+    decides the starting position.
     """
     goals = [g for g in waterfall_service.list_goals(db, user) if g.completed_at is None]
+    same = [g for g in goals if g.kind == kind]
     if target_date is not None:
-        later = [g.priority for g in goals if g.target_date and g.target_date > target_date]
+        later = [g.priority for g in same if g.target_date and g.target_date > target_date]
         if later:
             return min(later)
-        dated = [g.priority for g in goals if g.target_date]
+        dated = [g.priority for g in same if g.target_date]
         if dated:
             return max(dated) + 1
-    tail = [
-        g.priority
-        for g in goals
-        if g.kind == SavingsGoalKind.long_term.value or g.target_mode == TargetMode.open_ended.value
-    ]
+    tail = [g.priority for g in same if g.target_mode == TargetMode.open_ended.value]
     if tail:
         return min(tail)
     return max((g.priority for g in goals), default=-1) + 1
@@ -166,6 +166,20 @@ def _make_room(db: Session, user: User, priority: int) -> None:
     for goal in waterfall_service.list_goals(db, user):
         if goal.priority >= priority:
             goal.priority += 1
+
+
+def _reject_open_ended_outside_investing(kind: str, target_mode: str) -> None:
+    """
+    An open-ended goal absorbs whatever reaches it, and goals are filled pillar
+    by pillar: one in pillar 2 or 3 would starve every pillar after it, with
+    no priority able to move it below them. "Whatever is left" is pillar 4's
+    job by definition.
+    """
+    if target_mode == TargetMode.open_ended.value and kind != SavingsGoalKind.long_term.value:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Only a long_term goal can be open-ended",
+        )
 
 
 def _reject_second_open_ended(db: Session, user: User, exclude_goal_id: UUID | None = None) -> None:
@@ -211,12 +225,13 @@ def create_goal(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="A new goal's target date must be in the future",
         )
+    _reject_open_ended_outside_investing(payload.kind.value, payload.target_mode.value)
     if payload.target_mode == TargetMode.open_ended:
         _reject_second_open_ended(db, current_user)
 
     priority = payload.priority
     if priority is None:
-        priority = _placement_priority(db, current_user, payload.target_date)
+        priority = _placement_priority(db, current_user, payload.kind.value, payload.target_date)
         _make_room(db, current_user, priority)
 
     goal = SavingsGoal(
@@ -434,6 +449,9 @@ def update_goal(
         target_date,
         update_data.get("completed_at", goal.completed_at),
     )
+    if target_mode_value != goal.target_mode:
+        # Only on a change: a goal stored that way before the rule still saves.
+        _reject_open_ended_outside_investing(goal.kind, target_mode_value)
     if target_mode_value == TargetMode.open_ended.value:
         _reject_second_open_ended(db, current_user, exclude_goal_id=goal.id)
 

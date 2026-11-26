@@ -1,8 +1,11 @@
 """
 The waterfall savings engine.
 
-The savings quota for a period fills the rungs of the ladder in priority
-order, and only spills into the next once the one above is full. Three
+The money to place (the month's savings quota, or pillar 1's surplus when
+larger) fills the plan's pillars in order — the tax provision first, as a
+debt, then the emergency fund (2), planned expenses (3), investing (4) —
+and inside a pillar the goals in priority order, spilling into the next
+only once the one above is full. "Rung" below means one of those goals. Three
 properties fall out of that shape rather than being coded specially:
 
 - **Refilling is free.** Drain the emergency fund and its gap reopens;
@@ -37,7 +40,7 @@ from datetime import date as date_
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import Account, SavingsAllocation, SavingsGoal, User
@@ -70,6 +73,15 @@ from app.services.planning import (
 # module docstring on starvation.
 FUNDED_THRESHOLD = Decimal("0.95")
 
+# The pillar each kind of goal belongs to, in the order money fills them.
+# `priority` only orders goals *inside* a pillar: a long-term goal can never
+# be served before the emergency fund, however it is numbered.
+PILLAR_RANK = {
+    SavingsGoalKind.emergency_fund.value: 2,
+    SavingsGoalKind.medium_term.value: 3,
+    SavingsGoalKind.long_term.value: 4,
+}
+
 
 def _quantize(amount: Decimal) -> Decimal:
     # ROUND_DOWN so the sum of allocations can never exceed the quota; the
@@ -79,7 +91,8 @@ def _quantize(amount: Decimal) -> Decimal:
 
 def list_goals(db: Session, user: User, *, include_completed: bool = True) -> list[SavingsGoal]:
     """
-    Goals in cascade order. `created_at` is the tiebreaker because
+    Goals in the order money fills them: pillar first (see `PILLAR_RANK`),
+    then `priority` inside the pillar. `created_at` is the tiebreaker because
     `priority` is not unique — see the model for why it can't be.
     """
     query = (
@@ -89,7 +102,8 @@ def list_goals(db: Session, user: User, *, include_completed: bool = True) -> li
     )
     if not include_completed:
         query = query.filter(SavingsGoal.completed_at.is_(None))
-    return query.order_by(SavingsGoal.priority, SavingsGoal.created_at).all()
+    pillar = case(PILLAR_RANK, value=SavingsGoal.kind, else_=99)
+    return query.order_by(pillar, SavingsGoal.priority, SavingsGoal.created_at).all()
 
 
 def active_sources(goal: SavingsGoal) -> list:

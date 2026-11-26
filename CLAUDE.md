@@ -373,9 +373,12 @@ history. Zero would claim the user needs nothing to live on — and would mark a
 emergency-fund target as already met, releasing the whole savings quota to the next rung.
 Averages ignore the month in progress and count only whole months.
 
-### Waterfall: priority order, 95% band, downward roll-up
-The savings quota fills rungs in `priority` order and spills into the next only when the
-one above is full. A drained emergency fund refills itself for free — its gap reopens and
+### Waterfall: pillar order, then priority, 95% band, downward roll-up
+The savings quota fills the goals **pillar by pillar** (tax provision first, as a debt; then
+emergency fund → planned expenses → investing, `waterfall.PILLAR_RANK` from `kind`) and,
+inside a pillar, in `priority` order, spilling into the next only when the one above is
+full. `priority` never crosses a pillar: a long-term goal numbered 0 still comes after the
+emergency fund. A drained emergency fund refills itself for free — its gap reopens and
 it is top priority again. A rung counts as funded at **95%**: without the band a dynamic
 target starves the ladder forever with micro top-ups.
 
@@ -389,8 +392,10 @@ open-ended or not-yet-knowable target takes the rest). What is left once all of 
 is that account's *excess*: a pool the cascade draws from after the operating one, with the
 giroconto leaving that account. So a dedicated account above its goal's target also yields
 excess — an overfunded rung still never "gives money back" to itself, but the extra moves on.
-There is **at most one open-ended rung**. Both rules are router-enforced 409s, since neither
-rule's scope fits a unique index on its table.
+There is **at most one open-ended rung**, and only on a `long_term` goal (422 otherwise; rows
+stored before the rule stay): filled pillar by pillar, an open-ended goal in pillar 2 or 3
+would starve every pillar after it. The other two rules are router-enforced 409s, since
+neither rule's scope fits a unique index on its table.
 Deleting an account that funds a goal is a 409 too — it would vanish from the balance map
 and the goal would silently read as unfunded.
 
@@ -643,8 +648,9 @@ after this month / the months after it) against `monthly_pace` — what the **qu
 would give the goal in the same cascade once this month's suggestions are done
 (`_recurring_shares`). The surplus is a stock: projected forward it would call every goal
 on track. `projected_date` and `on_track` run on `monthly_pace`. The gap is taken **before**
-this month's executed giroconti, so executing one doesn't change the timetable. The cascade still runs on `priority`; a goal created without one is *placed* by date
-(nearest first, above the long-term rungs) and the user reorders freely afterwards.
+this month's executed giroconti, so executing one doesn't change the timetable. The cascade still runs on pillar + `priority`; a goal created without one is *placed* in its
+pillar (a dated one by date, nearest first; otherwise last, above an open-ended goal) and the
+user reorders it inside the pillar afterwards. The goal form no longer asks for a priority.
 `completed_at` closes a fixed-amount goal (bought the car): it leaves the cascade and its
 sources are retired. A drained emergency fund reopens; a reached goal must not.
 
@@ -775,6 +781,9 @@ Frankfurter, at `https://api.frankfurter.dev/v1` (the old `.app` domain 301-redi
   free — never format an amount around them. The flag is module state set by `AuthProvider`;
   `AppLayout` re-keys the `<Outlet>` on toggle so already-rendered pages pick it up.
   Percentages stay visible. Input fields in edit forms show raw values on purpose.
+- The planning UI speaks in **pillars**: "cascata" and "gradino" are not user-facing words.
+  The monthly transfers section is "Versamenti del mese", a goal's kind is its "Pilastro", and
+  "priorità" only means the order inside one pillar. Code keeps `waterfall`/`rung`/`steps`.
 - Long "how this works" explanations go behind a lightbulb (`components/ui/Tip.tsx`, a fixed
   bubble — spans only, so it fits inside a `<p>`), with at most a short line left visible.
   Warnings, anything the user must act on, empty states, destructive confirmations, legal

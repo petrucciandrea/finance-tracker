@@ -67,7 +67,7 @@ export function alertText(a: Alert): { title: string; body: string } {
     case 'goal_behind_schedule':
       return {
         title: `«${a.label}» è in ritardo`,
-        body: `Dal mese prossimo servono ${money(a.amount, a.currency)} al mese per arrivare in tempo${a.due_date ? `; con la sola quota mensile arriva a ${formatMonthYear(a.due_date)}` : '; con la sola quota mensile non arriva'}. Puoi spostarlo più in alto nella cascata o alzare la quota di risparmio.`,
+        body: `Dal mese prossimo servono ${money(a.amount, a.currency)} al mese per arrivare in tempo${a.due_date ? `; con la sola quota mensile arriva a ${formatMonthYear(a.due_date)}` : '; con la sola quota mensile non arriva'}. Puoi dargli più priorità nel suo pilastro o alzare la quota di risparmio.`,
       }
     case 'goal_horizon_mismatch':
       return {

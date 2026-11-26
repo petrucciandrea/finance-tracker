@@ -782,8 +782,10 @@ Frankfurter, at `https://api.frankfurter.dev/v1` (the old `.app` domain 301-redi
   `AppLayout` re-keys the `<Outlet>` on toggle so already-rendered pages pick it up.
   Percentages stay visible. Input fields in edit forms show raw values on purpose.
 - The planning UI speaks in **pillars**: "cascata" and "gradino" are not user-facing words.
-  The monthly transfers section is "Versamenti del mese", a goal's kind is its "Pilastro", and
-  "priorità" only means the order inside one pillar. Code keeps `waterfall`/`rung`/`steps`.
+  There is one section, "I quattro pilastri" (`PillarsSection`): each pillar with its goals and,
+  under each goal, this month's suggested giroconti; the tax provision sits in pillar 3 but is
+  labelled as served before every pillar. A goal's kind is its "Pilastro", and "priorità" only
+  means the order inside one pillar. Code keeps `waterfall`/`rung`/`steps`.
 - Long "how this works" explanations go behind a lightbulb (`components/ui/Tip.tsx`, a fixed
   bubble — spans only, so it fits inside a `<p>`), with at most a short line left visible.
   Warnings, anything the user must act on, empty states, destructive confirmations, legal

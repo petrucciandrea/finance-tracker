@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { ModelEditor } from '@/components/planning/ModelEditor'
 import { InvestingRulesSection } from '@/components/planning/InvestingRulesSection'
 import { PillarsSection } from '@/components/planning/PillarsSection'
-import { WaterfallSection } from '@/components/planning/WaterfallSection'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { ErrorBlock, LoadingBlock, Notice } from '@/components/ui/EmptyState'
@@ -502,7 +501,6 @@ export function PlanningPage() {
         <RunwayCard survival={survival} inProgress={inProgress} />
         <Simulator key={date} date={date} currency={currency} />
       </div>
-      <WaterfallSection date={date} currency={currency} />
       <InvestingRulesSection currency={currency} />
     </>
   )

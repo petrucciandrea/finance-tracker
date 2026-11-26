@@ -11,7 +11,9 @@ from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
+from app.models import ExchangeRate
 from app.services.asset_prices import AssetPriceUnavailable
 
 ALLOCATION_URL = "/api/v1/portfolio/allocation"
@@ -310,3 +312,34 @@ def test_regions_leave_out_what_has_no_region(
     assert Decimal(body["total"]) == Decimal("500.00")
     assert Decimal(body["outside_value"]) == Decimal("500.00")
     assert body["coverage"] == 100.0
+
+
+def test_crypto_has_no_fiat_currency_and_a_world_etf_is_mostly_dollars(
+    client: TestClient,
+    registered_user: dict,
+    broker: dict,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Crypto is priced by CoinGecko in USD, and the valuation reads the USD
+    # rate from the cache only: the autouse fixture provides neither.
+    monkeypatch.setattr(
+        "app.services.asset_prices._fetch_from_coingecko", lambda symbol: Decimal("50.00")
+    )
+    db_session.add(
+        ExchangeRate(
+            from_currency="USD", to_currency="EUR", rate=Decimal("1"), date=TODAY, source="test"
+        )
+    )
+    db_session.flush()
+    headers = registered_user["auth_headers"]
+    _buy(client, headers, broker["id"], "EUNL.DE", "10")  # 500, from the reference file
+    _buy(client, headers, broker["id"], "BTC", "10", type_="crypto")  # 500, type default
+
+    body = _allocation(client, headers, "currency")
+
+    # Classified in full, so the rules can judge the dimension.
+    assert body["coverage"] == 100.0
+    # Half the value is the ETF's 72.77% USD; bitcoin is not a dollar position.
+    assert _pct(body, "USD") == pytest.approx(36.39, abs=0.01)
+    assert _pct(body, "other") == pytest.approx(50 + 7.74 / 2, abs=0.01)

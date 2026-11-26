@@ -712,7 +712,8 @@ portfolio read as cautious and a target band would say "buy equities" with it. W
 product and dimension: the user's (`asset_exposures`, replaced per dimension, sum ≤ 100 in the
 router) > `app/data/asset_exposures.json` (researched, with `as_of`, sources and notes; it
 ships with the code, so no data migration) > the type's default (stock = equity, crypto and
-metals = no region). The rest is **unclassified**, never guessed; under 90% coverage the rules
+metals = no region and currency "other": no fiat currency of their own, and gold counted as
+USD would fire a dollar cap). The rest is **unclassified**, never guessed; under 90% coverage the rules
 don't judge. Sectors (GICS) are over the equity part only. Regions follow MSCI's
 developed/emerging split (Korea is emerging), whatever the fund's index provider says;
 Vanguard reports ICB, so VWCE's sectors are the MSCI ACWI's as a proxy (said in its notes).

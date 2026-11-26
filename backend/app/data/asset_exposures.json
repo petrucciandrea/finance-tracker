@@ -10,7 +10,7 @@
         "https://www.nl.vanguard/professional/product/etf/equity/9679/ftse-all-world-ucits-etf-usd-accumulating",
         "https://www.msci.com/documents/10199/255599/msci-acwi-net.pdf"
       ],
-      "notes": "Regions: US 62.8, Japan 5.9, UK 3.3 from Vanguard (31/10/2026); Canada, Italy, Pacific ex Japan, emerging (Korea included, as MSCI does) and Europe estimated from the FTSE All-World's usual split. Sectors: Vanguard reports ICB, so the MSCI ACWI GICS weights (30/10/2026) stand in for them.",
+      "notes": "Regions: US 62.8, Japan 5.9, UK 3.3 from Vanguard (31/10/2026); Canada, Italy, Pacific ex Japan, emerging (Korea included, as MSCI does) and Europe estimated from the FTSE All-World's usual split. Sectors: Vanguard reports ICB, so the MSCI ACWI GICS weights (30/10/2026) stand in for them. Currency (unhedged, so the currency of each country's listings): USD = US, JPY, GBP as above; Switzerland (~2.2) and the Nordics outside the euro (~1.4) estimated out of Europe, EUR the rest of Europe with Italy; other = Canada, Pacific ex Japan and emerging.",
       "exposures": {
         "asset_class": {"equity": "100"},
         "region": {
@@ -34,7 +34,8 @@
           "materials": "3.45",
           "utilities": "2.44",
           "real_estate": "1.53"
-        }
+        },
+        "currency": {"USD": "62.8", "EUR": "7.6", "JPY": "5.9", "GBP": "3.3", "CHF": "2.2", "other": "18.2"}
       }
     },
     {
@@ -46,7 +47,7 @@
         "https://www.msci.com/documents/10199/255599/msci-world-index.pdf",
         "https://www.msci.com/documents/10199/255599/msci-acwi-net.pdf"
       ],
-      "notes": "Regions: US 72.77 + Canada 3.44, Japan 5.72, UK 3.52 from the MSCI World factsheet (30/10/2026); Italy (~0.65) and Pacific ex Japan (~2.6) estimated, Europe the remainder (Switzerland 2.34 included). Sectors: the MSCI ACWI GICS weights as a proxy (World runs about a point lower on IT).",
+      "notes": "Regions: US 72.77 + Canada 3.44, Japan 5.72, UK 3.52 from the MSCI World factsheet (30/10/2026); Italy (~0.65) and Pacific ex Japan (~2.6) estimated, Europe the remainder (Switzerland 2.34 included). Sectors: the MSCI ACWI GICS weights as a proxy (World runs about a point lower on IT). Currency (unhedged, so the currency of each country's listings): USD = US, plus Japan, UK and Switzerland from the factsheet; the Nordics outside the euro and Israel (~1.7) estimated out of Europe, EUR the rest of Europe with Italy; other = Canada, Pacific ex Japan and that estimate.",
       "exposures": {
         "asset_class": {"equity": "100"},
         "region": {
@@ -69,7 +70,8 @@
           "materials": "3.45",
           "utilities": "2.44",
           "real_estate": "1.53"
-        }
+        },
+        "currency": {"USD": "72.77", "EUR": "7.91", "JPY": "5.72", "GBP": "3.52", "CHF": "2.34", "other": "7.74"}
       }
     },
     {

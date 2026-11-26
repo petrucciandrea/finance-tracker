@@ -84,10 +84,23 @@ STALE_AFTER = timedelta(days=365)
 # Below this share of classified value a rule doesn't judge the dimension.
 MIN_COVERAGE = 90.0
 
+# Crypto and metals have no fiat currency of their own: they are quoted in
+# USD, but the quote is not what moves them, and counting gold as USD would
+# make a cap on the dollar fire on a gold bar. "other" says "not EUR" without
+# pretending to know which currency; a user who sees them otherwise overrides
+# the product.
 TYPE_DEFAULTS: dict[str, dict[str, dict[str, Decimal]]] = {
     "stock": {"asset_class": {"equity": HUNDRED}},
-    "crypto": {"asset_class": {"crypto": HUNDRED}, "region": {"not_applicable": HUNDRED}},
-    "metal": {"asset_class": {"commodity": HUNDRED}, "region": {"not_applicable": HUNDRED}},
+    "crypto": {
+        "asset_class": {"crypto": HUNDRED},
+        "region": {"not_applicable": HUNDRED},
+        "currency": {"other": HUNDRED},
+    },
+    "metal": {
+        "asset_class": {"commodity": HUNDRED},
+        "region": {"not_applicable": HUNDRED},
+        "currency": {"other": HUNDRED},
+    },
 }
 
 NOT_APPLICABLE = "not_applicable"

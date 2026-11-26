@@ -647,11 +647,9 @@ export interface AllocationStatus {
   base_currency: string
   period_start: string
   period_end: string
-  // The plan's base: gross income minus imposta + INPS on the P.IVA
-  // invoices collected in the month.
+  // The plan's base: the month's income, gross of P.IVA taxes (they are
+  // spend, in "Tasse", in the month an F24 is paid).
   income_total: string
-  gross_income_total: string
-  flat_rate_tax_total: string
   buckets: AllocationBucketStatus[]
   unclassified_amount: string
   classification_coverage: number
@@ -870,9 +868,7 @@ export interface WaterfallPlan {
   base_currency: string
   period_start: string
   period_end: string
-  income_total: string // net of flat-rate taxes
-  gross_income_total: string
-  flat_rate_tax_total: string
+  income_total: string
   savings_quota: string
   already_allocated: string
   steps: WaterfallStep[]

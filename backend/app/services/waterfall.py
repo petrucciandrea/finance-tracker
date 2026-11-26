@@ -242,10 +242,10 @@ def compute_waterfall(db: Session, user: User, on_date: date_) -> WaterfallPlan:
     plan = get_or_create_plan(db, user)
     period_start, period_end = period_bounds("monthly", on_date)
 
-    # Net of flat-rate taxes: a quota on gross invoices would send the
-    # State's share up the savings ladder.
-    base = income_base(db, user, date_from=period_start, date_to=period_end)
-    income = base.net
+    # Gross of P.IVA taxes (they are spend when the F24 is paid). The
+    # State's share can't climb the ladder anyway: the tax-provision rung
+    # comes before every pillar.
+    income = income_base(db, user, date_from=period_start, date_to=period_end)
     quota = _quantize(income * Decimal(str(plan.pct_savings)) / Decimal("100"))
     allocated_already = allocated_in_period(db, user, period_start)
     # Clamped: deleting an income after executing its transfers would
@@ -409,8 +409,6 @@ def compute_waterfall(db: Session, user: User, on_date: date_) -> WaterfallPlan:
         period_start=period_start,
         period_end=period_end,
         income_total=_quantize(income),
-        gross_income_total=_quantize(base.gross),
-        flat_rate_tax_total=_quantize(base.flat_rate_taxes),
         savings_quota=quota,
         already_allocated=_quantize(allocated_already),
         steps=steps,

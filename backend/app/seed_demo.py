@@ -113,6 +113,8 @@ EXPENSE_TREE: list[tuple[str, str, list[tuple[str, str | None]]]] = [
     ),
     ("Benessere", "useful", [("Palestra", None), ("Cura della persona", None)]),
     ("Viaggi", "discretionary", [("Voli", None), ("Alloggi", None)]),
+    # Where the F24s land: on the cash basis a tax is spend when it's paid.
+    ("Tasse", "primary", []),
 ]
 INCOME_CATEGORIES = ["Fatture", "Interessi", "Dividendi", "Rimborsi"]
 TRANSFER_CATEGORIES = [
@@ -121,7 +123,6 @@ TRANSFER_CATEGORIES = [
     "Prelievo contanti",
     "Ricarica conti",
     "Accantonamento tasse",
-    "F24",
 ]
 
 # ---------------------------------------------------------------------------
@@ -1041,19 +1042,24 @@ class Seeder:
                 # Nothing moves until the debit is taken: only the account it will hit.
                 payment.account_id = self.acc["tasse"].id
             elif payment.paid_on >= self.start:
-                leg = create_cash_leg(
-                    self.db,
-                    account=self.acc["tasse"],
-                    amount=-Decimal(payment.amount),
+                amount = -Decimal(payment.amount)
+                leg = Transaction(
+                    account_id=self.acc["tasse"].id,
+                    category_id=self.cat["Tasse"].id,
+                    amount=amount,
                     currency=BASE_CURRENCY,
-                    rate=Decimal(1),
-                    on_date=payment.paid_on,
+                    amount_base_currency=amount,
+                    exchange_rate=Decimal(1),
+                    date=payment.paid_on,
                     description="F24 "
                     + flat_rate_service.payment_label(
                         payment.component, payment.kind, payment.fiscal_year
                     ),
-                    category_id=self.cat["F24"].id,
+                    type="expense",
+                    source="manual",
                 )
+                self.db.add(leg)
+                self.db.flush()
                 payment.transaction_id = leg.id
                 payment.account_id = self.acc["tasse"].id
             self.db.add(payment)

@@ -137,7 +137,7 @@ funds a goal. A non-zero balance is **not** refused — it stays in the totals r
 silently vanishing; the UI warns instead.
 
 ### Every expense/income transaction has a category
-If no `category_id` is supplied, the backend assigns (creating on first use) a **"Varie"** category of the matching type. Applies to manual creation, CSV import, and PATCH that clears the category. `type: transfer` is exempt — a transfer between your own accounts isn't a categorizable spend. An income with `repays_transaction_id` (see Credits) falls back to **"Rimborsi"** instead of "Varie".
+If no `category_id` is supplied, the backend assigns (creating on first use) a **"Varie"** category of the matching type. Applies to manual creation, CSV import, and PATCH that clears the category. `type: transfer` is exempt — a transfer between your own accounts isn't a categorizable spend. An income with `repays_transaction_id` (see Credits) falls back to **"Rimborsi"** instead of "Varie", and an F24's movement to **"Tasse"** (see P.IVA).
 
 ### Refresh tokens are stored and rotated
 `refresh_tokens` holds a SHA-256 hash of each issued refresh token. `/auth/refresh` revokes the used token and issues a new pair, so a stolen refresh token is single-use. This is what makes `/auth/logout` a real revocation rather than a client-side forget.
@@ -567,22 +567,27 @@ issue year) still covers the whole year.
 
 Collecting either links an existing income (`owns_transaction = false`, typically from
 CSV) or writes one (`true`); only an owned one is retired by uncollect/delete, and its
-amount follows the invoice. F24 payments write a one-sided `transfer` via
-`create_cash_leg`, not an expense: the cost was booked as a liability when the income
-came in, so paying it moves cash and debt together and net worth doesn't jump. The
-transactions router refuses amount/date edits on those legs and deleting any linked one.
+amount follows the invoice. An F24 paid is an **`expense`** (cash basis: the tax is a debt
+from the collection, a cost on the day it's paid), in the category chosen or else **"Tasse"**
+(`ownership.get_or_create_taxes_category`: an existing leaf expense category of that name is
+reused, a new one is `primary`). Net worth still doesn't jump: the balance and the
+`tax_liability` drop together. It is not written by `create_cash_leg`, which stays for
+transfers (a holding, a car). Movements recorded as transfers before this were converted
+(migration `a6c2e8f41d97`). The transactions router refuses amount/date edits on those
+movements and deleting any linked one.
 
 Provision sources are `(account)` = its cash, or `(account, asset)` = that holding. An
 account source is earmarked: it can't fund a savings goal (409 both ways), can't be
 deleted (409), and its balance is left out of the survival budget's runway.
 
-The planning engine runs on income **net** of flat-rate taxes (`planning.income_base`):
-gross income minus imposta + INPS on the invoices collected in the period. It feeds the
-50/25/15/10 buckets, the savings residual, the waterfall quota, the simulator and the
-survival budget's monthly income. Without it the State's ~24% read as savings, since F24s
-are transfers and never spend. The per-invoice estimate is used (`flat_rate.tax_cost`), not
-the provision rate: next year's advances are a prepayment, not a cost, and the year's own
-figure would swing negative in the month an F24 lowers the tax via the INPS deduction.
+The planning engine runs on **gross** income (`planning.income_base`): the 50/25/15/10
+buckets, the savings residual, the waterfall quota, the simulator and the survival budget's
+monthly income. The taxes reach it as spend, in the month of each F24. **Never also net
+them from income**: it was that way once (with F24s as transfers) and doing both counts every
+tax twice. The cost of the cash basis, accepted on purpose: a month of invoices reads as high
+savings, June and November read heavy, and the spend averages (operating-cash target,
+emergency fund, survival budget) include the taxes. The State's share can't climb the
+savings ladder meanwhile: the tax-provision rung comes before every pillar.
 
 `users.work_type` only gates the UI. The API and the liability work regardless — turning
 the section off must not make a real debt vanish from net worth.
@@ -593,7 +598,7 @@ from `sdi_delivered_on` (SdI's delivery; NULL = the issue date), collected or no
 paid per **calendar quarter of delivery** (`tax_payments` component `stamp_duty`, kinds
 `q1`–`q4`, `fiscal_year` = the quarter's year; a CHECK keeps quarters and saldo/acconti apart).
 The €2 the client pays stays revenue; the €2 owed is in `tax_liability` (settled on its own in
-`tax_position`) and `cash_requirement`. `tax_cost` ignores it: charged to the client, it nets to zero.
+`tax_position`) and `cash_requirement`; its F24 is spend like the others.
 
 Due dates (`stamp_duty_due_date`): end of the month after the quarter, February for the fourth,
 with the deferrals taken whenever allowed — Q1 < €5,000 goes with Q2, Q1 + Q2 < €5,000 with Q3
@@ -608,9 +613,9 @@ booked at the bank) that hasn't left the account. It moves **nothing** — no le
 not in the debt — and `paid_on` is the expected debit date; `account_id` (required) is the account
 it will hit. It only shows next to its deadline (`amount_scheduled`) and as a commitment for the
 alerts. `POST /payments/{id}/execute` books it on the actual date: either it links the expense
-imported from the bank (exact amount, EUR; it becomes a `transfer` with no category, since the
-cost was already a debt — `owns_transaction = false`) or writes the leg. `/unexecute` goes back;
-unlinking (unexecute or delete) turns a linked movement back into an expense in "Varie".
+imported from the bank (exact amount, EUR; it stays an expense, moved to the chosen category or
+"Tasse" — `owns_transaction = false`) or writes the expense. `/unexecute` goes back;
+unlinking (unexecute or delete) leaves a linked movement where it is: it happened.
 
 Why not just date the leg in the future: balances sum every movement whatever its date, while the
 debt drops on `paid_on`, so net worth would count it twice until then. For the same reason a

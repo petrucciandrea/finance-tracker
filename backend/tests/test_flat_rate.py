@@ -890,7 +890,7 @@ def test_a_product_not_held_in_the_account_is_refused(client: TestClient, header
 
 
 # ---------------------------------------------------------------------------
-# Planning: the income base is net of flat-rate taxes
+# Planning: cash basis, the income is gross and the F24 is spend
 # ---------------------------------------------------------------------------
 
 def _march_with_an_invoice(client: TestClient, headers: dict, account: dict) -> None:
@@ -910,7 +910,27 @@ def _march_with_an_invoice(client: TestClient, headers: dict, account: dict) -> 
     assert expense.status_code == 201, expense.text
 
 
-def test_the_allocation_model_runs_on_income_net_of_taxes(
+def _pay_f24(client: TestClient, headers: dict, account: dict, **extra: object) -> dict:
+    response = client.post(
+        f"{URL}/payments",
+        json={
+            "paid_on": "2025-06-30",
+            "fiscal_year": 2025,
+            # Imposta, not INPS: INPS paid lowers the imposta, which would
+            # move net worth for a reason that has nothing to do with this.
+            "component": "substitute_tax",
+            "kind": "balance",
+            "amount": "40.64",
+            "account_id": account["id"],
+            **extra,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_the_allocation_model_runs_on_gross_income(
     client: TestClient, headers: dict, account: dict
 ) -> None:
     _march_with_an_invoice(client, headers, account)
@@ -918,34 +938,90 @@ def test_the_allocation_model_runs_on_income_net_of_taxes(
         "/api/v1/planning/allocation-status?date=2025-03-31", headers=headers
     ).json()
 
-    # 1042 collected, of which 40.64 imposta + 213.19 INPS are the State's.
-    assert Decimal(status["gross_income_total"]) == Decimal("1042.00")
-    assert Decimal(status["flat_rate_tax_total"]) == Decimal("253.83")
-    assert Decimal(status["income_total"]) == Decimal("788.17")
+    # 1042 collected: the taxes on it are not spend until an F24 pays them.
+    assert Decimal(status["income_total"]) == Decimal("1042.00")
     savings = next(b for b in status["buckets"] if b["bucket"] == "savings")
-    assert Decimal(savings["actual_amount"]) == Decimal("688.17")  # net − 100 spent
+    assert Decimal(savings["actual_amount"]) == Decimal("942.00")  # 1042 − 100 spent
 
 
-def test_the_waterfall_quota_is_on_net_income(
+def test_the_waterfall_quota_is_on_gross_income(
     client: TestClient, headers: dict, account: dict
 ) -> None:
     _march_with_an_invoice(client, headers, account)
     plan = client.get("/api/v1/planning/waterfall?date=2025-03-31", headers=headers).json()
 
-    assert Decimal(plan["income_total"]) == Decimal("788.17")
-    assert Decimal(plan["flat_rate_tax_total"]) == Decimal("253.83")
-    # 10% of 788.17, rounded down so allocations never exceed it (not 104.20 on gross).
-    assert Decimal(plan["savings_quota"]) == Decimal("78.81")
+    assert Decimal(plan["income_total"]) == Decimal("1042.00")
+    assert Decimal(plan["savings_quota"]) == Decimal("104.20")
 
 
-def test_a_month_without_invoices_is_untouched(
+def test_an_f24_is_primary_spend_in_the_month_it_is_paid(
     client: TestClient, headers: dict, account: dict
 ) -> None:
     _march_with_an_invoice(client, headers, account)
-    status = client.get(
-        "/api/v1/planning/allocation-status?date=2025-04-30", headers=headers
+    before = client.get("/api/v1/portfolio/net-worth", headers=headers).json()
+    payment = _pay_f24(client, headers, account)
+
+    movement = client.get(
+        f"/api/v1/transactions/{payment['transaction_id']}", headers=headers
     ).json()
-    assert Decimal(status["flat_rate_tax_total"]) == Decimal("0")
+    assert movement["type"] == "expense"
+    assert Decimal(movement["amount"]) == Decimal("-40.64")
+    categories = client.get("/api/v1/categories", headers=headers).json()
+    taxes = next(c for c in categories if c["id"] == movement["category_id"])
+    assert (taxes["name"], taxes["necessity_level"]) == ("Tasse", "primary")
+
+    june = client.get(
+        "/api/v1/planning/allocation-status?date=2025-06-30", headers=headers
+    ).json()
+    primary = next(b for b in june["buckets"] if b["bucket"] == "primary")
+    assert Decimal(primary["actual_amount"]) == Decimal("40.64")
+    # Counted once: March keeps its gross income, untouched by the payment.
+    march = client.get(
+        "/api/v1/planning/allocation-status?date=2025-03-31", headers=headers
+    ).json()
+    assert Decimal(march["income_total"]) == Decimal("1042.00")
+
+    # The balance and the debt drop together: net worth doesn't move.
+    after = client.get("/api/v1/portfolio/net-worth", headers=headers).json()
+    assert Decimal(after["total_net_worth"]) == Decimal(before["total_net_worth"])
+
+    # A second F24 reuses the same category rather than creating another.
+    second = _pay_f24(client, headers, account, kind="first_advance")
+    again = client.get(
+        f"/api/v1/transactions/{second['transaction_id']}", headers=headers
+    ).json()
+    assert again["category_id"] == movement["category_id"]
+
+
+def test_an_f24_takes_an_expense_category_not_a_transfer_one(
+    client: TestClient, headers: dict, account: dict
+) -> None:
+    mine = client.post(
+        "/api/v1/categories", json={"name": "Imposte", "type": "expense"}, headers=headers
+    ).json()
+    payment = _pay_f24(client, headers, account, category_id=mine["id"])
+    movement = client.get(
+        f"/api/v1/transactions/{payment['transaction_id']}", headers=headers
+    ).json()
+    assert movement["category_id"] == mine["id"]
+
+    transfer = client.post(
+        "/api/v1/categories", json={"name": "Giro", "type": "transfer"}, headers=headers
+    ).json()
+    refused = client.post(
+        f"{URL}/payments",
+        json={
+            "paid_on": "2025-06-30",
+            "fiscal_year": 2025,
+            "component": "substitute_tax",
+            "kind": "balance",
+            "amount": "40.64",
+            "account_id": account["id"],
+            "category_id": transfer["id"],
+        },
+        headers=headers,
+    )
+    assert refused.status_code == 422
 
 
 # ---------------------------------------------------------------------------

@@ -1354,11 +1354,9 @@ class AllocationStatus(BaseModel):
     base_currency: str
     period_start: date_
     period_end: date_
-    # The base every bucket is computed on: gross income minus the imposta
-    # + INPS on the P.IVA invoices collected in the period.
+    # The base every bucket is computed on: the period's income, gross of
+    # P.IVA taxes (cash basis: they are spend in the month an F24 is paid).
     income_total: Decimal
-    gross_income_total: Decimal
-    flat_rate_tax_total: Decimal
     buckets: list[AllocationBucketStatus]
     # Spend whose category (and its parent) carry no necessity level. Kept
     # out of the buckets on purpose: folding it into `primary` would make an
@@ -1581,9 +1579,7 @@ class WaterfallPlan(BaseModel):
     base_currency: str
     period_start: date_
     period_end: date_
-    income_total: Decimal  # net of flat-rate taxes, as in AllocationStatus
-    gross_income_total: Decimal
-    flat_rate_tax_total: Decimal
+    income_total: Decimal  # as in AllocationStatus
     savings_quota: Decimal
     already_allocated: Decimal
     steps: list[WaterfallStep]
@@ -1870,9 +1866,10 @@ class TaxPaymentCreate(BaseModel):
     notes: str | None = Field(default=None, max_length=500)
     status: TaxPaymentStatus = TaxPaymentStatus.paid
     # Required (422 without it; Optional only so the error says why). Paid:
-    # the leg (a negative one-sided `transfer`) is written on it. Scheduled:
-    # the account the debit will hit; nothing is written until confirmed.
+    # the movement (an `expense`) is written on it. Scheduled: the account
+    # the debit will hit; nothing is written until confirmed.
     account_id: UUID | None = None
+    # An expense category; none = "Tasse", created on first use.
     category_id: UUID | None = None
 
     @model_validator(mode="after")
@@ -1897,9 +1894,9 @@ class TaxPaymentUpdate(BaseModel):
 class TaxPaymentExecute(BaseModel):
     """
     Confirm a scheduled payment once the debit has happened. Either link the
-    movement imported from the bank statement (`transaction_id`: it becomes
-    a `transfer`, since the cost was booked as a debt already), or let the
-    app write the leg on the scheduled account.
+    movement imported from the bank statement (`transaction_id`: it stays an
+    expense), or let the app write one on the scheduled account. Either way
+    it is filed under `category_id` (an expense category), else "Tasse".
     """
 
     paid_on: date_

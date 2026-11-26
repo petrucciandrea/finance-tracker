@@ -633,7 +633,7 @@ export function InvoicesPage() {
         {deleting?.kind === 'invoice'
           ? "Se l'entrata sul conto è stata creata da qui, sparisce anche quella. Un movimento importato e collegato resta."
           : deleting?.kind === 'payment' && deleting.item.transaction_id && !deleting.item.owns_transaction
-            ? "L'addebito importato dall'estratto conto resta: torna una spesa, in «Varie»."
+            ? "L'addebito importato dall'estratto conto resta, come uscita nella sua categoria."
             : "Sparisce anche l'eventuale uscita registrata sul conto."}
       </ConfirmDialog>
     </>

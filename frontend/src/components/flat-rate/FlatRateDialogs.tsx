@@ -453,7 +453,7 @@ export function TaxPaymentDialog({
       description={
         <>
           Una riga dell'F24: saldo o acconto di imposta o INPS, oppure il bollo di un trimestre.{' '}
-          <Tip>Pagarlo da un conto non è una spesa: riduce la liquidità e il debito fiscale insieme.</Tip>
+          <Tip>Pagarlo è un&apos;uscita, nel mese del pagamento (in «Tasse» se non scegli altro): riduce la liquidità e il debito fiscale insieme, quindi il patrimonio netto non cambia.</Tip>
         </>
       }
     >
@@ -599,7 +599,7 @@ function TaxPaymentForm({ payment, draft, onClose }: { payment: TaxPayment | nul
                 ? "Il conto da cui uscirà: il suo saldo viene confrontato con l'addebito."
                 : payment
                   ? "Cambiandolo, l'uscita si sposta sul nuovo conto."
-                  : "L'uscita è registrata come giroconto: scendono insieme il saldo e il debito fiscale."
+                  : "Registrata come uscita: scendono insieme il saldo e il debito fiscale, il patrimonio netto non cambia."
           }
         >
           <select id="pay-account" className="field" value={accountId} disabled={linked} onChange={(e) => setAccountId(e.target.value)}>
@@ -616,12 +616,12 @@ function TaxPaymentForm({ payment, draft, onClose }: { payment: TaxPayment | nul
           </select>
         </Field>
         {!scheduled && !payment && accountId && (
-          <Field label="Categoria del giroconto" htmlFor="pay-category">
+          <Field label="Categoria" htmlFor="pay-category">
             <CategorySelect
               id="pay-category"
               categories={categories}
-              type="transfer"
-              emptyLabel="Nessuna categoria"
+              type="expense"
+              emptyLabel="Tasse"
               value={categoryId}
               onChange={(e) => setCategoryId(e.target.value)}
             />
@@ -691,7 +691,7 @@ function ExecuteForm({ payment, onClose }: { payment: TaxPayment; onClose: () =>
         payload: {
           paid_on: paidOn,
           transaction_id: mode === 'link' ? transactionId : null,
-          category_id: mode === 'create' && categoryId ? categoryId : null,
+          category_id: categoryId || null,
         },
       })
       onClose()
@@ -746,27 +746,25 @@ function ExecuteForm({ payment, onClose }: { payment: TaxPayment; onClose: () =>
                 </span>
               </label>
             ))}
-            <p className="mt-1 text-[12px] text-ink-3">Diventa un giroconto: non è una spesa, il costo era già contato come debito.</p>
+            <p className="mt-1 text-[12px] text-ink-3">Resta un&apos;uscita, spostata nella categoria scelta qui sotto.</p>
           </fieldset>
         ))}
 
       {mode === 'create' && (
-        <>
-          <p className="text-[13px] text-ink-2">
-            Scriviamo l&apos;uscita su {accountName}. Se poi importi l&apos;estratto conto, scarta quella riga come doppione.
-          </p>
-          <Field label="Categoria del giroconto" htmlFor="exec-category">
-            <CategorySelect
-              id="exec-category"
-              categories={categories}
-              type="transfer"
-              emptyLabel="Nessuna categoria"
-              value={categoryId}
-              onChange={(e) => setCategoryId(e.target.value)}
-            />
-          </Field>
-        </>
+        <p className="text-[13px] text-ink-2">
+          Scriviamo l&apos;uscita su {accountName}. Se poi importi l&apos;estratto conto, scarta quella riga come doppione.
+        </p>
       )}
+      <Field label="Categoria" htmlFor="exec-category">
+        <CategorySelect
+          id="exec-category"
+          categories={categories}
+          type="expense"
+          emptyLabel="Tasse"
+          value={categoryId}
+          onChange={(e) => setCategoryId(e.target.value)}
+        />
+      </Field>
 
       <Field label="Data dell'addebito" htmlFor="exec-date" hint={mode === 'link' ? 'Quella del movimento collegato.' : undefined}>
         <input

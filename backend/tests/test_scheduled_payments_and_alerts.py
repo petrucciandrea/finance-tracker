@@ -386,15 +386,17 @@ def test_confirming_by_linking_the_imported_debit(client: TestClient, headers: d
     assert response.status_code == 200, response.text
     assert response.json()["owns_transaction"] is False
     movement = client.get(f"/api/v1/transactions/{debit['id']}", headers=headers).json()
-    # Not a spend: the cost was booked as a debt when the invoice went out.
-    assert movement["type"] == "transfer"
-    assert movement["category_id"] is None
+    # Cash basis: still a spend, filed under taxes.
+    assert movement["type"] == "expense"
+    categories = client.get("/api/v1/categories", headers=headers).json()
+    taxes = next(c for c in categories if c["id"] == movement["category_id"])
+    assert (taxes["name"], taxes["type"]) == ("Tasse", "expense")
     # Cash moved once, not twice.
     assert _balance(client, headers, account["id"]) == Decimal("94.00")
     # The bank's record can't be deleted from under the F24.
     assert client.delete(f"/api/v1/transactions/{debit['id']}", headers=headers).status_code == 409
 
-    # Unlinked, it is an expense again (in "Varie"), and still there.
+    # Unlinked, it stays where it is: it happened, and it is still an expense.
     deleted = client.delete(f"{URL}/payments/{payment['id']}", headers=headers)
     assert deleted.status_code == 204
     movement = client.get(f"/api/v1/transactions/{debit['id']}", headers=headers).json()

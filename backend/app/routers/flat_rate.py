@@ -64,10 +64,10 @@ from app.services.net_worth import compute_holding_positions
 from app.services.ownership import (
     ensure_account_open_on,
     get_or_create_misc_category,
+    get_or_create_taxes_category,
     get_owned_account,
     get_owned_leaf_category,
 )
-from app.services.transfers import create_cash_leg
 
 router = APIRouter(prefix="/api/v1/flat-rate", tags=["flat-rate"])
 
@@ -682,27 +682,24 @@ def create_payment(
     if scheduled:
         # The debit will be a movement on it: refuse now rather than at confirmation.
         ensure_account_open_on(account, payload.paid_on)
-    category_id = (
-        get_owned_leaf_category(db, payload.category_id, current_user, "transfer").id
-        if payload.category_id is not None
-        else None
-    )
+    if payload.category_id is not None:
+        get_owned_leaf_category(db, payload.category_id, current_user, "expense")
     rate = None if scheduled else _rate(db, current_user, payload.paid_on)
     service.get_or_create_year(db, current_user, payload.fiscal_year)
 
     leg = None
     if rate is not None:
-        leg = create_cash_leg(
+        leg = _write_payment_expense(
             db,
+            current_user,
             account=account,
-            amount=-payload.amount,
-            currency=service.CURRENCY,
+            amount=payload.amount,
             rate=rate,
             on_date=payload.paid_on,
             description=_payment_description(
                 payload.component.value, payload.kind.value, payload.fiscal_year
             ),
-            category_id=category_id,
+            category_id=payload.category_id,
         )
     payment = TaxPayment(
         user_id=current_user.id,
@@ -725,6 +722,48 @@ def create_payment(
 
 def _payment_description(component: str, kind: str, fiscal_year: int) -> str:
     return f"F24 {service.payment_label(component, kind, fiscal_year)}"
+
+
+def _write_payment_expense(
+    db: Session,
+    user: User,
+    *,
+    account: Account,
+    amount: Decimal,
+    rate: Decimal,
+    on_date: date_,
+    description: str,
+    category_id: UUID | None = None,
+) -> Transaction:
+    """
+    The movement of an F24 paid: an `expense`, on the cash basis. The tax is a
+    debt from the day the invoice is collected (net worth, `tax_liability`)
+    and a cost on the day it is paid, so the spend reports and the planning
+    engine see it then, while the planning engine reads income gross.
+    Net worth doesn't move either way: the balance and the debt drop together.
+
+    `category_id` already validated as the user's expense leaf; none = "Tasse".
+    `rate` already resolved: the category may be created here, and a rate
+    fetched after the first `db.add()` would leave a half-written batch.
+    """
+    ensure_account_open_on(account, on_date)
+    if category_id is None:
+        category_id = get_or_create_taxes_category(db, user).id
+    movement = Transaction(
+        account_id=account.id,
+        category_id=category_id,
+        amount=-amount,
+        currency=service.CURRENCY,
+        amount_base_currency=-amount * rate,
+        exchange_rate=rate,
+        date=on_date,
+        description=description,
+        type="expense",
+        source="manual",
+    )
+    db.add(movement)
+    db.flush()
+    return movement
 
 
 def _check_not_ahead(paid_on: date_) -> None:
@@ -820,11 +859,11 @@ def update_payment(
             payment.component, payment.kind, payment.fiscal_year
         )
     elif writes_leg and new_account is not None and rate is not None:
-        created = create_cash_leg(
+        created = _write_payment_expense(
             db,
+            current_user,
             account=new_account,
-            amount=-Decimal(payment.amount),
-            currency=service.CURRENCY,
+            amount=Decimal(payment.amount),
             rate=rate,
             on_date=payment.paid_on,
             description=_payment_description(
@@ -838,21 +877,15 @@ def update_payment(
     return _payment_schema(payment)
 
 
-def _release_leg(db: Session, user: User, payment: TaxPayment) -> None:
+def _release_leg(payment: TaxPayment) -> None:
     """
     Undo what confirming a payment did to the ledger: a leg written from
-    here is retired; a movement linked from the bank statement stays (it
-    happened) and goes back to being an expense, in "Varie" since its
-    original category isn't kept.
+    here is retired; a movement linked from the bank statement stays as it
+    is (it happened, and it was an expense before the link too).
     """
     leg = _live_leg(payment)
-    if leg is None:
-        return
-    if payment.owns_transaction:
+    if leg is not None and payment.owns_transaction:
         leg.deleted_at = datetime.now(UTC)
-        return
-    leg.type = "expense"
-    leg.category_id = get_or_create_misc_category(db, user, "expense").id
 
 
 @router.delete("/payments/{payment_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -862,7 +895,7 @@ def delete_payment(
     current_user: User = Depends(get_current_user),
 ) -> None:
     payment = _get_owned_payment(db, payment_id, current_user)
-    _release_leg(db, current_user, payment)
+    _release_leg(payment)
     payment.deleted_at = datetime.now(UTC)
     db.commit()
 
@@ -879,40 +912,38 @@ def execute_payment(
     if payment.status != "scheduled":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Already paid")
     _check_not_ahead(payload.paid_on)
-    if payload.transaction_id is not None and payload.category_id is not None:
-        raise _unprocessable("A linked movement keeps no category: it becomes a giroconto")
-    category_id = (
-        get_owned_leaf_category(db, payload.category_id, current_user, "transfer").id
-        if payload.category_id is not None
-        else None
-    )
+    if payload.category_id is not None:
+        get_owned_leaf_category(db, payload.category_id, current_user, "expense")
 
     if payload.transaction_id is not None:
         movement = _linkable_debit(db, current_user, payload.transaction_id, payment)
+        # Still an expense; filed under taxes unless the same call picks a
+        # category. Resolved first: creating "Tasse" flushes, and a payment
+        # already pointing at a movement while still scheduled breaks a CHECK.
+        movement.category_id = (
+            payload.category_id or get_or_create_taxes_category(db, current_user).id
+        )
         # Linked, it's what the bank says happened: its date wins.
         payment.paid_on = movement.date
         payment.account_id = movement.account_id
         payment.transaction_id = movement.id
         payment.owns_transaction = False
-        movement.type = "transfer"
-        movement.category_id = None
-        movement.necessity_level_override = None
     else:
         account = db.get(Account, payment.account_id)
         if account is None or account.deleted_at is not None:
             raise _unprocessable("The scheduled account no longer exists — pick another one")
         rate = _rate(db, current_user, payload.paid_on)
-        leg = create_cash_leg(
+        leg = _write_payment_expense(
             db,
+            current_user,
             account=account,
-            amount=-Decimal(payment.amount),
-            currency=service.CURRENCY,
+            amount=Decimal(payment.amount),
             rate=rate,
             on_date=payload.paid_on,
             description=_payment_description(
                 payment.component, payment.kind, payment.fiscal_year
             ),
-            category_id=category_id,
+            category_id=payload.category_id,
         )
         payment.paid_on = payload.paid_on
         payment.transaction_id = leg.id
@@ -939,7 +970,7 @@ def unexecute_payment(
         raise _unprocessable(
             "Recorded without an account: there is no debit to wait for — delete it instead"
         )
-    _release_leg(db, current_user, payment)
+    _release_leg(payment)
     payment.status = "scheduled"
     payment.account_id = account_id
     payment.transaction_id = None

@@ -59,7 +59,7 @@ def vehicle_deadline_label(vehicle_name: str, kind: str, label: str | None) -> s
     return f"{vehicle_name} · {what}"
 
 
-def _open_vehicle_deadlines(db: Session, user: User) -> list[tuple[VehicleDeadline, PhysicalAsset]]:
+def open_vehicle_deadlines(db: Session, user: User) -> list[tuple[VehicleDeadline, PhysicalAsset]]:
     rows = (
         db.query(VehicleDeadline, PhysicalAsset)
         .join(PhysicalAsset, PhysicalAsset.id == VehicleDeadline.physical_asset_id)
@@ -77,7 +77,7 @@ def _open_vehicle_deadlines(db: Session, user: User) -> list[tuple[VehicleDeadli
     return [(d, v) for d, v in rows]
 
 
-def _scheduled_payments(db: Session, user: User) -> list[TaxPayment]:
+def scheduled_payments(db: Session, user: User) -> list[TaxPayment]:
     return (
         db.query(TaxPayment)
         .filter(
@@ -297,16 +297,21 @@ def _vehicle_alerts(
 
 def build_alerts(db: Session, user: User, today: date_ | None = None) -> AlertsResponse:
     today = today or date_.today()
-    scheduled = _scheduled_payments(db, user)
-    deadlines = _open_vehicle_deadlines(db, user)
+    scheduled = scheduled_payments(db, user)
+    deadlines = open_vehicle_deadlines(db, user)
     commitments_ = commitments(db, user, scheduled, deadlines)
     names = {c.account_id: c.account_name for c in commitments_}
+
+    # Imported here: plan_alerts builds on the pillars and the portfolio
+    # rules, which themselves read this module's commitments.
+    from app.services.plan_alerts import plan_alerts
 
     alerts = [
         *_account_alerts(commitments_),
         *_f24_alerts(db, user, today),
         *_unconfirmed_alerts(scheduled, names, today),
         *_vehicle_alerts(deadlines, today),
+        *plan_alerts(db, user, today),
     ]
     alerts.sort(key=lambda a: (a.tone != AlertTone.danger, a.due_date or today))
     return AlertsResponse(alerts=alerts, commitments=commitments_)

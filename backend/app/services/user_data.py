@@ -27,6 +27,9 @@ _OF_ASSETS = "physical_asset_id IN (SELECT id FROM physical_assets WHERE user_id
 
 # (table, WHERE clause scoped to the user), children first.
 OWNED_TABLES: list[tuple[str, str]] = [
+    ("asset_exposures", _BY_USER),
+    ("portfolio_rules", _BY_USER),
+    ("asset_profiles", _BY_USER),
     ("savings_allocations", _BY_USER),
     ("savings_goal_sources", "goal_id IN (SELECT id FROM savings_goals WHERE user_id = :uid)"),
     ("savings_goals", _BY_USER),

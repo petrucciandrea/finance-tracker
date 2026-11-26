@@ -22,6 +22,12 @@ Personal finance tracker, built in phases:
    that pays it back
 8. **Alerts** — a banner on every page (`GET /alerts`): accounts that can't cover, or barely
    cover, what's scheduled to leave them; F24 lines and vehicle deadlines due within two weeks
+9. **Four pillars** — the plan reads as operating cash → emergency fund → planned expenses
+   (goals with a date, tax provision, vehicle deadlines) → long-term investing
+   (`GET /planning/pillars`); medium-term goals can carry a `target_date`, holdings can fund goals
+10. **Portfolio composition and guardrails** — allocation by asset class / region / sector /
+   currency (pillar 4 only), per-product weights (user > reference file > type default), and
+   user-set rules (targets, caps, idle cash, minimum invested share) with alerts
 
 Single-user-per-account app; multi-user capable but built for personal use.
 
@@ -57,10 +63,14 @@ finance-tracker/
 │   │   ├── schemas/          # Pydantic schemas (all in __init__.py)
 │   │   ├── routers/          # auth, accounts, categories, transactions, budgets,
 │   │   │                     # planning, savings_goals, portfolio, physical_assets,
-│   │   │                     # flat_rate, vehicle_deadlines, alerts
+│   │   │                     # flat_rate, vehicle_deadlines, alerts,
+│   │   │                     # portfolio_allocation, portfolio_rules
+│   │   ├── data/             # asset_exposures.json (reference weights of common ETFs)
 │   │   └── services/         # exchange_rates, csv_import, asset_prices, net_worth,
 │   │                         # necessity, planning, waterfall, transfers, periods,
-│   │                         # ownership, physical_assets, flat_rate, credits, alerts
+│   │                         # ownership, physical_assets, flat_rate, credits, alerts,
+│   │                         # pillars, portfolio_allocation, asset_profiles,
+│   │                         # portfolio_rules, plan_alerts
 │   └── tests/
 └── frontend/
     └── src/
@@ -373,8 +383,14 @@ No unique index on `(user_id, priority)` — Postgres checks per statement and t
 updates row by row, so swapping two priorities always collides. Order is
 `(priority, created_at)`.
 
-An account funds **at most one goal** and there is **at most one open-ended rung**; both
-are router-enforced 409s, since neither rule's scope fits a unique index on its table.
+A **holding** funds at most one goal; an account's **cash** may fund several, and
+`waterfall.goal_values` splits its balance in cascade order (each goal up to its target; an
+open-ended or not-yet-knowable target takes the rest). What is left once all of them are full
+is that account's *excess*: a pool the cascade draws from after the operating one, with the
+giroconto leaving that account. So a dedicated account above its goal's target also yields
+excess — an overfunded rung still never "gives money back" to itself, but the extra moves on.
+There is **at most one open-ended rung**. Both rules are router-enforced 409s, since neither
+rule's scope fits a unique index on its table.
 Deleting an account that funds a goal is a 409 too — it would vanish from the balance map
 and the goal would silently read as unfunded.
 
@@ -619,6 +635,104 @@ Vehicle deadlines (`vehicle_deadlines`) are reminders, not movements: "fatto" se
 can create the next occurrence; the expense is an ordinary transaction. `currency` is the
 account's when there is one, else the vehicle's. Deleting the vehicle retires them.
 
+### Goals with a date; holdings as goal sources
+`savings_goals.target_date` (medium-term + fixed-amount only, CHECK and 422) gives a step a
+timetable in two parts: `this_month_amount` (executed giroconti + the pending suggestion, a
+one-off from the surplus included), then from next month `required_monthly` (what's left
+after this month / the months after it) against `monthly_pace` — what the **quota alone**
+would give the goal in the same cascade once this month's suggestions are done
+(`_recurring_shares`). The surplus is a stock: projected forward it would call every goal
+on track. `projected_date` and `on_track` run on `monthly_pace`. The gap is taken **before**
+this month's executed giroconti, so executing one doesn't change the timetable. The cascade still runs on `priority`; a goal created without one is *placed* by date
+(nearest first, above the long-term rungs) and the user reorders freely afterwards.
+`completed_at` closes a fixed-amount goal (bought the car): it leaves the cascade and its
+sources are retired. A drained emergency fund reopens; a reached goal must not.
+
+`savings_goal_sources.asset_id`: `(account)` = cash, `(account, asset)` = that holding, the
+grain of `flat_rate_provision_sources`; a holding funds one goal, cash may fund several (see
+the waterfall section), and never a goal and the provision both (409 both ways, same grain). Holdings are valued **from the caches only**
+(`net_worth.cached_holding_values`: latest stored price and rate, never a fetch), which is
+what lets the waterfall, the pillars and the alerts banner value them on a plain GET. No
+cached price = `None` and `has_unpriced_sources`, not 0 silently.
+
+### The cascade distributes the operating surplus, taxes first
+The waterfall used to move only the month's quota (10% of net income). Now it distributes
+the larger of the quota still to place and pillar 1's **surplus**
+(`services/operating_cash.py`: balance of the accounts nothing claims − `operating_cash_months`
+× average spend − debits scheduled from them; None without a complete month of history, so
+"everything above zero" never sweeps the rent). Never the sum: the quota's money already sits
+in that surplus. With a default source account the budget is capped at what it holds, since
+every giroconto leaves it. The first rung is the **tax provision** (F24 requirement − what's
+scheduled from other accounts − what the provision holds), before the emergency fund: it is a
+debt. Its giroconto (`goal_id` null, `to_account_id` = a provision account) writes no
+`savings_allocations` row. The pillars, the waterfall and the portfolio rules' idle cash all
+read `operating_cash`, so "idle" is what the cascade finds no job for.
+
+The stock parts (surplus, goal-account excess, tax rung) are measured **today** and only for
+the **month in progress**: balances are always today's, so a tax requirement taken at the
+1st missed an invoice collected on the 26th whose money was already in the balance, and
+handed the State's share to the goals. A past month reads on its quota alone. The planning
+page sends today's date, not the 1st, for the month in progress.
+
+Every suggestion is meant to be executable from the cascade. Without a source account in the
+plan the giroconti leave from the operating account with the most cash (`source_is_fallback`),
+and the client lets the user change the source per row. A goal with no account takes a
+destination picked in the row: the execute item then carries both `goal_id` and
+`to_account_id`, and the account is linked to the goal with the same rules as
+`POST /goals/{id}/sources` (`_link_source`), in the same all-or-nothing batch. A goal that
+already has an account refuses a different destination (422). Cross-currency stays manual.
+
+### The four pillars
+`services/pillars.py` (`GET /planning/pillars`): 1 operating cash = accounts no goal or
+provision claims (investment accounts' idle cash goes to pillar 4 instead), target
+`allocation_plans.operating_cash_months` × average **total** spend (None without a complete
+month); 2 = `emergency_fund` goals; 3 = `medium_term` goals + the tax provision against
+`cash_requirement` + vehicle deadlines with their monthly share; 4 = `long_term` goals + free
+holdings + idle broker cash, with no target. Vehicle deadlines count in `monthly_required`
+but not in target/current: nothing records where their money sits.
+
+### Portfolio composition: pillar 4 only, three sources of weights
+`services/portfolio_allocation.py`. Holdings funding pillars 2–3 and the tax provision are
+**out** (`excluded_value`): a money-market ETF parked for a down payment would make the
+portfolio read as cautious and a target band would say "buy equities" with it. Weights per
+product and dimension: the user's (`asset_exposures`, replaced per dimension, sum ≤ 100 in the
+router) > `app/data/asset_exposures.json` (researched, with `as_of`, sources and notes; it
+ships with the code, so no data migration) > the type's default (stock = equity, crypto and
+metals = no region). The rest is **unclassified**, never guessed; under 90% coverage the rules
+don't judge. Sectors (GICS) are over the equity part only. Regions follow MSCI's
+developed/emerging split (Korea is emerging), whatever the fund's index provider says;
+Vanguard reports ICB, so VWCE's sectors are the MSCI ACWI's as a proxy (said in its notes).
+Currency is its own dimension, never derived from the listing currency (hedged funds). Per
+user, never on `assets`, which is shared. Overlaps inside ETFs are not visible, and the UI
+says so. Refresh the JSON from factsheets about yearly; >365 days is flagged as stale.
+
+The Yahoo suggestion (`services/asset_profiles.py`) is stocks only, on click, and writes
+nothing: `quoteSummary` needs a cookie + crumb kept in process memory.
+
+### Portfolio guardrails are the user's, never preset caps
+`portfolio_rules` (`target` ± tolerance on asset class/region, `max_share` incl. a single
+`position`, `excess_cash`, `min_invested`), evaluated cache-only in
+`services/portfolio_rules.py`. Presets fill in **targets only**, as generic weights with no
+product named (a preset that picked ETFs, or one chosen for the user from a profile, would
+look like personalised investment advice); caps are never preset, since "max 50% per
+country" fires on a plain all-world fund. Targets are edited as a whole mix per dimension
+(`PUT /planning/portfolio-rules/targets`, one commit, 0 = not stored): one rule at a time
+can't go from one mix to another without crossing 100 halfway. The editor's sliders
+(`lib/targets.ts`) rebalance the unlocked buckets proportionally, but only once the mix is at
+100%; while it's being built a slider only sets its own value. A preset loads into the sliders
+and saves nothing by itself. Idle cash = pillar 1's surplus − the tax provision's
+gap − the gaps of the emergency fund and of every goal with a target + idle broker cash; invested share = pillar 4 /
+(pillar 4 + idle cash). Same quantity in both, so they can't contradict each other, and
+neither ever counts the tax provision or dated goals as investable. The rebalancing
+suggestion splits **new money** only: selling realises gains and ETF losses can't offset
+ETF gains.
+
+Plan alerts (`services/plan_alerts.py`, imported lazily by `alerts.build_alerts`): goal
+overdue / due within 14 days / behind schedule / dated within 3 years but ≥ 50% equity or
+crypto; broken rules; buying while the emergency fund is short; stale weights. All `once`
+with the month (or the date) in the id: allocations move with prices daily and a banner
+that returned on every visit would be dismissed unread.
+
 ### CSV import is two-step, preview lives in memory
 `POST /transactions/import` parses and returns a preview with per-row flags (`is_parsable`, `is_duplicate`); `POST /transactions/import/confirm` commits only the selected rows. The preview is held in a process-local dict with a 15-minute TTL — **this breaks with more than one backend replica**. Move it to Redis before scaling out, not to a DB table.
 
@@ -653,6 +767,10 @@ Frankfurter, at `https://api.frankfurter.dev/v1` (the old `.app` domain 301-redi
   free — never format an amount around them. The flag is module state set by `AuthProvider`;
   `AppLayout` re-keys the `<Outlet>` on toggle so already-rendered pages pick it up.
   Percentages stay visible. Input fields in edit forms show raw values on purpose.
+- Long "how this works" explanations go behind a lightbulb (`components/ui/Tip.tsx`, a fixed
+  bubble — spans only, so it fits inside a `<p>`), with at most a short line left visible.
+  Warnings, anything the user must act on, empty states, destructive confirmations, legal
+  pages and the "not investment advice" note stay in plain sight.
 
 ## Conventions
 

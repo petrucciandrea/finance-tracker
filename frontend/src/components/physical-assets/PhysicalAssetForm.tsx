@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button'
 import { ErrorBlock } from '@/components/ui/EmptyState'
 import { Field } from '@/components/ui/Field'
 import { SegmentedControl } from '@/components/ui/SegmentedControl'
+import { Tip } from '@/components/ui/Tip'
 import { useAccounts } from '@/hooks/useAccounts'
 import { useCategories } from '@/hooks/useCategories'
 import { useCreatePhysicalAsset, useUpdatePhysicalAsset } from '@/hooks/usePhysicalAssets'
@@ -298,8 +299,8 @@ export function PhysicalAssetForm({
             </Field>
           )}
           <p className="-mt-1 text-[12px] text-ink-3">
-            Il valore è quello del metallo fino alla quotazione di oggi. Per i gioielli è una stima prudente: la lavorazione non si
-            rivende.
+            Il valore è quello del metallo fino alla quotazione di oggi.{' '}
+            <Tip label="E per i gioielli?">Per i gioielli è una stima prudente: la lavorazione non si rivende.</Tip>
           </p>
         </>
       )}

@@ -96,6 +96,10 @@ class Settings(BaseSettings):
     # also no documented quota or support guarantee; swap providers here if
     # it ever gets blocked or changes shape.
     yahoo_finance_api_base_url: str = "https://query1.finance.yahoo.com/v8/finance/chart"
+    # Sector and country of a single stock, on request only (portfolio_allocation).
+    yahoo_quote_summary_url: str = "https://query2.finance.yahoo.com/v10/finance/quoteSummary"
+    yahoo_crumb_url: str = "https://query2.finance.yahoo.com/v1/test/getcrumb"
+    yahoo_cookie_url: str = "https://fc.yahoo.com"
     coingecko_api_key: str | None = None  # phase 3: crypto prices, optional (free tier needs none)
     coingecko_api_base_url: str = "https://api.coingecko.com/api/v3"
 

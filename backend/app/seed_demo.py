@@ -57,6 +57,7 @@ from app.models import (
 from app.services import asset_prices
 from app.services import flat_rate as flat_rate_service
 from app.services.exchange_rates import get_rate, get_rate_history
+from app.services.periods import add_months
 from app.services.physical_assets import METAL_SYMBOLS, TROY_OUNCE_GRAMS, metal_asset
 from app.services.transfers import create_cash_leg, create_linked_transfer
 from app.services.user_data import erase_user
@@ -382,6 +383,7 @@ class Seeder:
         self.open_account("revolut", "Revolut", "checking", "EUR", money(500))
         self.open_account("n26", "N26 Casa", "checking", "EUR", money(400))
         self.open_account("deposito", "Conto Deposito", "savings", "EUR", money(6000))
+        self.open_account("auto", "Salvadanaio Auto", "savings", "EUR", money(1800))
         self.open_account("contanti", "Contanti", "cash", "EUR", money(120))
         self.open_account("directa", "Directa", "investment", "EUR", money(5000))
         self.open_account("ibkr", "Interactive Brokers", "investment", "USD", money(10500))
@@ -946,18 +948,45 @@ class Seeder:
             target_mode="months_of_primary_expenses",
             target_months=Decimal(6),
         )
+        # Two dated goals for the pillars view: a car next year, saved on its
+        # own savings account, and a down payment in four years parked in part of the
+        # MSCI World holding — equity for a four-year horizon, on purpose.
+        car = SavingsGoal(
+            user_id=self.user.id,
+            name="Auto nuova",
+            kind="medium_term",
+            priority=1,
+            target_mode="fixed_amount",
+            target_amount=Decimal(8000),
+            target_date=add_months(self.today, 14),
+        )
+        house = SavingsGoal(
+            user_id=self.user.id,
+            name="Anticipo casa",
+            kind="medium_term",
+            priority=2,
+            target_mode="fixed_amount",
+            target_amount=Decimal(30000),
+            target_date=add_months(self.today, 48),
+        )
         long_term = SavingsGoal(
             user_id=self.user.id,
             name="Investimenti a lungo termine",
             kind="long_term",
-            priority=1,
+            priority=3,
             target_mode="open_ended",
         )
-        self.db.add_all([emergency, long_term])
+        self.db.add_all([emergency, car, house, long_term])
         self.db.flush()
         self.db.add_all(
             [
                 SavingsGoalSource(goal_id=emergency.id, account_id=self.acc["deposito"].id),
+                SavingsGoalSource(goal_id=car.id, account_id=self.acc["auto"].id),
+                SavingsGoalSource(
+                    goal_id=house.id,
+                    account_id=self.acc["directa"].id,
+                    asset_id=self.assets["EUNL.DE"].id,
+                ),
                 SavingsGoalSource(goal_id=long_term.id, account_id=self.acc["directa"].id),
             ]
         )

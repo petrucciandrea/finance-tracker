@@ -6,6 +6,7 @@ import { ErrorBlock } from '@/components/ui/EmptyState'
 import { Field } from '@/components/ui/Field'
 import { RowMenu, type RowMenuItem } from '@/components/ui/RowMenu'
 import { StatusChip } from '@/components/ui/StatusChip'
+import { Tip } from '@/components/ui/Tip'
 import { useAccounts } from '@/hooks/useAccounts'
 import {
   useCompleteVehicleDeadline,
@@ -123,7 +124,12 @@ export function VehicleDeadlinesCard({ vehicles }: { vehicles: PhysicalAssetWith
         onClose={() => setEditing(null)}
         size="md"
         title={editing?.deadline ? 'Modifica scadenza' : 'Nuova scadenza'}
-        description="Ti avvisiamo due settimane prima. Con un importo e un conto, la cifra resta impegnata su quel conto finché non la segni come fatta."
+        description={
+          <>
+            Ti avvisiamo due settimane prima.{' '}
+            <Tip>Con un importo e un conto, la cifra resta impegnata su quel conto finché non la segni come fatta.</Tip>
+          </>
+        }
       >
         {editing && <DeadlineForm key={editing.deadline?.id ?? 'new'} deadline={editing.deadline} vehicles={owned} onClose={() => setEditing(null)} />}
       </Dialog>

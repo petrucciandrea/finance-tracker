@@ -20,12 +20,14 @@ from app.schemas import (
 from app.schemas import (
     AllocationPlanUpdate,
     AllocationStatus,
+    PillarsResponse,
     SimulationRequest,
     SimulationResponse,
     SurvivalBudget,
 )
 from app.services import planning as planning_service
 from app.services.ownership import get_owned_account
+from app.services.pillars import build_pillars
 
 router = APIRouter(prefix="/api/v1/planning", tags=["planning"])
 
@@ -156,6 +158,16 @@ def survival_budget(
     current_user: User = Depends(get_current_user),
 ) -> SurvivalBudget:
     return planning_service.survival_budget(db, current_user, on_date)
+
+
+@router.get("/pillars", response_model=PillarsResponse)
+def pillars(
+    on_date: date_ = Query(default_factory=date_.today, alias="date"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PillarsResponse:
+    # Read-only and offline: holdings and conversions come from the caches.
+    return build_pillars(db, current_user, on_date)
 
 
 @router.post("/simulate", response_model=SimulationResponse)

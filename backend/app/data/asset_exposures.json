@@ -1,0 +1,151 @@
+{
+  "_readme": "Reference exposures for the products users already hold, keyed by symbol and asset_type. A user's own weights override these per dimension. Weights are percentages; what is missing to 100 reads as unclassified. Sectors are GICS, regions follow the MSCI developed/emerging split. Refresh from the issuers' factsheets about once a year and bump as_of.",
+  "assets": [
+    {
+      "symbol": "VWCE.DE",
+      "asset_type": "etf",
+      "name": "Vanguard FTSE All-World UCITS ETF (Acc)",
+      "as_of": "2026-10-31",
+      "sources": [
+        "https://www.nl.vanguard/professional/product/etf/equity/9679/ftse-all-world-ucits-etf-usd-accumulating",
+        "https://www.msci.com/documents/10199/255599/msci-acwi-net.pdf"
+      ],
+      "notes": "Regions: US 62.8, Japan 5.9, UK 3.3 from Vanguard (31/10/2026); Canada, Italy, Pacific ex Japan, emerging (Korea included, as MSCI does) and Europe estimated from the FTSE All-World's usual split. Sectors: Vanguard reports ICB, so the MSCI ACWI GICS weights (30/10/2026) stand in for them.",
+      "exposures": {
+        "asset_class": {"equity": "100"},
+        "region": {
+          "north_america": "65.6",
+          "europe_ex_italy": "10.6",
+          "italy": "0.6",
+          "united_kingdom": "3.3",
+          "japan": "5.9",
+          "pacific_ex_japan": "2.5",
+          "emerging": "11.5"
+        },
+        "sector": {
+          "information_technology": "31.17",
+          "financials": "16.63",
+          "industrials": "10.23",
+          "health_care": "9.36",
+          "consumer_discretionary": "8.57",
+          "communication_services": "7.04",
+          "consumer_staples": "5.09",
+          "energy": "4.49",
+          "materials": "3.45",
+          "utilities": "2.44",
+          "real_estate": "1.53"
+        }
+      }
+    },
+    {
+      "symbol": "EUNL.DE",
+      "asset_type": "etf",
+      "name": "iShares Core MSCI World UCITS ETF (Acc)",
+      "as_of": "2026-10-30",
+      "sources": [
+        "https://www.msci.com/documents/10199/255599/msci-world-index.pdf",
+        "https://www.msci.com/documents/10199/255599/msci-acwi-net.pdf"
+      ],
+      "notes": "Regions: US 72.77 + Canada 3.44, Japan 5.72, UK 3.52 from the MSCI World factsheet (30/10/2026); Italy (~0.65) and Pacific ex Japan (~2.6) estimated, Europe the remainder (Switzerland 2.34 included). Sectors: the MSCI ACWI GICS weights as a proxy (World runs about a point lower on IT).",
+      "exposures": {
+        "asset_class": {"equity": "100"},
+        "region": {
+          "north_america": "76.21",
+          "europe_ex_italy": "11.30",
+          "italy": "0.65",
+          "united_kingdom": "3.52",
+          "japan": "5.72",
+          "pacific_ex_japan": "2.60"
+        },
+        "sector": {
+          "information_technology": "31.17",
+          "financials": "16.63",
+          "industrials": "10.23",
+          "health_care": "9.36",
+          "consumer_discretionary": "8.57",
+          "communication_services": "7.04",
+          "consumer_staples": "5.09",
+          "energy": "4.49",
+          "materials": "3.45",
+          "utilities": "2.44",
+          "real_estate": "1.53"
+        }
+      }
+    },
+    {
+      "symbol": "EIMI.MI",
+      "asset_type": "etf",
+      "name": "iShares Core MSCI EM IMI UCITS ETF (Acc)",
+      "as_of": "2026-09-30",
+      "sources": [
+        "https://www.justetf.com/en/etf-profile.html?isin=IE00BKM4GZ66",
+        "https://www.msci.com/documents/10199/255599/msci-emerging-markets-imi-net.pdf"
+      ],
+      "notes": "All emerging (Taiwan 28.63, South Korea 20.55, China 16.30, India 11.75). Sectors from the MSCI EM IMI factsheet: only the six largest were available, the remaining 13% (energy, staples, health care, utilities, real estate) stays unclassified.",
+      "exposures": {
+        "asset_class": {"equity": "100"},
+        "region": {"emerging": "100"},
+        "sector": {
+          "information_technology": "41.59",
+          "financials": "18.30",
+          "consumer_discretionary": "7.69",
+          "industrials": "7.65",
+          "materials": "6.24",
+          "communication_services": "5.53"
+        }
+      }
+    },
+    {
+      "symbol": "QDVE.DE",
+      "asset_type": "etf",
+      "name": "iShares S&P 500 Information Technology Sector UCITS ETF (Acc)",
+      "as_of": "2026-09-30",
+      "sources": ["https://www.justetf.com/en/etf-profile.html?isin=IE00B3WJKG14"],
+      "notes": "S&P 500 capped IT sector index: GICS IT by construction, US 98.15% (the rest are S&P 500 members domiciled abroad). NVIDIA, Apple and Microsoft are over half the fund.",
+      "exposures": {
+        "asset_class": {"equity": "100"},
+        "region": {"north_america": "100"},
+        "sector": {"information_technology": "100"},
+        "currency": {"USD": "100"}
+      }
+    },
+    {
+      "symbol": "XEON.DE",
+      "asset_type": "etf",
+      "name": "Xtrackers II EUR Overnight Rate Swap UCITS ETF 1C",
+      "as_of": "2026-11-26",
+      "sources": ["https://www.trackinsight.com/en/fund/XEON"],
+      "notes": "Tracks the euro short-term rate (€STR) through a swap: cash-like, no geography or sector to speak of.",
+      "exposures": {
+        "asset_class": {"money_market": "100"},
+        "region": {"not_applicable": "100"},
+        "currency": {"EUR": "100"}
+      }
+    },
+    {
+      "symbol": "AAPL", "asset_type": "stock", "name": "Apple", "as_of": "2026-11-26",
+      "sources": [], "notes": "GICS Information Technology.",
+      "exposures": {"region": {"north_america": "100"}, "sector": {"information_technology": "100"}, "currency": {"USD": "100"}}
+    },
+    {
+      "symbol": "MSFT", "asset_type": "stock", "name": "Microsoft", "as_of": "2026-11-26",
+      "sources": [], "notes": "GICS Information Technology.",
+      "exposures": {"region": {"north_america": "100"}, "sector": {"information_technology": "100"}, "currency": {"USD": "100"}}
+    },
+    {
+      "symbol": "NVDA", "asset_type": "stock", "name": "NVIDIA", "as_of": "2026-11-26",
+      "sources": [], "notes": "GICS Information Technology.",
+      "exposures": {"region": {"north_america": "100"}, "sector": {"information_technology": "100"}, "currency": {"USD": "100"}}
+    },
+    {
+      "symbol": "KO", "asset_type": "stock", "name": "Coca-Cola", "as_of": "2026-11-26",
+      "sources": [], "notes": "GICS Consumer Staples.",
+      "exposures": {"region": {"north_america": "100"}, "sector": {"consumer_staples": "100"}, "currency": {"USD": "100"}}
+    },
+    {
+      "symbol": "ENI.MI", "asset_type": "stock", "name": "Eni", "as_of": "2026-11-26",
+      "sources": [], "notes": "GICS Energy.",
+      "exposures": {"region": {"italy": "100"}, "sector": {"energy": "100"}, "currency": {"EUR": "100"}}
+    }
+  ]
+}

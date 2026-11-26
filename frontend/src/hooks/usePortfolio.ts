@@ -50,4 +50,6 @@ export function invalidatePortfolio(queryClient: ReturnType<typeof useQueryClien
   queryClient.invalidateQueries({ queryKey: HOLDINGS_KEY })
   queryClient.invalidateQueries({ queryKey: NET_WORTH_KEY })
   queryClient.invalidateQueries({ queryKey: ['portfolio-history'] })
+  // The composition (usePortfolioAllocation) is valued from the same holdings.
+  queryClient.invalidateQueries({ queryKey: ['portfolio', 'allocation'] })
 }

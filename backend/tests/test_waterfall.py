@@ -158,22 +158,118 @@ def test_goals_are_listed_in_cascade_order(client: TestClient, registered_user: 
 # Funding sources
 # ---------------------------------------------------------------------------
 
-def test_an_account_can_fund_only_one_goal(client: TestClient, registered_user: dict) -> None:
+def test_an_account_can_fund_several_goals_but_each_once(
+    client: TestClient, registered_user: dict
+) -> None:
     headers = registered_user["auth_headers"]
     account = _account(client, headers, "Risparmi")
     first = _goal(
-        client, headers, name="Emergenza", kind="emergency_fund", priority=0,
-        target_mode="fixed_amount", target_amount="5000.00",
+        client,
+        headers,
+        name="Emergenza",
+        kind="emergency_fund",
+        priority=0,
+        target_mode="fixed_amount",
+        target_amount="5000.00",
     )
     second = _goal(
-        client, headers, name="Auto", kind="medium_term", priority=1,
-        target_mode="fixed_amount", target_amount="8000.00",
+        client,
+        headers,
+        name="Vacanze",
+        kind="medium_term",
+        priority=1,
+        target_mode="fixed_amount",
+        target_amount="2000.00",
     )
 
     assert _map_source(client, headers, first["id"], account["id"]).status_code == 201
-    # Counting one balance toward two goals would make the cascade believe
-    # there is twice the money.
+    # Shared: the balance is split in cascade order, not counted twice.
+    assert _map_source(client, headers, second["id"], account["id"]).status_code == 201
     assert _map_source(client, headers, second["id"], account["id"]).status_code == 409
+
+
+def test_a_shared_account_fills_the_goals_in_priority_order(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    shared = _account(client, headers, "Risparmi", balance="6000.00")
+    holiday = _goal(
+        client,
+        headers,
+        name="Vacanze",
+        kind="medium_term",
+        priority=1,
+        target_mode="fixed_amount",
+        target_amount="2000.00",
+    )
+    emergency = _goal(
+        client,
+        headers,
+        name="Emergenza",
+        kind="emergency_fund",
+        priority=0,
+        target_mode="fixed_amount",
+        target_amount="5000.00",
+    )
+    _map_source(client, headers, holiday["id"], shared["id"])
+    _map_source(client, headers, emergency["id"], shared["id"])
+
+    body = client.get(f"{WATERFALL_URL}?date=2026-09-20", headers=headers).json()
+
+    # The emergency fund first (priority 0), whatever the mapping order.
+    assert Decimal(_step(body, "Emergenza")["current_amount"]) == Decimal("5000.00")
+    assert Decimal(_step(body, "Vacanze")["current_amount"]) == Decimal("1000.00")
+    assert Decimal(body["goal_account_excess"]) == 0
+
+
+def test_what_a_shared_account_holds_beyond_its_goals_moves_on(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    shared = _account(client, headers, "Risparmi", balance="8000.00")
+    car_account = _account(client, headers, "Salvadanaio")
+    emergency = _goal(
+        client,
+        headers,
+        name="Emergenza",
+        kind="emergency_fund",
+        priority=0,
+        target_mode="fixed_amount",
+        target_amount="5000.00",
+    )
+    holiday = _goal(
+        client,
+        headers,
+        name="Vacanze",
+        kind="medium_term",
+        priority=1,
+        target_mode="fixed_amount",
+        target_amount="2000.00",
+    )
+    car = _goal(
+        client,
+        headers,
+        name="Auto",
+        kind="medium_term",
+        priority=2,
+        target_mode="fixed_amount",
+        target_amount="9000.00",
+    )
+    _map_source(client, headers, emergency["id"], shared["id"])
+    _map_source(client, headers, holiday["id"], shared["id"])
+    _map_source(client, headers, car["id"], car_account["id"])
+
+    body = client.get(WATERFALL_URL, headers=headers).json()
+
+    # The month in progress (excess only moves then). Both goals on the
+    # shared account are full; the 1000 left is excess and
+    # goes to the next rung, leaving from that account.
+    assert Decimal(body["goal_account_excess"]) == Decimal("1000.00")
+    assert body["goal_account_excesses"][0]["account_id"] == shared["id"]
+    [action] = [a for a in body["actions"] if a["goal_name"] == "Auto"]
+    assert action["kind"] == "transfer"
+    assert action["from_account_id"] == shared["id"]
+    assert Decimal(action["amount"]) == Decimal("1000.00")
 
 
 def test_deleting_an_account_that_funds_a_goal_is_rejected(
@@ -267,7 +363,9 @@ def test_a_funded_rung_lets_the_next_one_through(
 
     emergency = _step(body, "Emergenza")
     assert emergency["is_funded"] is True
-    # Overfunded must never "give money back".
+    # Overfunded must never "give money back". (Its 200 of excess would move
+    # on too, but only in the month in progress: a past month like this one
+    # reads on its quota alone.)
     assert Decimal(emergency["allocated_amount"]) == Decimal("0.00")
     assert Decimal(_step(body, "Auto")["allocated_amount"]) == Decimal("200.00")
 
@@ -454,15 +552,47 @@ def test_an_executable_transfer_is_suggested(client: TestClient, registered_user
     assert Decimal(action["amount"]) == Decimal("200.00")
 
 
-def test_without_a_source_account_the_action_is_advice(
+def test_without_a_source_account_the_richest_operating_account_is_proposed(
     client: TestClient, registered_user: dict
 ) -> None:
     headers = registered_user["auth_headers"]
     main = _account(client, headers, "Conto")
     _income_of(client, headers, main["id"], "2000.00")
     goal = _goal(
-        client, headers, name="Emergenza", kind="emergency_fund", priority=0,
-        target_mode="fixed_amount", target_amount="5000.00",
+        client,
+        headers,
+        name="Emergenza",
+        kind="emergency_fund",
+        priority=0,
+        target_mode="fixed_amount",
+        target_amount="5000.00",
+    )
+    _map_source(client, headers, goal["id"], _account(client, headers, "Emergenza")["id"])
+
+    body = client.get(f"{WATERFALL_URL}?date=2026-09-20", headers=headers).json()
+
+    # Executable rather than "set a source first": the client lets the
+    # user pick another account per row.
+    assert body["actions"][0]["kind"] == "transfer"
+    assert body["actions"][0]["from_account_id"] == main["id"]
+    assert body["source_is_fallback"] is True
+
+
+def test_with_no_cash_anywhere_the_action_is_advice(
+    client: TestClient, registered_user: dict
+) -> None:
+    headers = registered_user["auth_headers"]
+    main = _account(client, headers, "Conto")
+    _income_of(client, headers, main["id"], "2000.00")
+    _transaction(client, headers, main["id"], "-2000.00", "2026-09-02")
+    goal = _goal(
+        client,
+        headers,
+        name="Emergenza",
+        kind="emergency_fund",
+        priority=0,
+        target_mode="fixed_amount",
+        target_amount="5000.00",
     )
     _map_source(client, headers, goal["id"], _account(client, headers, "Emergenza")["id"])
 

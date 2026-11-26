@@ -1090,27 +1090,29 @@ def add_source(
             status_code=status.HTTP_409_CONFLICT, detail="Already part of the provision"
         )
 
-    if payload.asset_id is None:
-        # Earmarked cash can't also fund a savings goal, or it would be
-        # counted as both the State's money and the user's savings.
-        goal = (
-            db.query(SavingsGoal)
-            .join(SavingsGoalSource, SavingsGoalSource.goal_id == SavingsGoal.id)
-            .filter(
-                SavingsGoal.user_id == current_user.id,
-                SavingsGoal.deleted_at.is_(None),
-                SavingsGoalSource.account_id == account.id,
-                SavingsGoalSource.deleted_at.is_(None),
-            )
-            .first()
+    # Earmarked money can't also fund a savings goal, or it would be counted
+    # as both the State's money and the user's savings. Same grain on both
+    # sides: the account's cash, or one holding in it.
+    goal = (
+        db.query(SavingsGoal)
+        .join(SavingsGoalSource, SavingsGoalSource.goal_id == SavingsGoal.id)
+        .filter(
+            SavingsGoal.user_id == current_user.id,
+            SavingsGoal.deleted_at.is_(None),
+            SavingsGoalSource.account_id == account.id,
+            SavingsGoalSource.asset_id == payload.asset_id
+            if payload.asset_id is not None
+            else SavingsGoalSource.asset_id.is_(None),
+            SavingsGoalSource.deleted_at.is_(None),
         )
-        if goal is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"This account funds the savings goal «{goal.name}» — "
-                "detach it from the goal first",
-            )
-    else:
+        .first()
+    )
+    if goal is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This funds the savings goal «{goal.name}» — detach it from the goal first",
+        )
+    if payload.asset_id is not None:
         asset = db.get(Asset, payload.asset_id)
         if asset is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")

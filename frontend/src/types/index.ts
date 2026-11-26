@@ -607,6 +607,8 @@ export interface AllocationPlan {
   pct_discretionary: string
   pct_savings: string
   lookback_months: number
+  // Pillar 1's target: months of average total spend.
+  operating_cash_months: string
   default_source_account_id: string | null
 }
 
@@ -619,6 +621,7 @@ export interface AllocationPlanUpdatePayload {
   pct_savings?: string
   lookback_months?: number
   default_source_account_id?: string | null
+  operating_cash_months?: string
 }
 
 export interface AllocationBucketStatus {
@@ -708,6 +711,9 @@ export interface SimulationResponse {
 export interface SavingsGoalSource {
   id: string
   account_id: string
+  // Set = that holding inside the account (valued from the cached price).
+  asset_id: string | null
+  asset: Asset | null
 }
 
 export interface SavingsGoal {
@@ -718,6 +724,10 @@ export interface SavingsGoal {
   target_mode: TargetMode
   target_months: string | null
   target_amount: string | null
+  // medium_term + fixed_amount only.
+  target_date: string | null
+  // Reached and spent: out of the cascade, sources retired.
+  completed_at: string | null
   sources: SavingsGoalSource[]
   deleted_at: string | null
 }
@@ -725,10 +735,12 @@ export interface SavingsGoal {
 export interface SavingsGoalCreatePayload {
   name: string
   kind: SavingsGoalKind
-  priority: number
+  // Omitted = placed by the server (a dated goal by its date).
+  priority?: number
   target_mode: TargetMode
   target_months?: string | null
   target_amount?: string | null
+  target_date?: string | null
 }
 
 export interface SavingsGoalUpdatePayload {
@@ -737,6 +749,8 @@ export interface SavingsGoalUpdatePayload {
   target_mode?: TargetMode
   target_months?: string | null
   target_amount?: string | null
+  target_date?: string | null
+  completed_at?: string | null
 }
 
 export interface WaterfallStep {
@@ -754,12 +768,26 @@ export interface WaterfallStep {
   allocated_amount: string
   funding_percentage: number
   is_funded: boolean
+  // A holding source without a cached price: current_amount leaves it out.
+  has_unpriced_sources: boolean
+  // Dated goals only.
+  target_date: string | null
+  months_left: number | null
+  // This month: executed giroconti + pending suggestion (one-off surplus included).
+  this_month_amount: string | null
+  // From next month: the rate still needed, and what the monthly quota alone brings.
+  required_monthly: string | null
+  monthly_pace: string | null
+  projected_date: string | null
+  on_track: boolean | null
 }
 
 export interface WaterfallAction {
   kind: WaterfallActionKind
-  goal_id: string
+  // null for the tax provision rung (purpose 'tax_provision').
+  goal_id: string | null
   goal_name: string
+  purpose: 'goal' | 'tax_provision'
   amount: string
   currency: string
   from_account_id: string | null
@@ -769,8 +797,45 @@ export interface WaterfallAction {
   reason: string
 }
 
+// --- The plan's four pillars ---
+
+export type PillarKey = 'operating' | 'emergency' | 'planned' | 'investing'
+export type PillarItemKind = 'tax_provision' | 'vehicle_deadline' | 'uninvested_cash' | 'free_holdings' | 'goal_account_excess'
+
+export interface PillarItem {
+  kind: PillarItemKind
+  label: string
+  amount: string | null
+  available: string | null
+  currency: string
+  due_date: string | null
+  monthly: string | null
+  account_name: string | null
+}
+
+export interface Pillar {
+  key: PillarKey
+  target: string | null
+  current: string
+  gap: string | null
+  monthly_required: string | null
+  steps: WaterfallStep[]
+  items: PillarItem[]
+}
+
+export interface PillarsResponse {
+  base_currency: string
+  period_start: string
+  operating_cash_months: string
+  monthly_total_expenses: string | null
+  has_unpriced_holdings: boolean
+  pillars: Pillar[]
+}
+
 export interface WaterfallExecutionItem {
-  goal_id: string
+  // A goal, or (to_account_id) the tax provision's account.
+  goal_id?: string
+  to_account_id?: string
   from_account_id: string
   amount: string
 }
@@ -806,6 +871,27 @@ export interface WaterfallPlan {
   steps: WaterfallStep[]
   unallocated_amount: string
   actions: WaterfallAction[]
+  // Operating accounts beyond pillar 1's target and their scheduled debits; null without history.
+  operating_surplus: string | null
+  // What was distributed: the larger of the quota left and the surplus (never their sum).
+  budget: string
+  tax_provision: TaxProvisionRung | null
+  // The plan's account, or (none in the plan) the operating account with the most cash.
+  source_account_id: string | null
+  source_is_fallback: boolean
+  // What goal accounts hold beyond every goal they fund (shared accounts are
+  // split in priority order): moved on by the cascade, from those accounts.
+  goal_account_excess: string
+  goal_account_excesses: { account_id: string; account_name: string; amount: string }[]
+}
+
+export interface TaxProvisionRung {
+  target: string
+  current: string
+  gap: string
+  allocated_amount: string
+  account_id: string | null
+  account_name: string | null
 }
 
 // --- Errors (the envelope from main.py's exception handlers) ---
@@ -1072,6 +1158,16 @@ export type AlertKind =
   | 'scheduled_unconfirmed'
   | 'vehicle_overdue'
   | 'vehicle_upcoming'
+  | 'goal_overdue'
+  | 'goal_due_soon'
+  | 'goal_behind_schedule'
+  | 'goal_horizon_mismatch'
+  | 'allocation_out_of_band'
+  | 'allocation_over_cap'
+  | 'excess_cash'
+  | 'below_min_invested_share'
+  | 'investing_without_emergency_fund'
+  | 'exposure_data_stale'
 
 /** Structured, so the client words it and formatAmount masks the figures. */
 export interface Alert {
@@ -1090,6 +1186,11 @@ export interface Alert {
   balance: string | null
   committed: string | null
   margin: string | null
+  // Plan and portfolio alerts: the share measured and the limit set (0-100).
+  percentage: number | null
+  limit_percentage: number | null
+  dimension: string | null
+  bucket: string | null
   link: string | null
 }
 
@@ -1131,4 +1232,131 @@ export interface FlatRateSummary {
   provision: ProvisionStatus
   gap: string
   deadlines: F24Deadline[]
+}
+
+// --- Portfolio composition (pillar 4 only) ---
+
+export type ExposureDimension = 'asset_class' | 'region' | 'sector' | 'currency'
+export type ExposureSource = 'user' | 'reference' | 'default'
+
+export interface ExposureWeight {
+  bucket: string
+  weight: string
+}
+
+export interface AssetExposureDimension {
+  dimension: ExposureDimension
+  // null = nothing known: the product is unclassified in this dimension.
+  source: ExposureSource | null
+  weights: ExposureWeight[]
+  as_of: string | null
+  notes: string | null
+  source_urls: string[]
+}
+
+export interface AssetExposures {
+  asset: Asset
+  dimensions: AssetExposureDimension[]
+}
+
+export interface AssetExposureUpdatePayload {
+  weights: ExposureWeight[]
+  as_of?: string | null
+  notes?: string | null
+}
+
+export interface ExposureSuggestion {
+  asset_id: string
+  raw_sector: string | null
+  raw_country: string | null
+  weights: Partial<Record<ExposureDimension, ExposureWeight[]>>
+}
+
+export interface AllocationBucketValue {
+  bucket: string
+  value: string
+  percentage: number
+}
+
+export interface AllocationPosition {
+  kind: 'holding' | 'metal' | 'cash'
+  label: string
+  asset: Asset | null
+  account_name: string | null
+  value: string | null
+  source: ExposureSource | null
+  as_of: string | null
+  weights: ExposureWeight[]
+}
+
+export interface PortfolioAllocation {
+  dimension: ExposureDimension
+  base_currency: string
+  total: string
+  classified_value: string
+  coverage: number
+  buckets: AllocationBucketValue[]
+  unclassified_value: string
+  // Holdings funding the emergency fund, a dated goal or the tax provision.
+  excluded_value: string
+  // Left out of total: non-equity for sectors, no region (gold, crypto) for regions.
+  outside_value: string
+  has_unpriced: boolean
+  stale_count: number
+  positions: AllocationPosition[]
+}
+
+// --- Pillar-4 guardrails ---
+
+export type PortfolioRuleKind = 'target' | 'max_share' | 'excess_cash' | 'min_invested'
+export type RuleState = 'ok' | 'over' | 'under' | 'unknown'
+
+export interface PortfolioRule {
+  id: string
+  kind: PortfolioRuleKind
+  // target: asset_class | region. max_share: any dimension, or 'position' (bucket = asset id).
+  dimension: string | null
+  bucket: string | null
+  target_pct: string | null
+  tolerance_pct: string | null
+  max_pct: string | null
+  min_pct: string | null
+  threshold_amount: string | null
+  threshold_months: string | null
+}
+
+export type PortfolioRuleCreatePayload = Omit<Partial<PortfolioRule>, 'id'> & { kind: PortfolioRuleKind }
+
+export interface PortfolioRuleStatus {
+  rule: PortfolioRule
+  state: RuleState
+  actual_pct: number | null
+  actual_amount: string | null
+  limit_amount: string | null
+  reason: 'coverage' | 'no_history' | 'nothing_invested' | null
+  label: string | null
+}
+
+export interface PortfolioRulesStatus {
+  base_currency: string
+  rules: PortfolioRuleStatus[]
+  idle_cash: string | null
+  invested: string
+  invested_share: number | null
+  contribution: string
+  contribution_split: { bucket: string; amount: string }[]
+}
+
+export interface PortfolioPreset {
+  key: string
+  label: string
+  description: string
+  targets: { dimension: ExposureDimension; bucket: string; target_pct: string }[]
+}
+
+// Every target of one dimension at once (the slider editor). 0 = no target.
+export interface TargetsReplacePayload {
+  dimension: 'asset_class' | 'region'
+  tolerance_pct?: string
+  targets: { bucket: string; target_pct: string }[]
 }

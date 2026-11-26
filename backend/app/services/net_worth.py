@@ -17,7 +17,7 @@ from uuid import UUID
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import Account, AssetTransaction, Transaction, User
+from app.models import Account, AssetPrice, AssetTransaction, ExchangeRate, Transaction, User
 from app.schemas import AccountBalance, HoldingWithValue
 from app.services import asset_prices as asset_prices_service
 from app.services.exchange_rates import get_rate
@@ -198,3 +198,85 @@ def holdings_with_value(db: Session, user: User) -> list[HoldingWithValue]:
         )
 
     return holdings
+
+
+# ---------------------------------------------------------------------------
+# Cache-only valuation
+# ---------------------------------------------------------------------------
+#
+# For read paths that must never call out: the waterfall (a holding can fund
+# a goal) and the alerts banner, which runs on every page. They value a
+# position at the latest price and rate already stored, however old — the
+# portfolio page's own live lookups keep both caches fresh. A position with
+# nothing cached is `None`, never 0: zero would read as "this goal has no
+# money", which is a claim, not an absence of data.
+
+
+def latest_cached_prices(
+    db: Session, asset_ids: set[UUID], on_date: date_
+) -> dict[UUID, Decimal]:
+    """Latest stored price on or before `on_date` per asset, in one query."""
+    if not asset_ids:
+        return {}
+    rows = (
+        db.query(AssetPrice.asset_id, AssetPrice.price)
+        .filter(AssetPrice.asset_id.in_(asset_ids), AssetPrice.date <= on_date)
+        .distinct(AssetPrice.asset_id)
+        .order_by(AssetPrice.asset_id, AssetPrice.date.desc())
+        .all()
+    )
+    return {
+        row._mapping["asset_id"]: Decimal(str(row._mapping["price"])) for row in rows
+    }
+
+
+def latest_cached_rate(
+    db: Session, from_currency: str, to_currency: str, on_date: date_
+) -> Decimal | None:
+    if from_currency == to_currency:
+        return Decimal("1")
+    row = (
+        db.query(ExchangeRate.rate)
+        .filter(
+            ExchangeRate.from_currency == from_currency,
+            ExchangeRate.to_currency == to_currency,
+            ExchangeRate.date <= on_date,
+        )
+        .order_by(ExchangeRate.date.desc())
+        .first()
+    )
+    return Decimal(str(row[0])) if row is not None else None
+
+
+def cached_holding_values(
+    db: Session,
+    user: User,
+    positions: dict[tuple[UUID, UUID], dict] | None = None,
+    on_date: date_ | None = None,
+) -> dict[tuple[UUID, UUID], Decimal | None]:
+    """
+    Market value in base currency per open (account, asset) position, from
+    the caches only. `None` = no stored price or rate for it.
+    """
+    on_date = on_date or date_.today()
+    if positions is None:
+        positions = compute_holding_positions(db, user)
+    open_positions = {k: p for k, p in positions.items() if p["quantity"] > 0}
+    prices = latest_cached_prices(db, {asset_id for _, asset_id in open_positions}, on_date)
+
+    rates: dict[str, Decimal | None] = {}
+    values: dict[tuple[UUID, UUID], Decimal | None] = {}
+    for key, position in open_positions.items():
+        asset = position["asset"]
+        price = prices.get(asset.id)
+        if asset.currency not in rates:
+            rates[asset.currency] = latest_cached_rate(
+                db, asset.currency, user.base_currency, on_date
+            )
+        rate = rates[asset.currency]
+        values[key] = (
+            position["quantity"] * price * rate
+            if price is not None and rate is not None
+            else None
+        )
+    return values

@@ -276,6 +276,18 @@ def average_monthly_primary_expenses(
     return _quantize_money(primary / month_count)
 
 
+def average_monthly_total_expenses(
+    db: Session, user: User, *, as_of: date_, lookback_months: int
+) -> Decimal | None:
+    """Mean monthly spend, every necessity level and the unclassified. None = unknown."""
+    window = _analysis_window(db, user, as_of=as_of, lookback_months=lookback_months)
+    if window is None:
+        return None
+    start, end, month_count = window
+    buckets = spend_by_necessity(db, user, date_from=start, date_to=end)
+    return _quantize_money(sum(buckets.values(), Decimal("0")) / month_count)
+
+
 def survival_budget(db: Session, user: User, on_date: date_) -> SurvivalBudget:
     plan = get_or_create_plan(db, user)
     window = _analysis_window(db, user, as_of=on_date, lookback_months=plan.lookback_months)

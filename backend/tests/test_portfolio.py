@@ -777,3 +777,17 @@ def test_buy_rejects_a_non_transfer_category(
 
     assert response.status_code == 422
     assert client.get("/api/v1/portfolio/transactions", headers=headers).json() == []
+
+
+def test_a_cached_range_with_a_hole_in_the_middle_is_not_covered() -> None:
+    from app.services.exchange_rates import covers_range
+
+    price = Decimal("1")
+    weekdays = {date(2026, 10, d): price for d in (1, 2, 5, 6, 7, 8, 9)}
+
+    assert covers_range(weekdays, date(2026, 10, 1), date(2026, 10, 11))
+    # A month cached long ago plus today's quote: the start is there, the
+    # weeks in between are not.
+    stale = {date(2026, 10, 1): price, date(2026, 10, 2): price, date(2026, 11, 26): price}
+    assert not covers_range(stale, date(2026, 10, 1), date(2026, 11, 26))
+    assert not covers_range({}, date(2026, 10, 1), date(2026, 10, 2))

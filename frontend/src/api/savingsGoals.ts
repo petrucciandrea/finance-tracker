@@ -6,6 +6,7 @@ import type {
   SavingsGoalCreatePayload,
   SavingsGoalSource,
   SavingsGoalUpdatePayload,
+  PillarsResponse,
   WaterfallPlan,
 } from '@/types'
 
@@ -31,11 +32,20 @@ export async function deleteGoal(id: string): Promise<void> {
   await apiClient.delete(`/planning/goals/${id}`)
 }
 
-export async function addSource(goalId: string, accountId: string): Promise<SavingsGoalSource> {
+export async function addSource(
+  goalId: string,
+  accountId: string,
+  assetId?: string | null,
+): Promise<SavingsGoalSource> {
   const { data } = await apiClient.post<SavingsGoalSource>(
     `/planning/goals/${goalId}/sources`,
-    { account_id: accountId },
+    { account_id: accountId, asset_id: assetId ?? null },
   )
+  return data
+}
+
+export async function getPillars(date?: string): Promise<PillarsResponse> {
+  const { data } = await apiClient.get<PillarsResponse>('/planning/pillars', { params: { date } })
   return data
 }
 

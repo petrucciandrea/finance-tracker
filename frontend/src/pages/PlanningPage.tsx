@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { ModelEditor } from '@/components/planning/ModelEditor'
+import { InvestingRulesSection } from '@/components/planning/InvestingRulesSection'
+import { PillarsSection } from '@/components/planning/PillarsSection'
 import { WaterfallSection } from '@/components/planning/WaterfallSection'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
@@ -379,8 +381,10 @@ export function PlanningPage() {
   const currency = user?.base_currency ?? ''
   const [today] = useState(() => new Date())
   const [month, setMonth] = useState(() => startOfMonth(new Date()))
-  const date = toISODate(month)
   const inProgress = isSameMonth(month, today)
+  // Today for the month in progress, not its 1st: the cascade weighs today's
+  // balances, and executing it dates the giroconti on this day.
+  const date = toISODate(inProgress ? today : month)
 
   const history = useAllocationHistory(month, 0)
   const status = history[0].query.data
@@ -461,6 +465,7 @@ export function PlanningPage() {
       />
 
       <KpiStrip label="Indicatori del piano" items={kpis} />
+      <PillarsSection date={date} />
       <ModelEditor />
       <AllocationTable month={month} today={today} />
       <div className="flex flex-wrap gap-4">
@@ -468,6 +473,7 @@ export function PlanningPage() {
         <Simulator key={date} date={date} currency={currency} />
       </div>
       <WaterfallSection date={date} currency={currency} />
+      <InvestingRulesSection currency={currency} />
     </>
   )
 }

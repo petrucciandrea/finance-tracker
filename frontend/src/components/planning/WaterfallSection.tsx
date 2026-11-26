@@ -9,6 +9,7 @@ import { ProgressBar } from '@/components/ui/ProgressBar'
 import { RowMenu } from '@/components/ui/RowMenu'
 import { StatusChip } from '@/components/ui/StatusChip'
 import { useAccounts } from '@/hooks/useAccounts'
+import { useHoldings } from '@/hooks/usePortfolio'
 import {
   useAddGoalSource,
   useCreateGoal,
@@ -16,17 +17,15 @@ import {
   useExecuteWaterfall,
   useRemoveGoalSource,
   useSavingsGoals,
+  useUpdateGoal,
   useWaterfall,
 } from '@/hooks/useSavingsGoals'
 import { apiErrorMessage } from '@/lib/apiError'
-import { formatAmount, formatPercent } from '@/lib/format'
-import type { SavingsGoal, SavingsGoalKind, TargetMode, WaterfallAction, WaterfallStep } from '@/types'
-
-const KIND_LABELS: Record<SavingsGoalKind, string> = {
-  emergency_fund: 'Fondo emergenza',
-  medium_term: 'Medio termine',
-  long_term: 'Lungo termine',
-}
+import { formatAmount, formatFullDate, formatPercent, toISODate, toNumber } from '@/lib/format'
+import type { Account, SavingsGoal, SavingsGoalKind, TargetMode, TaxProvisionRung, WaterfallAction, WaterfallStep } from '@/types'
+import { GoalSchedule } from '@/components/planning/GoalSchedule'
+import { Tip } from '@/components/ui/Tip'
+import { KIND_LABELS, sourceLabel } from '@/lib/goals'
 
 const TARGET_MODE_LABELS: Record<TargetMode, string> = {
   months_of_primary_expenses: 'Mesi di spese primarie',
@@ -36,7 +35,7 @@ const TARGET_MODE_LABELS: Record<TargetMode, string> = {
 
 function StepRow({ step, index, goal, currency }: { step: WaterfallStep; index: number; goal?: SavingsGoal; currency: string }) {
   const { data: accounts } = useAccounts()
-  const sources = (goal?.sources ?? []).map((s) => accounts?.find((a) => a.id === s.account_id)?.name).filter(Boolean)
+  const sources = (goal?.sources ?? []).map((s) => sourceLabel(s, accounts))
   const money = (v: string | null) => (v === null ? '—' : `${formatAmount(v, currency)} ${currency}`)
   return (
     <div className="grid grid-cols-[32px_1fr] gap-3 py-3">
@@ -61,8 +60,10 @@ function StepRow({ step, index, goal, currency }: { step: WaterfallStep; index: 
         </div>
         {step.target_unavailable ? (
           <p className="mt-1 text-[13px] font-semibold text-warn">
-            Target non ancora calcolabile: serve almeno un mese completo di storico per la media delle spese primarie. Il gradino è sospeso, non
-            considerato completo.
+            Target non ancora calcolabile{' '}
+            <Tip label="Perché non è calcolabile">
+              Serve almeno un mese completo di storico per la media delle spese primarie. Il gradino è sospeso, non considerato completo.
+            </Tip>
           </p>
         ) : step.target_amount === null ? (
           <p className="mt-1 text-[13px] text-ink-2">Senza target: riceve tutto ciò che avanza dai gradini sopra. Ora {money(step.current_amount)}.</p>
@@ -83,56 +84,175 @@ function StepRow({ step, index, goal, currency }: { step: WaterfallStep; index: 
             </div>
           </>
         )}
-        <p className="mt-1 text-[12px] text-ink-3">{sources.length ? `Conti: ${sources.join(', ')}` : 'Nessun conto collegato'}</p>
+        <GoalSchedule step={step} currency={currency} />
+        {step.has_unpriced_sources && (
+          <p className="mt-1 text-[13px] font-semibold text-warn">
+            Un investimento collegato non ha un prezzo salvato{' '}
+            <Tip label="Cosa fare">Apri il Portafoglio per aggiornarlo. Finché manca il prezzo non è contato.</Tip>
+          </p>
+        )}
+        <p className="mt-1 text-[12px] text-ink-3">{sources.length ? `Fonti: ${sources.join(', ')}` : 'Nessuna fonte collegata'}</p>
       </div>
     </div>
   )
 }
 
-function ActionRow({ action, selected, onToggle }: { action: WaterfallAction; selected: boolean; onToggle: () => void }) {
-  const executable = action.kind === 'transfer'
-  const money = `${formatAmount(action.amount, action.currency)} ${action.currency}`
+// A goal's id (or the purpose, for the tax rung) plus the suggested source:
+// one rung can be fed from several accounts — the spending account and a
+// goal account's excess — and each is its own giroconto.
+function actionKey(a: WaterfallAction): string {
+  return `${a.goal_id ?? a.purpose}:${a.from_account_id ?? ''}`
+}
+
+function TaxRow({ rung, currency }: { rung: TaxProvisionRung; currency: string }) {
+  const money = (v: string) => `${formatAmount(v, currency)} ${currency}`
+  const pct = toNumber(rung.target) > 0 ? Math.min(100, (toNumber(rung.current) / toNumber(rung.target)) * 100) : 100
+  const covered = toNumber(rung.gap) <= 0
   return (
-    <li className={`rounded-[10px] border px-3 py-2.5 ${executable ? 'border-line bg-card' : 'border-dashed border-field bg-card-2'}`}>
-      <label className={`flex items-start gap-3 ${executable ? 'cursor-pointer' : ''}`}>
-        {executable ? (
-          <input type="checkbox" checked={selected} onChange={onToggle} className="mt-1 h-[18px] w-[18px] flex-none accent-accent" />
-        ) : (
-          <span aria-hidden="true" className="mt-0.5 w-[18px] flex-none text-center text-ink-3">
-            ✎
+    <li className="grid grid-cols-[32px_1fr] gap-3 py-3">
+      <span aria-hidden="true" className={`grid h-8 w-8 place-items-center rounded-full text-[13px] font-extrabold ${covered ? 'bg-pos-soft text-pos' : 'bg-card-2 text-ink-2'}`}>
+        {covered ? '✓' : '€'}
+      </span>
+      <div className="min-w-0 tabular-nums">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <span className="font-extrabold">
+            Accantonamento tasse <span className="text-[12px] font-semibold text-ink-3">prima di ogni obiettivo</span>
           </span>
-        )}
-        <span className="min-w-0 flex-1">
-          <span className="flex flex-wrap items-baseline justify-between gap-2">
-            <span className="font-bold tabular-nums">
-              {executable ? (
-                <>
-                  ⇄ Gira {money} da {action.from_account_name} a {action.to_account_name}
-                </>
-              ) : (
-                <>
-                  {money} verso «{action.goal_name}»
-                </>
-              )}
-            </span>
-            <StatusChip kind={executable ? 'info' : 'ok'}>{executable ? 'Giroconto' : 'Da fare a mano'}</StatusChip>
+          <span className="flex flex-wrap gap-1.5">
+            {toNumber(rung.allocated_amount) > 0 && <StatusChip kind="info">+{money(rung.allocated_amount)} da versare</StatusChip>}
+            {covered && <StatusChip kind="good">Coperto</StatusChip>}
           </span>
-          <span className="mt-0.5 block text-[13px] text-ink-2">{action.reason}</span>
-        </span>
-      </label>
+        </div>
+        <div className="mt-1 flex justify-between text-[13px] text-ink-2">
+          <span>
+            <b className="text-ink">{money(rung.current)}</b> su {money(rung.target)} che chiederanno gli F24
+          </span>
+          <span>{formatPercent(pct, { digits: 0 })}</span>
+        </div>
+        <div className="mt-1.5">
+          <ProgressBar value={pct} kind={covered ? 'good' : 'ok'} label={`Accantonamento tasse: ${Math.round(pct)}%`} />
+        </div>
+        {rung.account_name && <p className="mt-1 text-[12px] text-ink-3">Conto: {rung.account_name}</p>}
+      </div>
     </li>
   )
 }
 
-function GoalForm({ nextPriority, onDone }: { nextPriority: number; onDone: () => void }) {
+interface Resolved {
+  from: string | null
+  to: string | null
+  // The destination is picked here and will be linked to the goal.
+  linking: boolean
+  executable: boolean
+  problem: string | null
+}
+
+// What the row will do once the user's picks are applied on top of the
+// suggestion: the source can always be changed; a destination only when the
+// goal has none (it then becomes the goal's account).
+function resolve(action: WaterfallAction, choice: Choice | undefined, accounts: Account[]): Resolved {
+  const from = choice?.from ?? action.from_account_id
+  const linking = action.to_account_id === null && action.purpose === 'goal'
+  const to = action.to_account_id ?? choice?.to ?? null
+  const fromAccount = accounts.find((a) => a.id === from)
+  const toAccount = accounts.find((a) => a.id === to)
+  let problem: string | null = null
+  if (!from) problem = 'Scegli il conto da cui partire'
+  else if (!to) problem = 'Scegli il conto in cui mettere questi soldi: verrà collegato all’obiettivo'
+  else if (from === to) problem = 'Partenza e destinazione sono lo stesso conto'
+  else if (fromAccount && toAccount && fromAccount.currency !== toAccount.currency)
+    problem = `Valute diverse (${fromAccount.currency} → ${toAccount.currency}): fallo a mano con un cambio`
+  return { from, to, linking, executable: problem === null, problem }
+}
+
+type Choice = { from?: string; to?: string }
+
+function ActionRow({
+  action,
+  accounts,
+  choice,
+  onChoose,
+  selected,
+  onToggle,
+}: {
+  action: WaterfallAction
+  accounts: Account[]
+  choice: Choice | undefined
+  onChoose: (choice: Choice) => void
+  selected: boolean
+  onToggle: () => void
+}) {
+  const r = resolve(action, choice, accounts)
+  const money = `${formatAmount(action.amount, action.currency)} ${action.currency}`
+  const open = accounts.filter((a) => !a.closed_at)
+  const key = actionKey(action)
+  return (
+    <li className={`rounded-[10px] border px-3 py-2.5 ${r.executable ? 'border-line bg-card' : 'border-dashed border-field bg-card-2'}`}>
+      <div className="flex items-start gap-3">
+        <input
+          type="checkbox"
+          aria-label={`Esegui: ${money} verso ${action.goal_name}`}
+          checked={r.executable && selected}
+          disabled={!r.executable}
+          onChange={onToggle}
+          className="mt-1 h-[18px] w-[18px] flex-none accent-accent disabled:opacity-40"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <span className="font-bold tabular-nums">
+              ⇄ {money} verso «{action.goal_name}»
+            </span>
+            <StatusChip kind={r.executable ? 'info' : 'warn'}>{r.executable ? 'Giroconto' : 'Da completare'}</StatusChip>
+          </div>
+          <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
+            <label className="flex flex-col gap-0.5 text-[12px] text-ink-2">
+              Da
+              <select className="field h-9 py-0" value={r.from ?? ''} onChange={(e) => onChoose({ ...choice, from: e.target.value || undefined })} id={`wf-from-${key}`}>
+                <option value="">Scegli…</option>
+                {open.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} · {a.currency}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-0.5 text-[12px] text-ink-2">
+              {r.linking ? 'A (diventa il conto dell’obiettivo)' : 'A'}
+              {r.linking ? (
+                <select className="field h-9 py-0" value={r.to ?? ''} onChange={(e) => onChoose({ ...choice, to: e.target.value || undefined })} id={`wf-to-${key}`}>
+                  <option value="">Scegli…</option>
+                  {open.filter((a) => a.id !== r.from).map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name} · {a.currency}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="field flex h-9 items-center py-0 text-ink">{action.to_account_name}</span>
+              )}
+            </label>
+          </div>
+          {/* The backend's reason ends with the context after "— "; what's
+              missing is worked out here instead, from the user's picks. */}
+          <p className="mt-1 text-[13px] text-ink-2">{r.problem ?? action.reason.replace(/^.*— /, '')}</p>
+        </div>
+      </div>
+    </li>
+  )
+}
+
+function GoalForm({ onDone }: { onDone: () => void }) {
   const createGoal = useCreateGoal()
   const [name, setName] = useState('')
   const [kind, setKind] = useState<SavingsGoalKind>('emergency_fund')
   const [targetMode, setTargetMode] = useState<TargetMode>('months_of_primary_expenses')
   const [months, setMonths] = useState('6')
   const [amount, setAmount] = useState('')
-  const [priority, setPriority] = useState(String(nextPriority))
+  const [targetDate, setTargetDate] = useState('')
+  // Empty = placed by the server: a dated goal by its date, nearest first.
+  const [priority, setPriority] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const canHaveDate = kind === 'medium_term' && targetMode === 'fixed_amount'
 
   async function submit() {
     setError(null)
@@ -141,10 +261,11 @@ function GoalForm({ nextPriority, onDone }: { nextPriority: number; onDone: () =
       await createGoal.mutateAsync({
         name: name.trim(),
         kind,
-        priority: Number(priority),
+        ...(priority.trim() ? { priority: Number(priority) } : {}),
         target_mode: targetMode,
         target_months: targetMode === 'months_of_primary_expenses' ? months : null,
         target_amount: targetMode === 'fixed_amount' ? amount.replace(',', '.') : null,
+        target_date: canHaveDate && targetDate ? targetDate : null,
       })
       onDone()
     } catch (e) {
@@ -176,8 +297,8 @@ function GoalForm({ nextPriority, onDone }: { nextPriority: number; onDone: () =
             ))}
           </select>
         </Field>
-        <Field label="Priorità" htmlFor="goal-priority" hint="Più bassa = riempita prima.">
-          <input id="goal-priority" type="number" min={0} className="field" aria-describedby="goal-priority-msg" value={priority} onChange={(e) => setPriority(e.target.value)} />
+        <Field label="Priorità" htmlFor="goal-priority" hint="Vuota = automatica: le scadenze più vicine prima. Si può spostare dopo.">
+          <input id="goal-priority" type="number" min={0} className="field" placeholder="Automatica" value={priority} onChange={(e) => setPriority(e.target.value)} />
         </Field>
         {targetMode === 'months_of_primary_expenses' && (
           <Field label="Mesi" htmlFor="goal-months">
@@ -187,6 +308,11 @@ function GoalForm({ nextPriority, onDone }: { nextPriority: number; onDone: () =
         {targetMode === 'fixed_amount' && (
           <Field label="Importo" htmlFor="goal-amount">
             <input id="goal-amount" inputMode="decimal" className="field" value={amount} onChange={(e) => setAmount(e.target.value)} />
+          </Field>
+        )}
+        {canHaveDate && (
+          <Field label="Entro il" htmlFor="goal-date" hint="Facoltativa: calcola la rata mensile che serve.">
+            <input id="goal-date" type="date" className="field" min={toISODate(new Date())} value={targetDate} onChange={(e) => setTargetDate(e.target.value)} />
           </Field>
         )}
       </div>
@@ -201,76 +327,99 @@ function GoalForm({ nextPriority, onDone }: { nextPriority: number; onDone: () =
   )
 }
 
-function GoalSourcesDialog({ goal, onClose }: { goal: SavingsGoal | null; onClose: () => void }) {
+function GoalSourcesForm({ goal }: { goal: SavingsGoal }) {
   const { data: accounts } = useAccounts()
+  // Only mounted while the dialog is open: listing holdings prices them live.
+  const { data: holdings } = useHoldings()
   const addSource = useAddGoalSource()
   const removeSource = useRemoveGoalSource()
-  const [accountId, setAccountId] = useState('')
+  const [choice, setChoice] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const linked = new Set(goal?.sources.map((s) => s.account_id))
+  const linked = new Set(goal.sources.map((s) => `${s.account_id}:${s.asset_id ?? ''}`))
+
+  const options = [
+    ...(accounts ?? [])
+      .filter((a) => !a.closed_at)
+      .map((a) => ({ value: `${a.id}:`, label: `${a.name} · liquidità ${a.currency}` })),
+    ...(holdings ?? []).map((h) => ({
+      value: `${h.account_id}:${h.asset.id}`,
+      label: `${h.asset.symbol} in ${accounts?.find((a) => a.id === h.account_id)?.name ?? 'conto'}`,
+    })),
+  ].filter((o) => !linked.has(o.value))
 
   async function add() {
-    if (!goal || !accountId) return
+    if (!choice) return
+    const [accountId, assetId] = choice.split(':')
     setError(null)
     try {
-      await addSource.mutateAsync({ goalId: goal.id, accountId })
-      setAccountId('')
+      await addSource.mutateAsync({ goalId: goal.id, accountId, assetId: assetId || null })
+      setChoice('')
     } catch (e) {
-      // 409 when the account already funds another goal.
-      setError(apiErrorMessage(e, 'Impossibile collegare il conto.'))
+      // 409 when it already funds another goal or holds the tax provision.
+      setError(apiErrorMessage(e, 'Impossibile collegare la fonte.'))
     }
   }
 
   return (
+    <div className="flex flex-col gap-3">
+      {goal.sources.length === 0 ? (
+        <p className="text-[14px] text-ink-3">Nessuna fonte collegata.</p>
+      ) : (
+        <ul>
+          {goal.sources.map((source) => (
+            <li key={source.id} className="flex items-center justify-between border-t border-line py-1 first:border-t-0">
+              <span className="font-semibold">{sourceLabel(source, accounts)}</span>
+              <button
+                type="button"
+                onClick={() => removeSource.mutateAsync({ goalId: goal.id, sourceId: source.id })}
+                disabled={removeSource.isPending}
+                aria-label="Scollega la fonte"
+                className="grid h-11 w-11 cursor-pointer place-items-center rounded-[10px] text-ink-2 hover:bg-card-2"
+              >
+                <CloseIcon />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex gap-2">
+        <label htmlFor="goal-source" className="sr-only">
+          Fonte da collegare
+        </label>
+        <select id="goal-source" className="field min-w-0 flex-1" value={choice} onChange={(e) => setChoice(e.target.value)}>
+          <option value="">Collega un conto o un investimento…</option>
+          {options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <Button variant="primary" onClick={add} disabled={!choice || addSource.isPending}>
+          Collega
+        </Button>
+      </div>
+      {error && <ErrorBlock>{error}</ErrorBlock>}
+    </div>
+  )
+}
+
+function GoalSourcesDialog({ goal, onClose }: { goal: SavingsGoal | null; onClose: () => void }) {
+  return (
     <Dialog
       open={!!goal}
       onClose={onClose}
-      title={`Conti di “${goal?.name ?? ''}”`}
-      description="Il saldo di questi conti conta come quanto già accantonato. Un conto può finanziare un solo obiettivo."
+      title={`Fonti di “${goal?.name ?? ''}”`}
+      description={
+        <>
+          Il saldo dei conti, o il valore degli investimenti, conta come già accantonato.{' '}
+          <Tip>
+            Un conto può finanziare più obiettivi: il saldo li riempie in ordine di priorità e quello che avanza diventa eccedenza. Un investimento
+            finanzia un solo obiettivo.
+          </Tip>
+        </>
+      }
     >
-      {goal && (
-        <div className="flex flex-col gap-3">
-          {goal.sources.length === 0 ? (
-            <p className="text-[14px] text-ink-3">Nessun conto collegato.</p>
-          ) : (
-            <ul>
-              {goal.sources.map((source) => (
-                <li key={source.id} className="flex items-center justify-between border-t border-line py-1 first:border-t-0">
-                  <span className="font-semibold">{accounts?.find((a) => a.id === source.account_id)?.name ?? 'Conto eliminato'}</span>
-                  <button
-                    type="button"
-                    onClick={() => removeSource.mutateAsync({ goalId: goal.id, sourceId: source.id })}
-                    disabled={removeSource.isPending}
-                    aria-label="Scollega il conto"
-                    className="grid h-11 w-11 cursor-pointer place-items-center rounded-[10px] text-ink-2 hover:bg-card-2"
-                  >
-                    <CloseIcon />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          <div className="flex gap-2">
-            <label htmlFor="goal-source" className="sr-only">
-              Conto da collegare
-            </label>
-            <select id="goal-source" className="field min-w-0 flex-1" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-              <option value="">Collega un conto…</option>
-              {(accounts ?? [])
-                .filter((a) => !linked.has(a.id) && !a.closed_at)
-                .map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name} · {a.currency}
-                  </option>
-                ))}
-            </select>
-            <Button variant="primary" onClick={add} disabled={!accountId || addSource.isPending}>
-              Collega
-            </Button>
-          </div>
-          {error && <ErrorBlock>{error}</ErrorBlock>}
-        </div>
-      )}
+      {goal && <GoalSourcesForm goal={goal} />}
     </Dialog>
   )
 }
@@ -284,7 +433,9 @@ export function WaterfallSection({ date, currency }: { date: string; currency: s
   const { data: waterfall, isLoading, isError } = useWaterfall(date)
   const { data: goals } = useSavingsGoals()
   const deleteGoal = useDeleteGoal()
+  const updateGoal = useUpdateGoal()
   const executeWaterfall = useExecuteWaterfall()
+  const [goalError, setGoalError] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [editingSources, setEditingSources] = useState<SavingsGoal | null>(null)
   const [deleting, setDeleting] = useState<SavingsGoal | null>(null)
@@ -292,12 +443,18 @@ export function WaterfallSection({ date, currency }: { date: string; currency: s
   const [deselected, setDeselected] = useState<Set<string>>(new Set())
   const [executeError, setExecuteError] = useState<string | null>(null)
 
+  const { data: accountList } = useAccounts()
+  const accounts = accountList ?? []
+  // The user's per-row picks (source, and destination for a goal with no
+  // account), keyed like the selection. Lost on reload, on purpose: the
+  // cascade may have moved.
+  const [choices, setChoices] = useState<Record<string, Choice>>({})
   const goalsById = new Map((goals ?? []).map((g) => [g.id, g]))
   const actions = waterfall?.actions ?? []
-  const executableActions = actions.filter((a) => a.kind === 'transfer')
+  const executableActions = actions.filter((a) => resolve(a, choices[actionKey(a)], accounts).executable)
   // Selected by default — acting on the suggestions is the common case.
   // Tracking the opt-outs keeps the set right when the cascade recomputes.
-  const selected = new Set(executableActions.map((a) => a.goal_id).filter((id) => !deselected.has(id)))
+  const selected = new Set(executableActions.map(actionKey).filter((id) => !deselected.has(id)))
 
   function toggle(goalId: string) {
     setDeselected((current) => {
@@ -311,12 +468,19 @@ export function WaterfallSection({ date, currency }: { date: string; currency: s
   async function runExecute() {
     setExecuteError(null)
     const items = executableActions
-      .filter((a) => selected.has(a.goal_id))
-      .map((a) => ({ goal_id: a.goal_id, from_account_id: a.from_account_id as string, amount: a.amount }))
+      .filter((a) => selected.has(actionKey(a)))
+      .map((a) => {
+        const r = resolve(a, choices[actionKey(a)], accounts)
+        const from_account_id = r.from as string
+        if (a.purpose === 'tax_provision') return { to_account_id: r.to as string, from_account_id, amount: a.amount }
+        // A destination is sent only when it is being linked to the goal.
+        return { goal_id: a.goal_id as string, from_account_id, amount: a.amount, ...(r.linking ? { to_account_id: r.to as string } : {}) }
+      })
     if (items.length === 0) return
     try {
       await executeWaterfall.mutateAsync({ date, items })
       setDeselected(new Set())
+      setChoices({})
     } catch (e) {
       // The backend applies the batch all-or-nothing, so nothing landed.
       setExecuteError(apiErrorMessage(e, 'Impossibile eseguire i giroconti.'))
@@ -335,21 +499,54 @@ export function WaterfallSection({ date, currency }: { date: string; currency: s
   }
 
   const steps = [...(waterfall?.steps ?? [])].sort((a, b) => a.priority - b.priority)
-  const nextPriority = steps.length ? Math.max(...steps.map((s) => s.priority)) + 1 : 0
+  const completed = (goals ?? []).filter((g) => g.completed_at)
+
+  async function patchGoal(id: string, payload: Parameters<typeof updateGoal.mutateAsync>[0]['payload']) {
+    setGoalError(null)
+    try {
+      await updateGoal.mutateAsync({ id, payload })
+    } catch (e) {
+      setGoalError(apiErrorMessage(e, "Impossibile aggiornare l'obiettivo."))
+    }
+  }
+
+  // Swap with the neighbour, then renumber 0..n so ties (priority isn't
+  // unique) can't make the move a no-op. Only the rows that changed are sent.
+  async function move(index: number, direction: -1 | 1) {
+    const order = steps.map((s) => s.goal_id)
+    const target = index + direction
+    if (target < 0 || target >= order.length) return
+    ;[order[index], order[target]] = [order[target], order[index]]
+    setGoalError(null)
+    try {
+      for (const [priority, id] of order.entries()) {
+        if (steps.find((s) => s.goal_id === id)?.priority !== priority) {
+          await updateGoal.mutateAsync({ id, payload: { priority } })
+        }
+      }
+    } catch (e) {
+      setGoalError(apiErrorMessage(e, 'Impossibile spostare l’obiettivo.'))
+    }
+  }
 
   return (
     <Card
       title="Cascata del risparmio"
+      meta={
+        <Tip>
+          <span>
+            Si distribuisce la quota di risparmio del mese o, se è di più, quello che i conti di spesa hanno oltre l’obiettivo di liquidità: prima le
+            tasse, poi gli obiettivi in ordine di priorità, passando al gradino dopo solo quando il precedente è pieno (al 95%).
+          </span>
+          <span>Gli obiettivi con una scadenza entrano in ordine di data; puoi spostarli dal menu.</span>
+        </Tip>
+      }
       action={
         <Button variant="secondary" onClick={() => setAdding(true)}>
           + Nuovo obiettivo
         </Button>
       }
     >
-      <p className="mt-1 text-[13px] text-ink-2">
-        La quota di risparmio riempie gli obiettivi in ordine di priorità: si passa al gradino dopo solo quando il precedente è pieno (al 95%).
-      </p>
-
       {isLoading ? (
         <LoadingBlock className="mt-3 h-40" />
       ) : isError || !waterfall ? (
@@ -361,8 +558,11 @@ export function WaterfallSection({ date, currency }: { date: string; currency: s
           <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-[13px] tabular-nums">
             {[
               ['Quota di risparmio', waterfall.savings_quota],
+              ...(waterfall.operating_surplus !== null ? [['Eccedenza sui conti di spesa', waterfall.operating_surplus]] : []),
+              ...(toNumber(waterfall.goal_account_excess) > 0 ? [['Eccedenza sui conti obiettivo', waterfall.goal_account_excess]] : []),
+              ['Da distribuire', waterfall.budget],
               ['Già allocato', waterfall.already_allocated],
-              ['Da allocare', waterfall.unallocated_amount],
+              ['Avanzo', waterfall.unallocated_amount],
             ].map(([label, value]) => (
               <div key={label} className="flex gap-1.5">
                 <dt className="text-ink-2">{label}</dt>
@@ -381,6 +581,7 @@ export function WaterfallSection({ date, currency }: { date: string; currency: s
                 </EmptyState>
               ) : (
                 <ol aria-label="Gradini">
+                  {waterfall.tax_provision && <TaxRow rung={waterfall.tax_provision} currency={currency} />}
                   {steps.map((step, i) => (
                     <li key={step.goal_id} className="flex items-start gap-1 border-t border-line first:border-t-0">
                       <div className="min-w-0 flex-1">
@@ -390,7 +591,12 @@ export function WaterfallSection({ date, currency }: { date: string; currency: s
                         <RowMenu
                           label={`Azioni per ${step.name}`}
                           items={[
-                            { label: 'Conti collegati…', onSelect: () => setEditingSources(goalsById.get(step.goal_id) ?? null) },
+                            { label: 'Fonti collegate…', onSelect: () => setEditingSources(goalsById.get(step.goal_id) ?? null) },
+                            ...(i > 0 ? [{ label: 'Sposta su', onSelect: () => move(i, -1) }] : []),
+                            ...(i < steps.length - 1 ? [{ label: 'Sposta giù', onSelect: () => move(i, 1) }] : []),
+                            ...(step.target_mode === 'fixed_amount'
+                              ? [{ label: 'Segna come raggiunto', onSelect: () => patchGoal(step.goal_id, { completed_at: toISODate(new Date()) }) }]
+                              : []),
                             {
                               label: 'Elimina obiettivo',
                               tone: 'danger',
@@ -406,6 +612,28 @@ export function WaterfallSection({ date, currency }: { date: string; currency: s
                   ))}
                 </ol>
               )}
+              {goalError && (
+                <div className="mt-2">
+                  <ErrorBlock>{goalError}</ErrorBlock>
+                </div>
+              )}
+              {completed.length > 0 && (
+                <div className="mt-3 border-t border-line pt-3">
+                  <h3 className="text-[13px] font-extrabold text-ink-2">Raggiunti</h3>
+                  <ul className="mt-1">
+                    {completed.map((g) => (
+                      <li key={g.id} className="flex items-center justify-between gap-2 py-1 text-[13px]">
+                        <span>
+                          <b>{g.name}</b> <span className="text-ink-3">il {formatFullDate(g.completed_at as string)}</span>
+                        </span>
+                        <Button onClick={() => patchGoal(g.id, { completed_at: null })} disabled={updateGoal.isPending}>
+                          Riapri
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
 
             <section aria-labelledby="wf-actions" className="min-w-0 flex-[1_1_320px]">
@@ -418,9 +646,25 @@ export function WaterfallSection({ date, currency }: { date: string; currency: s
                 </p>
               ) : (
                 <>
+                  {waterfall.source_is_fallback && (
+                    <p className="mt-1 text-[13px] text-ink-2">
+                      Partono da {accounts.find((a) => a.id === waterfall.source_account_id)?.name ?? 'il conto'}{' '}
+                      <Tip label="Perché da questo conto">
+                        È il conto di spesa con più liquidità: puoi cambiarlo riga per riga, o fissarlo nel piano come conto di accredito.
+                      </Tip>
+                    </p>
+                  )}
                   <ul className="mt-2 flex flex-col gap-2">
                     {actions.map((a) => (
-                      <ActionRow key={`${a.goal_id}-${a.kind}`} action={a} selected={selected.has(a.goal_id)} onToggle={() => toggle(a.goal_id)} />
+                      <ActionRow
+                        key={`${actionKey(a)}-${a.kind}`}
+                        action={a}
+                        accounts={accounts}
+                        choice={choices[actionKey(a)]}
+                        onChoose={(c) => setChoices((current) => ({ ...current, [actionKey(a)]: c }))}
+                        selected={selected.has(actionKey(a))}
+                        onToggle={() => toggle(actionKey(a))}
+                      />
                     ))}
                   </ul>
                   {executableActions.length > 0 && (
@@ -441,7 +685,7 @@ export function WaterfallSection({ date, currency }: { date: string; currency: s
       )}
 
       <Dialog open={adding} onClose={() => setAdding(false)} title="Nuovo obiettivo" size="md">
-        {adding && <GoalForm nextPriority={nextPriority} onDone={() => setAdding(false)} />}
+        {adding && <GoalForm onDone={() => setAdding(false)} />}
       </Dialog>
       <GoalSourcesDialog goal={editingSources ? (goalsById.get(editingSources.id) ?? null) : null} onClose={() => setEditingSources(null)} />
       <ConfirmDialog

@@ -22,6 +22,8 @@ from app.routers import (
     physical_assets,
     planning,
     portfolio,
+    portfolio_allocation,
+    portfolio_rules,
     savings_goals,
     transactions,
     vehicle_deadlines,
@@ -128,6 +130,7 @@ def _code_for_status(status_code: int) -> str:
         status.HTTP_409_CONFLICT: "CONFLICT",
         status.HTTP_422_UNPROCESSABLE_CONTENT: "UNPROCESSABLE_ENTITY",
         status.HTTP_429_TOO_MANY_REQUESTS: "RATE_LIMITED",
+        status.HTTP_502_BAD_GATEWAY: "UPSTREAM_UNAVAILABLE",
     }.get(status_code, "ERROR")
 
 
@@ -147,6 +150,8 @@ app.include_router(physical_assets.router)
 app.include_router(flat_rate.router)
 app.include_router(vehicle_deadlines.router)
 app.include_router(alerts.router)
+app.include_router(portfolio_allocation.router)
+app.include_router(portfolio_rules.router)
 
 
 @app.get("/health", tags=["health"])

@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button'
 import { ErrorBlock, LoadingBlock } from '@/components/ui/EmptyState'
 import { Field } from '@/components/ui/Field'
 import { CheckIcon } from '@/components/ui/Icon'
+import { Tip } from '@/components/ui/Tip'
 import { useAccounts } from '@/hooks/useAccounts'
 import { useAuth } from '@/hooks/useAuth'
 import {
@@ -108,12 +109,12 @@ function FlatRateSettingsPanel() {
   return (
     <>
       <p className="text-[14px] text-ink-2">
-        I parametri valgono per anno e restano congelati: cambiare quelli del 2027 non ricalcola il 2026. Fatture, scadenze F24 e gap sono nella
-        pagina{' '}
+        Fatture, scadenze F24 e gap sono nella pagina{' '}
         <Link to="/invoices" className="font-bold text-accent underline-offset-2 hover:underline">
           Fatture
         </Link>
-        .
+        .{' '}
+        <Tip label="Come valgono i parametri">I parametri valgono per anno e restano congelati: cambiare quelli del 2027 non ricalcola il 2026.</Tip>
       </p>
       <ActivitySettings />
       <YearSettings />
@@ -286,15 +287,19 @@ function YearForm({ data }: { data: FlatRateYear }) {
       <fieldset className="flex flex-col gap-2 rounded-[12px] bg-card-2 px-3 py-3">
         <legend className="sr-only">Accantonamento {data.year}</legend>
         <p className="text-[13px] text-ink-2">
-          Su ogni euro incassato: tasse e contributi dell'anno {pct(data.load_rate)}, acconti dell'anno dopo {pct(data.advance_rate)}. Al netto
-          degli acconti già versati per il {data.year}, il fabbisogno è il <b className="text-ink">{pct(data.needed_rate)}</b>.
-          {data.provision_switch_date && (
-            <>
-              {' '}
-              Dopo la prima dichiarazione ({formatShortDate(data.provision_switch_date)}) restano solo tasse e contributi dell'anno: il{' '}
-              <b className="text-ink">{pct(data.load_rate)}</b>.
-            </>
-          )}
+          Fabbisogno su ogni euro incassato: <b className="text-ink">{pct(data.needed_rate)}</b>{' '}
+          <Tip label="Come si calcola il fabbisogno">
+            <span>
+              Su ogni euro incassato: tasse e contributi dell'anno {pct(data.load_rate)}, acconti dell'anno dopo {pct(data.advance_rate)}. Al netto
+              degli acconti già versati per il {data.year}, il fabbisogno è il <b>{pct(data.needed_rate)}</b>.
+            </span>
+            {data.provision_switch_date && (
+              <span>
+                Dopo la prima dichiarazione ({formatShortDate(data.provision_switch_date)}) restano solo tasse e contributi dell'anno: il{' '}
+                <b>{pct(data.load_rate)}</b>.
+              </span>
+            )}
+          </Tip>
         </p>
         <label className="flex min-h-11 cursor-pointer items-center gap-2 text-[14px] font-semibold">
           <input type="radio" name="fr-provision" className="h-4 w-4" checked={!custom} onChange={() => setCustom(false)} />
@@ -366,9 +371,13 @@ function ProvisionSources() {
     <div className="flex flex-col gap-3">
       <SubHeading>Dove accantoni</SubHeading>
       <p className="text-[13px] text-ink-2">
-        Conti e prodotti con i soldi messi da parte per tasse e contributi. Sono vincolati: non finanziano obiettivi di risparmio e non contano nei
-        mesi di autonomia. Per un prodotto in un conto (es. un ETF monetario sul broker) aggiungi sia il conto, per la liquidità residua, sia il
-        prodotto.
+        Conti e prodotti con i soldi messi da parte per tasse e contributi.{' '}
+        <Tip>
+          <span>Sono vincolati: non finanziano obiettivi di risparmio e non contano nei mesi di autonomia.</span>
+          <span>
+            Per un prodotto in un conto (es. un ETF monetario sul broker) aggiungi sia il conto, per la liquidità residua, sia il prodotto.
+          </span>
+        </Tip>
       </p>
       {isLoading ? (
         <LoadingBlock className="h-16" />

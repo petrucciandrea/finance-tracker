@@ -38,12 +38,13 @@ from app.schemas import (
     AllocationBucketStatus,
     AllocationStatus,
     IncomeCategoryBreakdown,
+    SavingsGoalKind,
     SimulatedBucket,
     SimulationRequest,
     SimulationResponse,
     SurvivalBudget,
 )
-from app.services.flat_rate import earmarked_cash, tax_cost_in_base_currency
+from app.services.flat_rate import tax_cost_in_base_currency
 from app.services.necessity import (
     UNCLASSIFIED,
     classification_coverage,
@@ -52,7 +53,6 @@ from app.services.necessity import (
     spend_by_necessity,
     spend_by_necessity_and_category,
 )
-from app.services.net_worth import total_cash_balance
 from app.services.periods import add_months, month_start, months_between, period_bounds
 
 # The preset the requirement names. Stored per user on first read rather
@@ -288,45 +288,117 @@ def average_monthly_total_expenses(
     return _quantize_money(sum(buckets.values(), Decimal("0")) / month_count)
 
 
+@dataclass
+class RunwayCash:
+    operating: Decimal
+    emergency_fund: Decimal
+    goal_excess: Decimal
+    committed: Decimal
+    has_unpriced_holdings: bool
+
+    @property
+    def total(self) -> Decimal:
+        return self.operating + self.emergency_fund + self.goal_excess - self.committed
+
+
+def runway_cash(
+    db: Session, user: User, on_date: date_, monthly_primary: Decimal | None
+) -> RunwayCash:
+    """
+    The money the runway may live off: pillar 1 and pillar 2, nothing else.
+
+    - Operating accounts (`operating_cash`), less the debits already
+      scheduled from them: an F24 direct debit is gone even if the bank
+      hasn't taken it yet.
+    - The emergency fund as the cascade values it (shared accounts split in
+      cascade order, holdings from the caches only), since that is what it
+      is for.
+    - Cash above every goal's target on a goal's account: no goal needs it,
+      the cascade would move it on.
+
+    Left out on purpose: the tax provision (already the State's), the cash of
+    medium- and long-term goals (a down payment with a date is not living
+    money), and idle cash on investment accounts (pillar 4's).
+    """
+    # Lazy: both modules import this one for the averages.
+    from app.services.operating_cash import INVESTMENT_ACCOUNT_TYPES, operating_cash
+    from app.services.waterfall import goal_values, list_goals
+
+    operating = operating_cash(db, user, on_date)
+    goals = list_goals(db, user, include_completed=False)
+    values = goal_values(db, user, goals, monthly_primary)
+
+    emergency = Decimal("0")
+    unpriced = False
+    for goal in goals:
+        if goal.kind != SavingsGoalKind.emergency_fund.value:
+            continue
+        held, goal_unpriced = values.current[goal.id]
+        emergency += held
+        unpriced = unpriced or goal_unpriced
+
+    account_types: dict[UUID, str] = {}
+    if values.excess:
+        rows = db.query(Account.id, Account.type).filter(Account.id.in_(list(values.excess)))
+        account_types = {row._mapping["id"]: row._mapping["type"] for row in rows}
+    excess = sum(
+        (
+            amount
+            for account_id, amount in values.excess.items()
+            if account_types.get(account_id) not in INVESTMENT_ACCOUNT_TYPES
+        ),
+        Decimal("0"),
+    )
+    return RunwayCash(
+        operating=operating.current,
+        emergency_fund=emergency,
+        goal_excess=excess,
+        committed=operating.committed,
+        has_unpriced_holdings=unpriced,
+    )
+
+
 def survival_budget(db: Session, user: User, on_date: date_) -> SurvivalBudget:
     plan = get_or_create_plan(db, user)
     window = _analysis_window(db, user, as_of=on_date, lookback_months=plan.lookback_months)
-    # Cash set aside for the P.IVA's taxes is already the State's: counting
-    # it as runway would promise months of living off money that's owed.
-    cash = total_cash_balance(db, user) - earmarked_cash(db, user)
-
-    if window is None:
-        return SurvivalBudget(
-            base_currency=user.base_currency,
-            lookback_months=plan.lookback_months,
-            months_analysed=0,
-            total_cash_balance=_quantize_money(cash),
+    monthly_primary: Decimal | None = None
+    if window is not None:
+        start, end, month_count = window
+        buckets = spend_by_necessity(db, user, date_from=start, date_to=end)
+        monthly_primary = _quantize_money(
+            buckets.get(AllocationBucket.primary.value, Decimal("0")) / month_count
         )
 
-    start, end, month_count = window
-    buckets = spend_by_necessity(db, user, date_from=start, date_to=end)
-    monthly_primary = _quantize_money(
-        buckets.get(AllocationBucket.primary.value, Decimal("0")) / month_count
-    )
-    monthly_total = _quantize_money(sum(buckets.values(), Decimal("0")) / month_count)
-    monthly_income = _quantize_money(
-        income_base(db, user, date_from=start, date_to=end).net / month_count
-    )
-
-    return SurvivalBudget(
+    funds = runway_cash(db, user, on_date, monthly_primary)
+    cash = funds.total
+    result = SurvivalBudget(
         base_currency=user.base_currency,
         lookback_months=plan.lookback_months,
-        months_analysed=month_count,
-        monthly_primary_expenses=monthly_primary,
-        monthly_total_expenses=monthly_total,
-        monthly_income=monthly_income,
+        months_analysed=0,
         total_cash_balance=_quantize_money(cash),
-        # A zero survival budget means "we don't know yet", not "infinite
-        # runway", so it yields None rather than a division by zero.
-        months_of_runway=(
-            round(float(cash / monthly_primary), 1) if monthly_primary > 0 else None
-        ),
+        operating_cash=_quantize_money(funds.operating),
+        emergency_fund=_quantize_money(funds.emergency_fund),
+        goal_excess=_quantize_money(funds.goal_excess),
+        committed_outflows=_quantize_money(funds.committed),
+        has_unpriced_holdings=funds.has_unpriced_holdings,
     )
+    if window is None or monthly_primary is None:
+        return result
+
+    result.months_analysed = month_count
+    result.monthly_primary_expenses = monthly_primary
+    result.monthly_total_expenses = _quantize_money(
+        sum(buckets.values(), Decimal("0")) / month_count
+    )
+    result.monthly_income = _quantize_money(
+        income_base(db, user, date_from=start, date_to=end).net / month_count
+    )
+    # A zero survival budget means "we don't know yet", not "infinite
+    # runway", so it yields None rather than a division by zero. An
+    # overdraft reads as no runway, not as negative months.
+    if monthly_primary > 0:
+        result.months_of_runway = round(float(max(Decimal("0"), cash) / monthly_primary), 1)
+    return result
 
 
 def simulate(

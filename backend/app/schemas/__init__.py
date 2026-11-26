@@ -1381,8 +1381,20 @@ class SurvivalBudget(BaseModel):
     monthly_total_expenses: Decimal | None = None
     # Net of flat-rate taxes, as the allocation model's base.
     monthly_income: Decimal | None = None
-    # Excludes the accounts holding the P.IVA tax provision.
+    # What the runway lives off: operating_cash + emergency_fund + goal_excess
+    # − committed_outflows. Not every account: the tax provision is the
+    # State's, a dated goal's cash has a job, and broker cash is pillar 4's.
     total_cash_balance: Decimal
+    # Pillar 1: the accounts no goal or provision claims, investment ones aside.
+    operating_cash: Decimal = Decimal("0")
+    # Pillar 2, valued like the cascade (holdings from the caches only).
+    emergency_fund: Decimal = Decimal("0")
+    # Cash on goal accounts above every goal's target: nobody needs it.
+    goal_excess: Decimal = Decimal("0")
+    # Debits already scheduled from the operating accounts (F24, vehicles).
+    committed_outflows: Decimal = Decimal("0")
+    # An emergency-fund holding with no cached price counted as nothing.
+    has_unpriced_holdings: bool = False
     # Cash divided by the survival budget. None whenever the survival budget
     # is unknown or zero.
     months_of_runway: float | None = None

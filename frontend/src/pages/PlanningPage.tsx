@@ -11,6 +11,7 @@ import { KpiStrip, type Kpi } from '@/components/ui/KpiStrip'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { ProgressBar } from '@/components/ui/ProgressBar'
 import { StatusChip } from '@/components/ui/StatusChip'
+import { Tip } from '@/components/ui/Tip'
 import { CategorySelect } from '@/components/transactions/CategorySelect'
 import { useAllocationHistory } from '@/hooks/useAllocationHistory'
 import { useAuth } from '@/hooks/useAuth'
@@ -185,18 +186,26 @@ function AllocationTable({ month, today }: { month: Date; today: Date }) {
   )
 }
 
-function RunwayCard({ survival }: { survival: SurvivalBudget | undefined }) {
+function RunwayCard({ survival, inProgress }: { survival: SurvivalBudget | undefined; inProgress: boolean }) {
   const { user } = useAuth()
   if (!survival) return <LoadingBlock className="h-56 flex-[1_1_340px]" />
   const currency = survival.base_currency
   const runway = survival.months_of_runway
   const totalRunway =
     survival.monthly_total_expenses && toNumber(survival.monthly_total_expenses) > 0
-      ? toNumber(survival.total_cash_balance) / toNumber(survival.monthly_total_expenses)
+      ? Math.max(0, toNumber(survival.total_cash_balance)) / toNumber(survival.monthly_total_expenses)
       : null
   return (
     <Card title="Autonomia" className="flex-[1_1_340px]">
-      <p className="mt-0.5 text-[13px] text-ink-2">Quanto dureresti con la liquidità attuale coprendo solo le spese primarie</p>
+      <p className="mt-0.5 text-[13px] text-ink-2">
+        Quanto dureresti con conti operativi e fondo emergenza coprendo solo le spese primarie{' '}
+        <Tip>
+          Conta i conti che nessun obiettivo usa, il fondo emergenza e quello che i conti degli obiettivi hanno oltre il target, meno gli addebiti già
+          programmati. Restano fuori l'accantonamento tasse (è già dello Stato), i soldi degli obiettivi a medio e lungo termine (hanno già una
+          destinazione) e la liquidità sui conti d'investimento.
+        </Tip>
+      </p>
+      {!inProgress && <p className="mt-1 text-[12px] font-semibold text-ink-3">Calcolata a oggi, non sul mese selezionato.</p>}
       {survival.monthly_primary_expenses === null || runway === null ? (
         <p className="mt-3 rounded-[10px] bg-card-2 px-3 py-2 text-[13px] text-ink-2">
           Serve almeno un mese completo di storico. Le medie ignorano il mese in corso, che è ancora parziale.
@@ -231,9 +240,28 @@ function RunwayCard({ survival }: { survival: SurvivalBudget | undefined }) {
             {/* Net of P.IVA taxes, like the plan's base. */}
             <dt className="text-ink-2">{user?.work_type === 'flat_rate' ? 'Entrate nette / mese' : 'Entrate / mese'}</dt>
             <dd className="text-right">{survival.monthly_income ? formatAmount(survival.monthly_income, currency) : '—'}</dd>
-            <dt className="text-ink-2">Liquidità</dt>
-            <dd className="text-right">{formatAmount(survival.total_cash_balance, currency)}</dd>
+            <dt className="text-ink-2">Conti operativi</dt>
+            <dd className="text-right">{formatAmount(survival.operating_cash, currency)}</dd>
+            <dt className="text-ink-2">Fondo emergenza</dt>
+            <dd className="text-right">{formatAmount(survival.emergency_fund, currency)}</dd>
+            {toNumber(survival.goal_excess) > 0 && (
+              <>
+                <dt className="text-ink-2">Eccedenze sugli obiettivi</dt>
+                <dd className="text-right">{formatAmount(survival.goal_excess, currency)}</dd>
+              </>
+            )}
+            {toNumber(survival.committed_outflows) > 0 && (
+              <>
+                <dt className="text-ink-2">Addebiti programmati</dt>
+                <dd className="text-right">−{formatAmount(survival.committed_outflows, currency)}</dd>
+              </>
+            )}
+            <dt className="font-semibold text-ink-2">Liquidità disponibile</dt>
+            <dd className="text-right font-bold">{formatAmount(survival.total_cash_balance, currency)}</dd>
           </dl>
+          {survival.has_unpriced_holdings && (
+            <p className="mt-2 text-[12px] text-warn">Un titolo del fondo emergenza non ha un prezzo aggiornato ed è contato zero.</p>
+          )}
           <p className="mt-2 text-[12px] text-ink-3">
             Media su {survival.months_analysed} {survival.months_analysed === 1 ? 'mese completo' : 'mesi completi'}. Il mese in corso è escluso perché
             parziale.
@@ -388,7 +416,9 @@ export function PlanningPage() {
 
   const history = useAllocationHistory(month, 0)
   const status = history[0].query.data
-  const { data: survival } = useSurvivalBudget(date)
+  // Always today, whatever month is shown: the cash is today's balance, so an
+  // average anchored to a past month would mix two moments and mean neither.
+  const { data: survival } = useSurvivalBudget(toISODate(today))
 
   const spend = status
     ? status.buckets.filter((b) => b.bucket !== 'savings').reduce((s, b) => s + toNumber(b.actual_amount), 0) + toNumber(status.unclassified_amount)
@@ -423,7 +453,7 @@ export function PlanningPage() {
     {
       label: 'Autonomia',
       value: survival?.months_of_runway != null ? `${survival.months_of_runway.toLocaleString('it-IT', { maximumFractionDigits: 1 })} mesi` : '—',
-      sub: 'con le sole spese primarie',
+      sub: inProgress ? 'con le sole spese primarie' : 'a oggi, con le sole spese primarie',
     },
     {
       label: 'Classificazione',
@@ -469,7 +499,7 @@ export function PlanningPage() {
       <ModelEditor />
       <AllocationTable month={month} today={today} />
       <div className="flex flex-wrap gap-4">
-        <RunwayCard survival={survival} />
+        <RunwayCard survival={survival} inProgress={inProgress} />
         <Simulator key={date} date={date} currency={currency} />
       </div>
       <WaterfallSection date={date} currency={currency} />

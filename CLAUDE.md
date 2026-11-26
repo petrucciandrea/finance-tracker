@@ -691,6 +691,14 @@ month); 2 = `emergency_fund` goals; 3 = `medium_term` goals + the tax provision 
 holdings + idle broker cash, with no target. Vehicle deadlines count in `monthly_required`
 but not in target/current: nothing records where their money sits.
 
+The survival budget's **months of runway** live off pillars 1 + 2 only
+(`planning.runway_cash`): operating cash − debits scheduled from those accounts + the
+emergency fund (valued like the cascade) + cash above every goal's target on a goal's
+account. The tax provision, medium/long-term goals' money and broker cash are out: a
+dated down payment is not living money. An overdraft reads as 0 months, not negative.
+The planning page always asks for it at **today**, whatever month is shown: the cash is
+today's balance, and an average anchored to a past month would mix two moments.
+
 ### Portfolio composition: pillar 4 only, three sources of weights
 `services/portfolio_allocation.py`. Holdings funding pillars 2–3 and the tax provision are
 **out** (`excluded_value`): a money-market ETF parked for a down payment would make the

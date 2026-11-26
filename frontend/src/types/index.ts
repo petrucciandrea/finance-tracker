@@ -666,7 +666,14 @@ export interface SurvivalBudget {
   monthly_primary_expenses: string | null
   monthly_total_expenses: string | null
   monthly_income: string | null
+  // What the runway lives off: operating_cash + emergency_fund + goal_excess
+  // − committed_outflows (not the tax provision, dated goals or broker cash).
   total_cash_balance: string
+  operating_cash: string
+  emergency_fund: string
+  goal_excess: string
+  committed_outflows: string
+  has_unpriced_holdings: boolean
   months_of_runway: number | null
 }
 
